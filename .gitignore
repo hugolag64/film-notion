@@ -1,0 +1,28 @@
+# === Secrets ===
+.env
+credentials.json
+
+# === Logs ===
+*.log
+log.txt
+
+# === Build / packaging ===
+build/
+dist/
+.done/
+*.spec
+
+# === Python ===
+__pycache__/
+*.pyc
+
+# === Executables ===
+*.exe
+
+# === IDE ===
+.idea/
+.vscode/
+
+# === OS ===
+.DS_Store
+Thumbs.db
