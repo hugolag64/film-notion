@@ -1,12 +1,14 @@
 import customtkinter as ctk
 import tkinter as tk
 from datetime import datetime
+import re
+import unicodedata
+from difflib import SequenceMatcher
 
 # === CORE ===
 from core.notion import (
     fetch_all_pages,
     get_movies_to_enrich,
-    get_movies_without_tags,
     get_title,
     get_release_date,
     update_movie_page,
@@ -15,6 +17,12 @@ from core.notion import (
 )
 from core.calendar import sync_future_releases
 from core.tmdb import search_movie, score_movie
+from core.tmdb_utils import (
+    extract_tmdb_id_from_url,
+    extract_imdb_id_from_url,
+    get_movie_by_tmdb_id,
+    get_tmdb_movie_from_imdb_id,
+)
 
 # === UI ===
 from ui.chooser import ask_choice
@@ -22,12 +30,42 @@ from ui.chooser import ask_choice
 # === UTILS ===
 from utils.text import clean_search_title, extract_year
 from utils.request import safe_get_json
-from config import TMDB_API_KEY, notion
+from config import TMDB_API_KEY
 
 
 # ==================================================
-# Helpers TMDB
+# Helpers TMDB — LOGIQUE MÉTIER
 # ==================================================
+
+def normalize_title(title: str) -> str:
+    title = unicodedata.normalize("NFKD", title)
+    title = "".join(c for c in title if not unicodedata.combining(c))
+    title = title.lower()
+    title = re.sub(r"[^a-z0-9 ]", "", title)
+    title = re.sub(r"\s+", " ", title).strip()
+    return title
+
+
+def title_matches(notion_title: str, tmdb_title: str) -> bool:
+    return (
+        SequenceMatcher(
+            None,
+            normalize_title(notion_title),
+            normalize_title(tmdb_title)
+        ).ratio() >= 0.85
+    )
+
+
+def is_released_tmdb(movie: dict) -> bool:
+    date_str = movie.get("release_date")
+    if not date_str:
+        return False
+    try:
+        release_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return False
+    return release_date <= datetime.now().date()
+
 
 def get_director(movie_id: int) -> str:
     url = (
@@ -65,10 +103,6 @@ def get_movie_backdrop_url(movie: dict) -> str | None:
 
 
 def auto_pick_movie(results: list[dict], title: str) -> dict | None:
-    """
-    Sélection automatique si la correspondance est évidente
-    """
-
     if len(results) == 1:
         return results[0]
 
@@ -97,8 +131,8 @@ class MovieUpdaterWindow(ctk.CTk):
         super().__init__()
 
         self.auto_mode = auto_mode
-        self.geometry("880x640")
-        self.resizable(False, False)
+        self.geometry("1000x720")
+        self.resizable(True, True)
         self.configure(bg="#181A20")
 
         self._build_ui()
@@ -109,59 +143,69 @@ class MovieUpdaterWindow(ctk.CTk):
 
     def center_window(self):
         self.update_idletasks()
-        x = (self.winfo_screenwidth() // 2) - 440
-        y = (self.winfo_screenheight() // 2) - 320
+        x = (self.winfo_screenwidth() // 2) - 500
+        y = (self.winfo_screenheight() // 2) - 360
         self.geometry(f"+{x}+{y}")
 
-    # ==================================================
-    # UI
-    # ==================================================
+    # ================= UI =================
 
     def _build_ui(self):
+        # ✅ CARTE RESPONSIVE
         self.main_card = ctk.CTkFrame(
             self,
-            width=740,
-            height=520,
             fg_color="#23242C",
             corner_radius=22
         )
-        self.main_card.place(relx=0.5, rely=0.5, anchor="center")
+        self.main_card.pack(
+            fill="both",
+            expand=True,
+            padx=40,
+            pady=40
+        )
+        self.main_card.pack_propagate(False)
 
         ctk.CTkLabel(
             self.main_card,
             text="🎬 Assistant Notion & TMDB",
-            font=("Segoe UI Semibold", 25)
-        ).pack(pady=(22, 6))
+            font=("Segoe UI Semibold", 26)
+        ).pack(pady=(26, 8))
 
         ctk.CTkButton(
             self.main_card,
             text="🚀 Lancer la mise à jour",
             command=self.run_update,
-            width=320,
-            height=42,
+            width=340,
+            height=44,
             font=("Segoe UI Bold", 16)
-        ).pack(pady=(0, 16))
+        ).pack(pady=(0, 18))
 
-        self.progress = ctk.CTkProgressBar(self.main_card, width=440)
+        self.progress = ctk.CTkProgressBar(self.main_card)
         self.progress.set(0)
-        self.progress.pack(pady=(0, 14))
+        self.progress.pack(fill="x", padx=40, pady=(0, 16))
 
+        # ✅ LOG BOX GRANDE & LISIBLE
         self.log_box = tk.Text(
             self.main_card,
-            height=34,
-            width=92,
             bg="#1B1C24",
             fg="#E7E8EA",
             relief="flat",
             padx=16,
-            pady=12
+            pady=12,
+            wrap="word",
+            font=("Segoe UI", 16),  # 👈 TAILLE DU TEXTE
+            spacing1=4,  # espace avant paragraphe
+            spacing3=4  # espace après paragraphe
         )
-        self.log_box.pack(padx=18)
+
+        self.log_box.pack(
+            fill="both",
+            expand=True,
+            padx=24,
+            pady=(0, 24)
+        )
         self.log_box.config(state="disabled")
 
-    # ==================================================
-    # Logs
-    # ==================================================
+    # ================= LOGS =================
 
     def log(self, msg, level="info"):
         icons = {"info": "ℹ️", "success": "✅", "warn": "⚠️", "error": "❌"}
@@ -171,9 +215,15 @@ class MovieUpdaterWindow(ctk.CTk):
         self.log_box.config(state="disabled")
         self.update()
 
-    # ==================================================
-    # WORKFLOW
-    # ==================================================
+    def ask_manual_url(self) -> str | None:
+        dialog = ctk.CTkInputDialog(
+            title="Film non trouvé",
+            text="Collez l’URL TMDB ou IMDb du film :"
+        )
+        url = dialog.get_input()
+        return url.strip() if url else None
+
+    # ================= WORKFLOW =================
 
     def run_update(self):
         try:
@@ -183,14 +233,9 @@ class MovieUpdaterWindow(ctk.CTk):
             self.log_box.config(state="disabled")
 
             pages = fetch_all_pages()
-
-            # ===============================
-            # A — ENRICHISSEMENT NORMAL
-            # ===============================
-
             pages_to_enrich = get_movies_to_enrich(pages)
-            self.log(f"🎯 Films à enrichir : {len(pages_to_enrich)}")
 
+            self.log(f"🎯 Films à enrichir : {len(pages_to_enrich)}")
             total = max(len(pages_to_enrich), 1)
             self.progress.set(0)
 
@@ -205,46 +250,107 @@ class MovieUpdaterWindow(ctk.CTk):
                     clean_search_title(title),
                     extract_year(title)
                 )
-                if not results:
-                    self.log("⚠️ Aucun résultat TMDB", "warn")
-                    continue
 
-                results = sorted(
-                    results,
-                    key=lambda m: score_movie(m, title),
-                    reverse=True
-                )[:10]
+                movie = None
+                force_url = False
 
-                movie = auto_pick_movie(results, title)
+                # ===============================
+                # A — Recherche TMDB
+                # ===============================
+                if results:
+                    results = sorted(
+                        results,
+                        key=lambda m: score_movie(m, title),
+                        reverse=True
+                    )[:10]
 
-                if not movie:
-                    options = []
-                    for m in results:
-                        year = (m.get("release_date") or "")[:4] or "?"
-                        rating = m.get("vote_average", 0)
-                        votes = m.get("vote_count", 0)
+                    candidate = auto_pick_movie(results, title)
 
-                        overview = (m.get("overview") or "").strip()
-                        if len(overview) > 240:
-                            overview = overview[:237].rsplit(" ", 1)[0] + "…"
+                    if (
+                            candidate
+                            and is_released_tmdb(candidate)
+                            and title_matches(title, candidate.get("title", ""))
+                    ):
+                        movie = candidate
+                        self.log("🎯 Auto-pick validé (titre + date OK)", "info")
 
-                        director = get_director(m["id"])
-
-                        txt = (
-                            f"{m.get('title')} ({year})\n"
-                            f"🎬 {director or 'Réalisateur inconnu'}\n"
-                            f"⭐ {rating}/10 · {votes} votes\n\n"
-                            f"{overview}"
+                    else:
+                        self.log(
+                            "🛑 Auto-pick bloqué → choix manuel requis",
+                            "info"
                         )
-                        options.append(txt)
 
-                    choice = ask_choice(options=options, parent=self)
-                    if choice <= 0:
-                        self.log("⏭️ Ignoré", "info")
+                    # ===============================
+                    # B — Choix manuel
+                    # ===============================
+                    if not movie:
+                        options = []
+
+                        for m in results:
+                            year = (m.get("release_date") or "")[:4] or "?"
+                            rating = m.get("vote_average", 0)
+                            votes = m.get("vote_count", 0)
+
+                            overview = (m.get("overview") or "").strip()
+                            if len(overview) > 240:
+                                overview = overview[:237].rsplit(" ", 1)[0] + "…"
+
+                            director = get_director(m["id"])
+
+                            options.append(
+                                f"{m.get('title')} ({year})\n"
+                                f"🎬 {director or 'Réalisateur inconnu'}\n"
+                                f"⭐ {rating}/10 · {votes} votes\n\n"
+                                f"{overview}"
+                            )
+
+                        choice = ask_choice(options=options, parent=self)
+
+                        if choice == -1:
+                            self.log("🔗 Saisie manuelle via URL demandée", "info")
+                            force_url = True
+
+                        elif choice == 0:
+                            self.log("⏭️ Ignoré", "info")
+                            continue
+
+                        else:
+                            movie = results[choice - 1]
+
+                # ===============================
+                # C — FALLBACK URL
+                # ===============================
+                if not movie:
+                    if not force_url:
+                        self.log("❌ Aucun résultat valide → URL requise", "warn")
+
+                    url = self.ask_manual_url()
+                    if not url:
+                        self.log("⏭️ Ignoré (pas d’URL)", "info")
                         continue
 
-                    movie = results[choice - 1]
+                    tmdb_id = extract_tmdb_id_from_url(url)
+                    imdb_id = extract_imdb_id_from_url(url)
 
+                    if tmdb_id:
+                        self.log(f"🔗 Import TMDB ID : {tmdb_id}")
+                        movie = get_movie_by_tmdb_id(tmdb_id)
+
+                    elif imdb_id:
+                        self.log(f"🔗 Import IMDb ID : {imdb_id}")
+                        movie = get_tmdb_movie_from_imdb_id(imdb_id)
+
+                    else:
+                        self.log("❌ URL non reconnue", "error")
+                        continue
+
+                if not movie:
+                    self.log("❌ Impossible de récupérer le film", "error")
+                    continue
+
+                # ===============================
+                # D — ENRICHISSEMENT NOTION
+                # ===============================
                 release = None
                 if movie.get("release_date"):
                     try:
@@ -283,57 +389,8 @@ class MovieUpdaterWindow(ctk.CTk):
                 self.log(f"✅ {title} enrichi", "success")
 
             # ===============================
-            # B — 🏷️ RESYNC TAGS SAFE (NON DESTRUCTIF)
+            # E — CALENDRIER
             # ===============================
-
-            self.log("🏷️ Resync tags (safe)…")
-
-            for page in pages:
-                title = get_title(page)
-                if not title:
-                    continue
-
-                # 🔒 Si tags déjà présents → on ne touche PAS
-                tags_prop = (
-                    page["properties"]
-                    .get("Tags", {})
-                    .get("multi_select", [])
-                )
-                if tags_prop:
-                    continue
-
-                categories = [
-                    g["name"]
-                    for g in page["properties"]
-                    .get("Catégorie", {})
-                    .get("multi_select", [])
-                ]
-                if not categories:
-                    continue
-
-                release = get_release_date(page)
-                tags = compute_tags_from_categories(
-                    categories,
-                    release.year if release else None
-                )
-                if not tags:
-                    continue
-
-                notion.pages.update(
-                    page_id=page["id"],
-                    properties={
-                        "Tags": {
-                            "multi_select": [{"name": t} for t in tags]
-                        }
-                    }
-                )
-
-                self.log(f"🏷️ Tags ajoutés : {title}", "success")
-
-            # ===============================
-            # C — CALENDRIER
-            # ===============================
-
             self.log("📅 Synchronisation calendrier…")
             sync_future_releases(
                 pages,

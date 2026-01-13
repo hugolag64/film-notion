@@ -11,8 +11,11 @@ def ask_choice(
     height: int = 420
 ) -> int:
     """
-    Affiche une fenêtre de sélection et retourne l'index choisi (1-based).
-    Retourne 0 si annulé.
+    Affiche une fenêtre de sélection.
+    Retour :
+      - index (1-based) si choix
+      - 0 si annulé
+      - -1 si choix via URL
     """
     ctk.set_appearance_mode("dark")
 
@@ -79,12 +82,10 @@ def ask_choice(
         container = ctk.CTkFrame(content, fg_color="transparent")
         container.pack(fill="x", padx=6, pady=10)
 
-        # --- Séparation titre / détails ---
         lines = text.split("\n")
         title_line = lines[0]
         details = "\n".join(lines[1:])
 
-        # --- RadioButton : texte court uniquement ---
         ctk.CTkRadioButton(
             container,
             text=("👉 " if i == 1 else "   ") + title_line,
@@ -95,29 +96,62 @@ def ask_choice(
             text_color="#FFFFFF"
         ).pack(anchor="w")
 
-        # --- Label : texte long lisible ---
         if details.strip():
             ctk.CTkLabel(
                 container,
                 text=details,
                 font=("Segoe UI", 13),
                 text_color="#CCCCCC",
-                wraplength=580,     # ✅ autorisé sur CTkLabel
+                wraplength=580,
                 justify="left"
             ).pack(anchor="w", padx=(28, 0), pady=(4, 0))
 
     # ==================================================
-    # Bouton validation
+    # Boutons d'action
     # ==================================================
 
+    btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
+    btn_frame.pack(pady=(18, 6))
+
+    def validate():
+        win.result = selected.get()
+        win.destroy()
+
+    def cancel():
+        win.result = 0
+        win.destroy()
+
+    def use_url():
+        win.result = -1
+        win.destroy()
+
     ctk.CTkButton(
-        frame,
-        text="Valider",
-        width=160,
+        btn_frame,
+        text="🔗 URL TMDB / IMDb",
+        width=180,
         height=40,
-        font=("Segoe UI", 15),
-        command=lambda: [setattr(win, "result", selected.get()), win.destroy()]
-    ).pack(pady=(18, 2))
+        font=("Segoe UI", 14),
+        command=use_url
+    ).pack(side="left", padx=8)
+
+    ctk.CTkButton(
+        btn_frame,
+        text="Valider",
+        width=140,
+        height=40,
+        font=("Segoe UI", 14),
+        command=validate
+    ).pack(side="left", padx=8)
+
+    ctk.CTkButton(
+        btn_frame,
+        text="Annuler",
+        width=120,
+        height=40,
+        font=("Segoe UI", 14),
+        fg_color="#444",
+        command=cancel
+    ).pack(side="left", padx=8)
 
     win.wait_window()
     return getattr(win, "result", 0)

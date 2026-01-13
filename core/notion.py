@@ -50,77 +50,29 @@ def get_release_date(page):
 
 
 def get_movies_to_enrich(pages):
-    """
-    Films sans enrichissement TMDB
-    """
+    """Films sans enrichissement TMDB"""
     return [
         page for page in pages
         if not is_tmdb_done(page)
     ]
 
 
-def get_existing_tags(page) -> list[str]:
-    """
-    Récupère les tags déjà présents dans Notion
-    """
-    return [
-        t["name"]
-        for t in page["properties"]
-        .get("Tags", {})
-        .get("multi_select", [])
-    ]
-
-
 def get_movies_without_tags(pages):
-    """
-    Films déjà enrichis TMDB MAIS sans tags
-    (utilisé UNIQUEMENT pour le resync one-shot)
-    """
+    """Films enrichis TMDB mais sans tags (resync one-shot)"""
     movies = []
 
     for page in pages:
         if not is_tmdb_done(page):
             continue
 
-        categories = page["properties"] \
-            .get("Catégorie", {}) \
-            .get("multi_select", [])
-
-        tags = page["properties"] \
-            .get("Tags", {}) \
-            .get("multi_select", [])
+        categories = page["properties"].get("Catégorie", {}).get("multi_select", [])
+        tags = page["properties"].get("Tags", {}).get("multi_select", [])
 
         if categories and not tags:
             movies.append(page)
 
     return movies
 
-def compute_meta_tags(movie: dict, results_count: int) -> list[str]:
-    """
-    Tags méta basés sur TMDB
-    """
-    tags = []
-
-    rating = movie.get("vote_average", 0)
-    votes = movie.get("vote_count", 0)
-    popularity = movie.get("popularity", 0)
-
-    if rating >= 7.8 and votes >= 5000:
-        tags.append("⭐ Incontournable")
-
-    if rating <= 6 and votes >= 2000:
-        tags.append("⚠️ Surcoté")
-
-    if votes < 500:
-        tags.append("👀 Peu connu")
-
-    if popularity >= 80:
-        tags.append("🔥 Populaire")
-
-    if results_count == 1:
-        tags.append("🎯 Correspondance parfaite")
-
-    return tags
 
 # =========================
 # TAGS AUTOMATIQUES
@@ -130,10 +82,6 @@ def compute_tags_from_categories(
     categories: list[str],
     release_year: int | None
 ) -> list[str]:
-    """
-    Déduit automatiquement des TAGS à partir
-    des catégories TMDB / Notion
-    """
 
     tags = []
 
@@ -212,35 +160,94 @@ def add_image_block(
         )
 
 
+# =========================
+# Cover + Poster (nouveaux films)
+# =========================
+
 def add_poster_and_backdrop(
     page_id: str,
     poster_url: str | None,
     backdrop_url: str | None
 ):
+    """
+    - Cover Notion = backdrop si dispo, sinon poster
+    - Poster vertical ajouté dans la page
+    - Aucun doublon
+    """
+
+    # 🎨 Cover explicite
+    cover_url = backdrop_url or poster_url
+    if cover_url:
+        notion.pages.update(
+            page_id=page_id,
+            cover={
+                "type": "external",
+                "external": {"url": cover_url}
+            }
+        )
+
+    # 📎 Poster dans le contenu
+    if not poster_url or page_has_image_url(page_id, poster_url):
+        return
+
     blocks = notion.blocks.children.list(
         block_id=page_id
     ).get("results", [])
 
     first_block_id = blocks[0]["id"] if blocks else None
-    last_inserted_id = None
 
-    if poster_url and not page_has_image_url(page_id, poster_url):
-        add_image_block(page_id, poster_url, after_block_id=first_block_id)
-        time.sleep(0.25)
+    add_image_block(
+        page_id,
+        poster_url,
+        after_block_id=first_block_id
+    )
 
-        new_blocks = notion.blocks.children.list(
+    time.sleep(0.25)
+
+
+# =========================
+# RESYNC COVERS (films existants)
+# =========================
+
+def set_page_cover(page_id: str, image_url: str):
+    notion.pages.update(
+        page_id=page_id,
+        cover={
+            "type": "external",
+            "external": {"url": image_url}
+        }
+    )
+
+
+def resync_covers_from_backdrop(pages: list[dict]):
+    """
+    One-shot safe :
+    - si la page a déjà une cover → on ne touche pas
+    - sinon, si une image backdrop existe → on la met en cover
+    """
+
+    for page in pages:
+        if page.get("cover"):
+            continue
+
+        page_id = page["id"]
+
+        blocks = notion.blocks.children.list(
             block_id=page_id
         ).get("results", [])
 
-        if new_blocks:
-            last_inserted_id = new_blocks[0]["id"]
+        for block in blocks:
+            if block.get("type") != "image":
+                continue
 
-    if backdrop_url and not page_has_image_url(page_id, backdrop_url):
-        add_image_block(
-            page_id,
-            backdrop_url,
-            after_block_id=last_inserted_id or first_block_id
-        )
+            ext = block["image"].get("external", {})
+            url = ext.get("url", "")
+
+            # Heuristique simple : image large = backdrop
+            if "w780" in url or "original" in url:
+                set_page_cover(page_id, url)
+                time.sleep(0.25)
+                break
 
 
 # =========================
