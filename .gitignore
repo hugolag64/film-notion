@@ -35,3 +35,6 @@ Thumbs.db
 
 # === Superpowers scratch (progress ledgers, per-task briefs) ===
 .superpowers/
+
+# === Git worktrees ===
+.worktrees/
