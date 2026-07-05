@@ -64,10 +64,10 @@ async def main_page():
             with content:
                 ui.spinner("dots", size="3rem").classes("self-center")
 
-            async def _run() -> None:
-                await handler(content, ctx)
+                async def _run() -> None:
+                    await handler(content, ctx)
 
-            ui.timer(0.05, _run, once=True)
+                ui.timer(0.05, _run, once=True)
         else:
             handler(content, ctx)
 
