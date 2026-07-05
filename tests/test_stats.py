@@ -1,4 +1,4 @@
-from backend.core.stats import compute_stats, find_duplicates
+from backend.core.stats import compute_stats, find_duplicates, compute_enrichment_progression
 from backend.core.models import Media
 
 
@@ -36,3 +36,26 @@ def test_find_duplicates_normalizes_accents_and_case():
     assert len(dups) == 1
     assert dups[0]["count"] == 2
     assert set(dups[0]["ids"]) == {"1", "2"}
+
+
+def test_compute_enrichment_progression_cumulative_by_day():
+    entries = [
+        {"ts": "2026-07-01T10:00:00+00:00"},
+        {"ts": "2026-07-01T18:00:00+00:00"},
+        {"ts": "2026-07-03T09:00:00+00:00"},
+    ]
+    progression = compute_enrichment_progression(entries)
+    assert progression == [
+        {"date": "2026-07-01", "cumulative": 2},
+        {"date": "2026-07-03", "cumulative": 3},
+    ]
+
+
+def test_compute_enrichment_progression_empty():
+    assert compute_enrichment_progression([]) == []
+
+
+def test_compute_enrichment_progression_ignores_entries_without_ts():
+    entries = [{"ts": ""}, {"ts": "2026-07-01T10:00:00+00:00"}]
+    progression = compute_enrichment_progression(entries)
+    assert progression == [{"date": "2026-07-01", "cumulative": 1}]

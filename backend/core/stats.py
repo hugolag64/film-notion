@@ -51,3 +51,19 @@ def find_duplicates(medias: List[Media]) -> List[Dict[str, Any]]:
                 "ids": [m.id for m in items],
             })
     return sorted(duplicates, key=lambda d: -d["count"])
+
+
+def compute_enrichment_progression(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Progression cumulée du nombre de fiches enrichies, groupée par jour (à partir de history.jsonl)."""
+    by_day = Counter()
+    for e in entries:
+        day = (e.get("ts") or "")[:10]
+        if day:
+            by_day[day] += 1
+
+    cumulative = 0
+    progression = []
+    for day in sorted(by_day):
+        cumulative += by_day[day]
+        progression.append({"date": day, "cumulative": cumulative})
+    return progression
