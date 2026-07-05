@@ -2,6 +2,9 @@
 .env
 credentials.json
 
+# === Cache / runtime data ===
+cache.json
+
 # === Logs ===
 *.log
 log.txt
@@ -15,6 +18,8 @@ dist/
 # === Python ===
 __pycache__/
 *.pyc
+.venv/
+.pytest_cache/
 
 # === Executables ===
 *.exe
@@ -22,7 +27,11 @@ __pycache__/
 # === IDE ===
 .idea/
 .vscode/
+.claude/
 
 # === OS ===
 .DS_Store
 Thumbs.db
+
+# === Superpowers scratch (progress ledgers, per-task briefs) ===
+.superpowers/
