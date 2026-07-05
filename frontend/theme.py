@@ -28,20 +28,20 @@ body {{ background-color: var(--bg); font-family: var(--font-body); color: var(-
 }}
 .bs-card:hover {{ border-color: var(--accent); }}
 .bs-title {{ font-family: var(--font-display); color: var(--text); font-weight: 700; }}
-.bs-accent-btn {{
+.q-btn.bs-accent-btn {{
   background: var(--accent) !important;
   color: var(--bg) !important;
   border-radius: 999px !important;
   font-family: var(--font-body);
 }}
-.bs-outline-btn {{
+.q-btn.bs-outline-btn {{
   border: 1px solid var(--accent) !important;
   color: var(--accent) !important;
   border-radius: 999px !important;
   background: transparent !important;
   font-family: var(--font-body);
 }}
-.bs-badge {{ background: var(--accent) !important; color: var(--bg) !important; }}
+.q-badge.bs-badge {{ background: var(--accent) !important; color: var(--bg) !important; }}
 .bs-poster-placeholder {{
   background: linear-gradient(135deg, var(--border), var(--accent-gold));
   border-radius: var(--radius);

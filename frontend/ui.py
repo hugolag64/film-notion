@@ -36,8 +36,6 @@ async def main_page():
     active_section = {"key": "dashboard"}
     nav_buttons: Dict[str, ui.element] = {}
 
-    content = ui.column().classes("w-full max-w-5xl mx-auto p-4")
-
     def _compute_todo() -> None:
         if state.force:
             state.medias = list(state.all_medias)
@@ -102,5 +100,7 @@ async def main_page():
                 if key == active_section["key"]:
                     btn.classes(add="active")
                 nav_buttons[key] = btn
+
+    content = ui.column().classes("w-full max-w-5xl mx-auto p-4")
 
     ui.timer(0.1, reload, once=True)
