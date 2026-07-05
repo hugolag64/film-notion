@@ -6,8 +6,8 @@ TOKENS = {
     "--text-muted": "#8a8578",
     "--accent": "#7a2331",
     "--accent-gold": "#c9a35c",
-    "--font-display": "Georgia, 'Times New Roman', serif",
-    "--font-body": "Arial, Helvetica, sans-serif",
+    "--font-display": "Georgia,'Times New Roman',serif",
+    "--font-body": "Arial,Helvetica,sans-serif",
     "--radius": "10px",
 }
 
