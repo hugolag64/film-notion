@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 from typing import Callable, Dict
 
 from nicegui import ui
@@ -47,6 +48,12 @@ async def main_page():
 
     def render_section(section_key: str) -> None:
         content.clear()
+        if section_key == "wizard":
+            for btn in nav_buttons.values():
+                btn.disable()
+        else:
+            for btn in nav_buttons.values():
+                btn.enable()
         handler = PAGE_RENDERERS.get(section_key)
         if handler is None:
             with content:
@@ -86,6 +93,7 @@ async def main_page():
             with content:
                 ui.label("Impossible de charger les données Notion.").classes("bs-title")
             return
+        state.last_synced = datetime.now(timezone.utc).isoformat()
         rerender()
 
     ctx = AppContext(processor=processor, state=state, reload=reload, rerender=rerender, navigate=navigate)

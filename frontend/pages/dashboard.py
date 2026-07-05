@@ -4,6 +4,7 @@ from nicegui import ui
 
 from frontend.components import media_poster
 from frontend.context import AppContext
+from frontend.format_utils import format_relative_timestamp
 
 
 def render(container: ui.element, ctx: AppContext) -> None:
@@ -25,7 +26,11 @@ def _render_dashboard(ctx: AppContext) -> None:
     with ui.row().classes("w-full items-center justify-between mb-4"):
         with ui.column().classes("gap-0"):
             ui.label(f"{len(medias)} fiche(s) en attente").classes("bs-title text-lg")
-            ui.label("Prêt à enrichir").classes("text-xs").style("color:var(--text-muted)")
+            if ctx.state.last_synced:
+                sync_text = f"Dernière synchro : {format_relative_timestamp(ctx.state.last_synced)}"
+            else:
+                sync_text = "Prêt à enrichir"
+            ui.label(sync_text).classes("text-xs").style("color:var(--text-muted)")
         with ui.row().classes("gap-2"):
             ui.button("Lancer l'enrichissement", on_click=lambda: _start_wizard(ctx)) \
                 .classes("bs-accent-btn px-4 py-2")

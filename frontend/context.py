@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, List
+from typing import Any, Awaitable, Callable, List, Optional
 
 from backend.core.processor import EnrichmentProcessor
 
@@ -10,6 +10,7 @@ class AppState:
     medias: List[Any] = field(default_factory=list)
     force: bool = False
     running: bool = False
+    last_synced: Optional[str] = None
 
 
 @dataclass

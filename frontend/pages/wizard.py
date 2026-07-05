@@ -101,9 +101,13 @@ def _render_gallery(
         if not candidates:
             ui.label("Aucun résultat. Essayez un autre titre ci-dessus.").style("color:var(--text-muted)")
         else:
+            thumb_elements: Dict[str, ui.element] = {}
+            selected = {"id": candidates[0]["id"] if candidates else None}
             with ui.grid(columns=4).classes("w-full gap-3 mt-4"):
                 for cand in candidates:
-                    _candidate_thumb(cand, future, detail_box)
+                    thumb_elements[cand["id"]] = _candidate_thumb(
+                        cand, future, detail_box, thumb_elements, selected
+                    )
             detail_box.move(target_index=-1)
             _render_detail(detail_box, candidates[0], future)
 
@@ -111,14 +115,30 @@ def _render_gallery(
             ui.button("Ignorer cette fiche", on_click=lambda: _resolve(future, None)).classes("bs-outline-btn")
 
 
-def _candidate_thumb(cand: Dict[str, Any], future: "asyncio.Future[Any]", detail_box: ui.element) -> None:
+def _candidate_thumb(
+    cand: Dict[str, Any],
+    future: "asyncio.Future[Any]",
+    detail_box: ui.element,
+    thumb_elements: Dict[str, ui.element],
+    selected: Dict[str, Any],
+) -> ui.element:
     def _select() -> None:
         _render_detail(detail_box, cand, future)
+        selected["id"] = cand["id"]
+        for cid, el in thumb_elements.items():
+            if cid == cand["id"]:
+                el.style("border: 2px solid var(--accent);")
+            else:
+                el.style("border: 1px solid var(--border);")
 
-    with ui.element("div").classes("bs-card p-2 cursor-pointer").on("click", _select):
+    thumb = ui.element("div").classes("bs-card p-2 cursor-pointer").on("click", _select)
+    if cand["id"] == selected["id"]:
+        thumb.style("border: 2px solid var(--accent);")
+    with thumb:
         media_poster(cand.get("poster_url"), height="120px")
         year = (cand.get("release_date") or "N/A")[:4]
         ui.badge(year).classes("bs-badge mt-1")
+    return thumb
 
 
 def _render_detail(detail_box: ui.element, cand: Optional[Dict[str, Any]], future: "asyncio.Future[Any]") -> None:
