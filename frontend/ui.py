@@ -7,6 +7,7 @@ from backend.config import Config
 from backend.core.notion import NotionService
 from backend.core.processor import EnrichmentProcessor
 from frontend.context import AppContext, AppState
+from frontend.pages import ai as ai_page
 from frontend.pages import dashboard, history, stats, wizard
 from frontend.theme import apply_theme
 
@@ -14,6 +15,7 @@ SECTIONS = [
     ("dashboard", "À traiter"),
     ("stats", "Statistiques"),
     ("history", "Historique"),
+    ("ai", "Reco IA"),
 ]
 
 PAGE_RENDERERS: Dict[str, Callable] = {
@@ -21,6 +23,7 @@ PAGE_RENDERERS: Dict[str, Callable] = {
     "wizard": wizard.render,
     "stats": stats.render,
     "history": history.render,
+    "ai": ai_page.render,
 }
 
 
