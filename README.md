@@ -79,14 +79,28 @@ Ouvre http://localhost:8080.
 ## Architecture
 
 ```
-main.py              → bootstrap NiceGUI
-backend/config.py    → variables d'environnement
+main.py                → bootstrap NiceGUI
+backend/config.py      → variables d'environnement
 backend/core/
-  models.py          → modèle pydantic Media
-  notion.py          → client Notion (httpx async)
-  tmdb.py            → client TMDB (httpx async)
-  processor.py       → matching + règles + orchestration
-  cache_service.py   → cache « déjà traité » (avec hash de contenu)
-frontend/ui.py       → vue NiceGUI (dashboard + wizard)
-scripts/             → scripts de debug manuels
+  models.py            → modèle pydantic Media
+  notion.py            → client Notion (httpx async)
+  tmdb.py              → client TMDB (httpx async)
+  processor.py         → matching + règles + orchestration
+  cache_service.py      → cache « déjà traité » (avec hash de contenu)
+  stats.py             → agrégats stats + détection de doublons + progression
+  history.py           → journal d'audit (history.jsonl)
+  ai.py                → recommandations Claude (optionnel)
+frontend/
+  theme.py             → design tokens (Ivoire & Bordeaux) + injection CSS
+  format_utils.py       → formatage de timestamps relatifs
+  components.py        → éléments partagés (poster/placeholder, badge source)
+  context.py           → AppState / AppContext partagés entre les pages
+  ui.py                → orchestrateur : top bar + routing des sections
+  pages/
+    dashboard.py       → section "À traiter" (bandeau + grille de cards)
+    wizard.py          → résolution d'ambiguïté (page plein écran)
+    stats.py           → tableau de bord (donut / courbe / barres)
+    history.py         → timeline chronologique
+    ai.py              → reco IA (restyle léger)
+scripts/                → scripts de debug manuels
 ```
