@@ -85,3 +85,22 @@ def test_update_returns_false_for_unknown_id(tmp_path):
     store = _store(tmp_path)
     ok = asyncio.run(store.update("unknown", {"director": "X"}))
     assert ok is False
+
+
+def test_update_silently_ignores_unknown_field_keys(tmp_path):
+    store = _store(tmp_path)
+    media = asyncio.run(store.create({"title": "Dune"}))
+
+    # Update with unknown field keys mixed with valid ones
+    ok = asyncio.run(store.update(media.id, {
+        "not_a_real_column": "x",
+        "title": "Dune Remastered",
+        "also_invalid": 123,
+        "director": "Denis Villeneuve"
+    }))
+    assert ok is True
+
+    fetched = asyncio.run(store.fetch_one(media.id))
+    assert fetched.title == "Dune Remastered"
+    assert fetched.director == "Denis Villeneuve"
+    # Unknown keys did not cause an error, they were silently ignored

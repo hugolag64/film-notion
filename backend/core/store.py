@@ -93,8 +93,11 @@ class MediaStore:
     def _update_sync(self, media_id: str, fields: Dict[str, Any]) -> bool:
         if not fields:
             return self._fetch_one_sync(media_id) is not None
-        set_clause = ", ".join(f"{col} = ?" for col in fields)
-        values = [self._encode(col, val) for col, val in fields.items()]
+        filtered_fields = {col: fields.get(col) for col in _COLUMNS if col != "id" and col in fields}
+        if not filtered_fields:
+            return self._fetch_one_sync(media_id) is not None
+        set_clause = ", ".join(f"{col} = ?" for col in filtered_fields)
+        values = [self._encode(col, val) for col, val in filtered_fields.items()]
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
                 f"UPDATE media SET {set_clause} WHERE id = ?", [*values, media_id]
