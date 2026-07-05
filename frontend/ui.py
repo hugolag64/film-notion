@@ -7,16 +7,18 @@ from backend.config import Config
 from backend.core.notion import NotionService
 from backend.core.processor import EnrichmentProcessor
 from frontend.context import AppContext, AppState
-from frontend.pages import dashboard, wizard
+from frontend.pages import dashboard, stats, wizard
 from frontend.theme import apply_theme
 
 SECTIONS = [
     ("dashboard", "À traiter"),
+    ("stats", "Statistiques"),
 ]
 
 PAGE_RENDERERS: Dict[str, Callable] = {
     "dashboard": dashboard.render,
     "wizard": wizard.render,
+    "stats": stats.render,
 }
 
 
