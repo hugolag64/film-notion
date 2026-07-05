@@ -28,6 +28,7 @@ body {{ background-color: var(--bg); font-family: var(--font-body); color: var(-
 }}
 .bs-card:hover {{ border-color: var(--accent); }}
 .bs-title {{ font-family: var(--font-display); color: var(--text); font-weight: 700; }}
+@layer theme {{
 .q-btn.bs-accent-btn {{
   background: var(--accent) !important;
   color: var(--bg) !important;
@@ -42,6 +43,7 @@ body {{ background-color: var(--bg); font-family: var(--font-body); color: var(-
   font-family: var(--font-body);
 }}
 .q-badge.bs-badge {{ background: var(--accent) !important; color: var(--bg) !important; }}
+}}
 .bs-poster-placeholder {{
   background: linear-gradient(135deg, var(--border), var(--accent-gold));
   border-radius: var(--radius);
