@@ -1,5 +1,4 @@
 from datetime import date as date_cls
-from typing import Any
 
 from nicegui import ui
 
