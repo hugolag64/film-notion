@@ -8,6 +8,7 @@ import logging
 
 from backend.config import Config
 from backend.core.processor import EnrichmentProcessor
+from backend.core.store import MediaStore
 
 logger = logging.getLogger(__name__)
 
@@ -15,8 +16,8 @@ _task: asyncio.Task | None = None
 
 
 async def _run_once():
-    processor = EnrichmentProcessor()
-    medias = await processor.notion.fetch_all_media()
+    processor = EnrichmentProcessor(MediaStore(Config.DB_PATH))
+    medias = await processor.store.fetch_all()
     todo = [
         m for m in medias
         if not (m.director and m.release_date and m.support) or not m.tmdb_ok
