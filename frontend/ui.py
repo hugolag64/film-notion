@@ -5,7 +5,7 @@ from typing import Callable, Dict
 from nicegui import ui
 
 from backend.config import Config
-from backend.core.notion import NotionService
+from backend.core.store import MediaStore
 from backend.core.processor import EnrichmentProcessor
 from frontend.context import AppContext, AppState
 from frontend.pages import ai as ai_page
@@ -32,7 +32,8 @@ PAGE_RENDERERS: Dict[str, Callable] = {
 async def main_page():
     apply_theme()
 
-    processor = EnrichmentProcessor()
+    store = MediaStore(Config.DB_PATH)
+    processor = EnrichmentProcessor(store)
     state = AppState()
     active_section = {"key": "dashboard"}
     nav_buttons: Dict[str, ui.element] = {}
@@ -86,7 +87,7 @@ async def main_page():
         with content:
             ui.spinner("dots", size="3rem").classes("self-center")
         try:
-            state.all_medias = await NotionService.fetch_all_media()
+            state.all_medias = await store.fetch_all()
         except Exception as e:
             content.clear()
             ui.notify(f"Erreur de connexion à Notion : {e}", type="negative")
@@ -96,7 +97,7 @@ async def main_page():
         state.last_synced = datetime.now(timezone.utc).isoformat()
         rerender()
 
-    ctx = AppContext(processor=processor, state=state, reload=reload, rerender=rerender, navigate=navigate)
+    ctx = AppContext(processor=processor, store=store, state=state, reload=reload, rerender=rerender, navigate=navigate)
 
     with ui.row().classes("bs-topbar w-full items-center justify-between px-6 py-3"):
         ui.label("🎬 Backstage").classes("bs-title text-xl")

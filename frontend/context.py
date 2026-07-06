@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, List, Optional
 
 from backend.core.processor import EnrichmentProcessor
+from backend.core.store import MediaStore
 
 
 @dataclass
@@ -16,6 +17,7 @@ class AppState:
 @dataclass
 class AppContext:
     processor: EnrichmentProcessor
+    store: MediaStore
     state: AppState
     reload: Callable[[], Awaitable[None]]
     rerender: Callable[[], None]
