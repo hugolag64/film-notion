@@ -8,6 +8,11 @@ Nécessite NOTION_TOKEN et DATABASE_ID dans l'environnement (.env).
 """
 import asyncio
 import logging
+import sys
+import os
+
+# Ajout du dossier racine au path pour les imports
+sys.path.append(os.getcwd())
 
 from backend.config import Config
 from backend.core.notion import NotionService
