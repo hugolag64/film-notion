@@ -4,6 +4,7 @@ credentials.json
 
 # === Cache / runtime data ===
 cache.json
+backstage.db
 
 # === Logs ===
 *.log
