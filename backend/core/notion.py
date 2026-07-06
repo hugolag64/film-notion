@@ -3,11 +3,27 @@ import httpx
 from backend.config import Config
 from backend.core.models import Media
 from backend.core import http
-from backend.core.mapping import Props, validate_schema
 from typing import List, Optional, Any, Dict
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+
+class Props:
+    """Noms exacts des propriétés Notion (utilisé uniquement par ce module,
+    conservé pour le script de migration one-shot)."""
+    TITLE = "Nom"
+    TYPE = "Type"
+    STATUS = "Statut"
+    SUPPORT = "Support"
+    RATING = "Note /10"
+    RELEASE_DATE = "Date de sortie"
+    DIRECTOR = "Réalisateur"
+    CATEGORY = "Catégorie"
+    SYNOPSIS = "Synopsis"
+    TAGS = "Tags"
+    REVIEW = "Avis"
+    TMDB_OK = "TMDB_OK"
 
 
 class NotionService:
@@ -156,19 +172,6 @@ class NotionService:
         except Exception as e:
             logger.exception("Exception ajout bloc image page %s: %s", page_id, e)
             return False
-
-    @classmethod
-    def validate_schema_sync(cls) -> List[str]:
-        """
-        Vérifie (en synchrone, au démarrage) que la base Notion expose les
-        propriétés attendues. Retourne la liste des problèmes (vide si OK).
-        Lève en cas d'échec d'accès à la base.
-        """
-        url = f"{cls.BASE_URL}/databases/{Config.DATABASE_ID}"
-        with httpx.Client(timeout=15.0) as client:
-            response = client.get(url, headers=cls._headers())
-        response.raise_for_status()
-        return validate_schema(response.json().get("properties", {}))
 
     @classmethod
     def _map_page_to_media(cls, page: Dict[str, Any]) -> Optional[Media]:

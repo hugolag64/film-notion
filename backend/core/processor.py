@@ -6,7 +6,8 @@ from typing import List, Dict, Any, Optional, Callable
 from backend.core.notion import NotionService, Media
 from backend.core.tmdb import TMDBClient
 from backend.core.cache_service import CacheService
-from backend.core.mapping import Props, Values, GENRE_TAG_RULES, is_series
+from backend.core.mapping import Values, GENRE_TAG_RULES, is_series
+from backend.core.notion import Props
 from backend.core import history, omdb
 from backend.core.diff import summarize_changes
 
