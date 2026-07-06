@@ -90,9 +90,9 @@ async def main_page():
             state.all_medias = await store.fetch_all()
         except Exception as e:
             content.clear()
-            ui.notify(f"Erreur de connexion à Notion : {e}", type="negative")
+            ui.notify(f"Erreur de lecture de la base locale : {e}", type="negative")
             with content:
-                ui.label("Impossible de charger les données Notion.").classes("bs-title")
+                ui.label("Impossible de charger les données locales.").classes("bs-title")
             return
         state.last_synced = datetime.now(timezone.utc).isoformat()
         rerender()
