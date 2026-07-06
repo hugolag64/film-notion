@@ -3,11 +3,11 @@ import logging
 from datetime import date, datetime
 from typing import List, Dict, Any, Optional, Callable
 
-from backend.core.notion import NotionService, Media
+from backend.core.models import Media
+from backend.core.store import MediaStore
 from backend.core.tmdb import TMDBClient
 from backend.core.cache_service import CacheService
 from backend.core.mapping import Values, GENRE_TAG_RULES, is_series
-from backend.core.notion import Props
 from backend.core import history, omdb
 from backend.core.diff import summarize_changes
 
@@ -17,15 +17,15 @@ DEFAULT_CONCURRENCY = 5
 
 
 class EnrichmentProcessor:
-    def __init__(self):
-        self.notion = NotionService()
+    def __init__(self, store: MediaStore):
+        self.store = store
         self.tmdb = TMDBClient()
         self.cache = CacheService()
 
     async def process_all(self, force: bool = False):
         """Lance le processus d'enrichissement complet (Mode Automatique)."""
         logger.info("Début de l'enrichissement...")
-        medias = await self.notion.fetch_all_media()
+        medias = await self.store.fetch_all()
 
         updated_count = 0
         skipped_count = 0
@@ -126,10 +126,7 @@ class EnrichmentProcessor:
                     }
 
                 if updates or cover_todo:
-                    await self._update_notion(media.id, updates, cover_url=cover_todo)
-                    if cover_todo:
-                        await self.notion.append_image_block(media.id, cover_todo)
-
+                    await self._apply_updates(media.id, updates, cover_url=cover_todo)
                     history.record(media.id, media.title, changes, source="auto")
                     await self._mark_processed_after_update(media.id, media)
                     return {'status': 'PROCESSED', 'title': best_match['title'], 'tmdb_id': best_match['id']}
@@ -241,9 +238,9 @@ class EnrichmentProcessor:
         logger.info("Enrichissement manuel de %s avec TMDB ID %s", media_id, tmdb_id)
 
         # État courant de la fiche (pour ne pas écraser ce qui est déjà rempli)
-        media = await self.notion.fetch_page(media_id)
+        media = await self.store.fetch_one(media_id)
         if media is None:
-            raise ValueError("Impossible de récupérer la fiche Notion")
+            raise ValueError("Impossible de récupérer la fiche")
 
         tmdb_details = await self.tmdb.get_details(tmdb_id, is_series=is_series(media.type))
         if not tmdb_details:
@@ -254,9 +251,7 @@ class EnrichmentProcessor:
         cover_todo = poster_url if not media.cover_url else None
         changes = summarize_changes(media, updates, poster_url=cover_todo)
 
-        await self._update_notion(media_id, updates, cover_url=cover_todo)
-        if cover_todo:
-            await self.notion.append_image_block(media_id, cover_todo)
+        await self._apply_updates(media_id, updates, cover_url=cover_todo)
 
         history.record(media_id, media.title, changes, source="manual")
         await self._mark_processed_after_update(media_id, media)
@@ -274,59 +269,61 @@ class EnrichmentProcessor:
         today = date.today()
 
         if not media.status:
-            updates[Props.STATUS] = {"select": {"name": Values.STATUS_TO_WATCH}}
+            updates["status"] = Values.STATUS_TO_WATCH
 
-        # Date (depuis Notion si présente, sinon TMDB)
+        # Date (depuis la fiche si présente, sinon TMDB)
         release_date = media.release_date
         if tmdb_data and not release_date:
             release_str = tmdb_data.get("release_date")
             if release_str:
                 try:
                     release_date = datetime.strptime(release_str, "%Y-%m-%d").date()
-                    updates[Props.RELEASE_DATE] = {"date": {"start": release_str}}
+                    updates["release_date"] = release_date
                 except ValueError:
                     pass
 
         # Règle Support
         if not media.support:
             if release_date and release_date > today:
-                updates[Props.SUPPORT] = {"select": {"name": Values.SUPPORT_CINEMA}}
+                updates["support"] = Values.SUPPORT_CINEMA
             else:
-                updates[Props.SUPPORT] = {"select": {"name": Values.SUPPORT_DOWNLOAD}}
+                updates["support"] = Values.SUPPORT_DOWNLOAD
 
         if tmdb_data:
             if not media.director:
                 director = self.tmdb.get_director(tmdb_data)
                 if director:
-                    updates[Props.DIRECTOR] = {"rich_text": [{"text": {"content": director}}]}
+                    updates["director"] = director
 
             if not media.synopsis:
                 overview = tmdb_data.get("overview")
                 if overview:
-                    updates[Props.SYNOPSIS] = {"rich_text": [{"text": {"content": overview[:2000]}}]}
+                    updates["synopsis"] = overview[:2000]
 
             genres = self.tmdb.get_genres(tmdb_data)
             if not media.categories and genres:
-                updates[Props.CATEGORY] = {"multi_select": [{"name": g} for g in genres]}
+                updates["categories"] = genres
 
             if not media.tags and genres:
                 suggested_tags = self._map_genres_to_tags(genres)
                 if suggested_tags:
-                    updates[Props.TAGS] = {"multi_select": [{"name": t} for t in suggested_tags]}
+                    updates["tags"] = suggested_tags
 
-            updates[Props.TMDB_OK] = {"checkbox": True}
+            updates["tmdb_ok"] = True
             poster_url = self.tmdb.get_poster_url(tmdb_data)
 
         return updates, poster_url
 
-    async def _update_notion(self, page_id: str, properties: Dict[str, Any], cover_url: Optional[str] = None):
-        success = await self.notion.update_page(page_id, properties, cover_url=cover_url)
+    async def _apply_updates(self, media_id: str, fields: Dict[str, Any], cover_url: Optional[str] = None):
+        if cover_url:
+            fields = {**fields, "cover_url": cover_url}
+        success = await self.store.update(media_id, fields)
         if success:
-            logger.info("Notion mis à jour pour %s", page_id)
+            logger.info("Fiche locale mise à jour pour %s", media_id)
         else:
-            logger.warning("Échec update Notion pour %s", page_id)
+            logger.warning("Échec de mise à jour locale pour %s", media_id)
 
     async def _mark_processed_after_update(self, page_id: str, fallback: Media):
         """Recharge la fiche après écriture pour cacher l'empreinte de l'état réel."""
-        fresh = await self.notion.fetch_page(page_id)
+        fresh = await self.store.fetch_one(page_id)
         self.cache.mark_as_processed(fresh or fallback)
