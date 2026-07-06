@@ -5,7 +5,7 @@ from nicegui import ui, app
 
 from backend.config import Config
 from backend.core import http, scheduler
-from backend.core.notion import NotionService
+from backend.core.store import MediaStore
 import frontend.ui  # noqa: F401  (enregistre la page via @ui.page)
 
 logging.basicConfig(
@@ -14,20 +14,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Échoue tôt et clairement si une variable d'environnement manque
-Config.check()
-
-# Validation du schéma Notion au démarrage (fail fast, avertit si non bloquant)
-try:
-    problems = NotionService.validate_schema_sync()
-    if problems:
-        for p in problems:
-            logger.warning("Schéma Notion : %s", p)
-        logger.warning("L'enrichissement peut échouer sur les propriétés ci-dessus.")
-    else:
-        logger.info("Schéma Notion conforme.")
-except Exception as e:
-    logger.error("Impossible de valider le schéma Notion : %s", e)
+# Crée la base locale si elle n'existe pas encore
+MediaStore(Config.DB_PATH).init_schema()
 
 # Synchronisation auto périodique (si SYNC_INTERVAL_MIN > 0)
 app.on_startup(scheduler.start)
