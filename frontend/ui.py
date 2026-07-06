@@ -9,11 +9,12 @@ from backend.core.store import MediaStore
 from backend.core.processor import EnrichmentProcessor
 from frontend.context import AppContext, AppState
 from frontend.pages import ai as ai_page
-from frontend.pages import dashboard, history, stats, wizard
+from frontend.pages import dashboard, history, library, stats, wizard
 from frontend.theme import apply_theme
 
 SECTIONS = [
     ("dashboard", "À traiter"),
+    ("library", "Bibliothèque"),
     ("stats", "Statistiques"),
     ("history", "Historique"),
     ("ai", "Reco IA"),
@@ -22,6 +23,7 @@ SECTIONS = [
 PAGE_RENDERERS: Dict[str, Callable] = {
     "dashboard": dashboard.render,
     "wizard": wizard.render,
+    "library": library.render,
     "stats": stats.render,
     "history": history.render,
     "ai": ai_page.render,

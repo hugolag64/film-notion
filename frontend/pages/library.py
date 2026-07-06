@@ -1,7 +1,11 @@
 import re
 from typing import List, Optional
 
+from nicegui import ui
+
 from backend.core.models import Media
+from frontend.components import media_card
+from frontend.context import AppContext
 
 SORT_OPTIONS = ["Titre", "Année", "Note"]
 
@@ -31,3 +35,36 @@ def filter_and_sort_medias(medias: List[Media], query: str, sort_key: str) -> Li
         return rated + unrated
 
     raise ValueError(f"Tri inconnu : {sort_key}")
+
+
+def render(container: ui.element, ctx: AppContext) -> None:
+    container.clear()
+    state = {"query": "", "sort": SORT_OPTIONS[0]}
+
+    with container:
+        with ui.row().classes("w-full items-center gap-3 mb-4"):
+            def _on_search(e) -> None:
+                state["query"] = e.value
+                _refresh()
+
+            def _on_sort(e) -> None:
+                state["sort"] = e.value
+                _refresh()
+
+            ui.input(placeholder="Rechercher un titre…", on_change=_on_search).classes("flex-grow")
+            ui.select(SORT_OPTIONS, value=SORT_OPTIONS[0], label="Trier par", on_change=_on_sort).classes("w-48")
+
+        grid_box = ui.column().classes("w-full")
+
+        def _refresh() -> None:
+            grid_box.clear()
+            results = filter_and_sort_medias(ctx.state.all_medias, state["query"], state["sort"])
+            with grid_box:
+                if not results:
+                    ui.label("Aucun résultat.").style("color:var(--text-muted)")
+                else:
+                    with ui.grid(columns=4).classes("w-full gap-3"):
+                        for m in results:
+                            media_card(m)
+
+        _refresh()
