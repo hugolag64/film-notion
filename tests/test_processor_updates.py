@@ -9,7 +9,7 @@ def _bare_processor() -> EnrichmentProcessor:
     # Évite __init__ (store/cache), mais _prepare_updates a besoin de self.tmdb
     # pour les helpers purs (get_director/get_genres/get_poster_url).
     p = object.__new__(EnrichmentProcessor)
-    p.tmdb = TMDBClient()
+    p.tmdb = object.__new__(TMDBClient)
     return p
 
 
