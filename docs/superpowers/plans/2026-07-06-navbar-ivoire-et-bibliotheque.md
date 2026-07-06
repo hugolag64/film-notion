@@ -226,7 +226,8 @@ def _media(title, release_date=None, rating=None):
 def test_filter_by_title_substring_case_insensitive():
     medias = [_media("Blade Runner"), _media("The Matrix"), _media("blade of glory")]
     result = filter_and_sort_medias(medias, "blade", "Titre")
-    assert [m.title for m in result] == ["Blade Runner", "blade of glory"]
+    # Case-insensitive ascending sort: "blade of glory" < "Blade Runner" ('o' < 'r' after shared "blade " prefix).
+    assert [m.title for m in result] == ["blade of glory", "Blade Runner"]
 
 
 def test_empty_query_returns_all():
