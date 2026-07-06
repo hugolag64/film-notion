@@ -1,30 +1,40 @@
-from datetime import date
-
 from backend.core.diff import summarize_changes
 from backend.core.models import Media
-from backend.core.mapping import Props
 
 
-def test_summarize_detects_new_values():
+def test_new_values_are_reported_as_changes():
     media = Media(id="x", title="Dune")  # tout vide
     updates = {
-        Props.DIRECTOR: {"rich_text": [{"text": {"content": "Denis Villeneuve"}}]},
-        Props.STATUS: {"select": {"name": "À regarder"}},
-        Props.CATEGORY: {"multi_select": [{"name": "SF"}, {"name": "Aventure"}]},
-        Props.TMDB_OK: {"checkbox": True},
+        "director": "Denis Villeneuve",
+        "status": "À regarder",
+        "categories": ["SF", "Aventure"],
+        "tmdb_ok": True,
     }
-    changes = summarize_changes(media, updates, poster_url="http://img")
+
+    changes = summarize_changes(media, updates)
     fields = {c["field"]: c for c in changes}
-    assert fields[Props.DIRECTOR]["new"] == "Denis Villeneuve"
-    assert fields[Props.DIRECTOR]["old"] == "—"
-    assert fields[Props.CATEGORY]["new"] == "SF, Aventure"
-    assert "Couverture" in fields
+
+    assert fields["Réalisateur"]["new"] == "Denis Villeneuve"
+    assert fields["Réalisateur"]["old"] == "—"
+    assert fields["Catégorie"]["new"] == "SF, Aventure"
+    assert fields["TMDB_OK"]["new"] == "Oui"
 
 
-def test_summarize_skips_unchanged():
+def test_unchanged_values_are_not_reported():
     media = Media(id="x", title="Dune", director="Denis Villeneuve", cover_url="http://existing")
-    updates = {
-        Props.DIRECTOR: {"rich_text": [{"text": {"content": "Denis Villeneuve"}}]},
-    }
-    # même réalisateur + couverture déjà présente -> aucun changement
-    assert summarize_changes(media, updates, poster_url="http://img") == []
+    updates = {"director": "Denis Villeneuve"}
+
+    changes = summarize_changes(media, updates)
+    assert changes == []
+
+
+def test_poster_change_reported_when_no_existing_cover():
+    media = Media(id="x", title="Dune")
+    changes = summarize_changes(media, {}, poster_url="http://tmdb/poster.jpg")
+    assert changes == [{"field": "Couverture", "old": "—", "new": "Affiche TMDB"}]
+
+
+def test_poster_change_not_reported_when_cover_already_set():
+    media = Media(id="x", title="Dune", cover_url="http://existing")
+    changes = summarize_changes(media, {}, poster_url="http://tmdb/poster.jpg")
+    assert changes == []
