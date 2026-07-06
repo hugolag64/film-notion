@@ -330,6 +330,7 @@ git commit -m "refactor: drop unused Notion aliases from Media model"
 **Files:**
 - Modify: `backend/core/mapping.py`
 - Modify: `backend/core/notion.py`
+- Modify: `backend/core/processor.py` (one import line only — see below)
 - Modify: `tests/test_mapping.py`
 
 **Interfaces:**
@@ -337,6 +338,13 @@ git commit -m "refactor: drop unused Notion aliases from Media model"
 - Produces: `FIELD_LABELS: Dict[str, str]` mapping plain `Media` field names to French display labels: `{"status": "Statut", "support": "Support", "director": "Réalisateur", "synopsis": "Synopsis", "release_date": "Date de sortie", "categories": "Catégorie", "tags": "Tags", "tmdb_ok": "TMDB_OK", "cover_url": "Couverture"}`. `Values`, `SERIES_TYPES`, `is_series`, `GENRE_TAG_RULES` unchanged. `Props`, `REQUIRED_PROPERTIES`, `validate_schema` removed from `mapping.py`.
 
 **Important — do this as one atomic task/commit:** `backend/core/notion.py` currently does `from backend.core.mapping import Props, validate_schema`, and `backend/core/processor.py` (not refactored until Task 5) still does `from backend.core.notion import NotionService, Media` — so `notion.py`'s imports must keep working the moment `mapping.py` changes, otherwise `test_processor_match.py`/`test_processor_pass.py` break by transitively importing a broken `notion.py`. `Props` (Notion's own property-name constants) moves to live directly inside `notion.py` instead of being deleted, and `notion.py`'s dead `validate_schema_sync` method (the only user of `validate_schema`) is removed in this same task.
+
+**Also atomic, and easy to miss:** `backend/core/processor.py:9` does `from backend.core.mapping import Props, Values, GENRE_TAG_RULES, is_series` and uses `Props.STATUS`, `Props.RELEASE_DATE`, `Props.SUPPORT`, `Props.DIRECTOR`, `Props.SYNOPSIS`, `Props.CATEGORY`, `Props.TAGS`, `Props.TMDB_OK` directly (lines 276–316) — a *direct* dependency on `mapping.Props`, not just the transitive one through `notion.py` covered above. Since `processor.py`'s full rewrite (dropping `Props` entirely in favor of plain field values) doesn't happen until Task 5, this task must also change `processor.py`'s import line to source `Props` from its new home:
+```python
+from backend.core.mapping import Values, GENRE_TAG_RULES, is_series
+from backend.core.notion import Props
+```
+No other change to `processor.py` in this task — `Props.STATUS`, `Props.RELEASE_DATE`, etc. keep working exactly as before, since `Props`'s attribute values are unchanged, just relocated. Task 5 replaces all of this wholesale.
 
 - [ ] **Step 1: Replace `backend/core/mapping.py`**
 
