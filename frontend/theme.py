@@ -51,9 +51,9 @@ body {{ background-color: var(--bg); font-family: var(--font-body); color: var(-
   align-items: center;
   justify-content: center;
 }}
-.bs-topbar {{ background: var(--text); color: var(--bg); }}
-.bs-navlink {{ color: var(--bg) !important; opacity: 0.75; font-size: 0.85rem; }}
-.bs-navlink.active {{ opacity: 1; border-bottom: 2px solid var(--accent-gold); }}
+.bs-topbar {{ background: var(--surface); border-bottom: 1px solid var(--border); }}
+.bs-navlink {{ color: var(--text-muted) !important; opacity: 1; font-size: 0.85rem; }}
+.bs-navlink.active {{ color: var(--accent) !important; border-bottom: 2px solid var(--accent-gold); }}
 </style>
 """
 

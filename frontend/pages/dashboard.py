@@ -1,9 +1,8 @@
 from datetime import date as date_cls
-from typing import Any
 
 from nicegui import ui
 
-from frontend.components import media_poster
+from frontend.components import media_card, media_poster
 from frontend.context import AppContext
 from frontend.format_utils import format_relative_timestamp
 
@@ -46,15 +45,7 @@ def _render_dashboard(ctx: AppContext) -> None:
 
     with ui.grid(columns=4).classes("w-full gap-3 mt-4"):
         for m in medias:
-            _media_card(m)
-
-
-def _media_card(media: Any) -> None:
-    with ui.element("div").classes("bs-card p-2"):
-        media_poster(media.cover_url, height="140px")
-        ui.label(media.title).classes("bs-title text-sm mt-2")
-        year = media.release_date.year if media.release_date else "—"
-        ui.badge(f"{year} · {media.type or '?'}").classes("bs-badge mt-1")
+            media_card(m)
 
 
 def _force_switch(ctx: AppContext) -> None:
