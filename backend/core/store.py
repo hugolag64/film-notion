@@ -104,6 +104,11 @@ class MediaStore:
             )
             return cursor.rowcount > 0
 
+    def _delete_sync(self, media_id: str) -> bool:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM media WHERE id = ?", (media_id,))
+            return cursor.rowcount > 0
+
     async def fetch_all(self) -> List[Media]:
         return await asyncio.to_thread(self._fetch_all_sync)
 
@@ -115,3 +120,6 @@ class MediaStore:
 
     async def update(self, media_id: str, fields: Dict[str, Any]) -> bool:
         return await asyncio.to_thread(self._update_sync, media_id, fields)
+
+    async def delete(self, media_id: str) -> bool:
+        return await asyncio.to_thread(self._delete_sync, media_id)

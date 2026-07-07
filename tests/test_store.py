@@ -87,6 +87,21 @@ def test_update_returns_false_for_unknown_id(tmp_path):
     assert ok is False
 
 
+def test_delete_removes_media(tmp_path):
+    store = _store(tmp_path)
+    media = asyncio.run(store.create({"title": "Dune"}))
+
+    ok = asyncio.run(store.delete(media.id))
+    assert ok is True
+    assert asyncio.run(store.fetch_one(media.id)) is None
+
+
+def test_delete_returns_false_for_unknown_id(tmp_path):
+    store = _store(tmp_path)
+    ok = asyncio.run(store.delete("unknown"))
+    assert ok is False
+
+
 def test_update_silently_ignores_unknown_field_keys(tmp_path):
     store = _store(tmp_path)
     media = asyncio.run(store.create({"title": "Dune"}))
