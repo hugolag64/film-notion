@@ -64,10 +64,18 @@ def render(container: ui.element, ctx: AppContext) -> None:
 
     with container:
         with ui.row().classes("w-full items-center gap-3 mb-4"):
-            def _on_search(e) -> None:
-                state["query"] = e.value
+            search_timer = {"handle": None}
+
+            def _apply_search(value: str) -> None:
+                state["query"] = value
                 state["page"] = 1
                 _refresh()
+
+            def _on_search(e) -> None:
+                if search_timer["handle"] is not None:
+                    search_timer["handle"].cancel()
+                value = e.value
+                search_timer["handle"] = ui.timer(0.3, lambda: _apply_search(value), once=True)
 
             def _on_sort(e) -> None:
                 state["sort"] = e.value
