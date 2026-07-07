@@ -10,6 +10,7 @@ class Config:
 
     TMDB_API_KEY = os.getenv("TMDB_API_KEY")
     DB_PATH = os.getenv("DB_PATH", "backstage.db")
+    PORT = int(os.getenv("PORT", "8090"))
 
     # Optionnels (fonctionnalités avancées, dégradation propre si absents)
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")

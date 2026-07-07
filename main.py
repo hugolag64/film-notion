@@ -26,4 +26,4 @@ app.on_shutdown(http.aclose)
 # reload=True uniquement en dev (BACKSTAGE_DEV=1)
 RELOAD = os.getenv("BACKSTAGE_DEV", "0") == "1"
 
-ui.run(title="Backstage - Vidéothèque", port=8080, reload=RELOAD)
+ui.run(title="Backstage - Vidéothèque", port=Config.PORT, reload=RELOAD)

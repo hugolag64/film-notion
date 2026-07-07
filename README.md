@@ -74,7 +74,7 @@ La base Notion doit contenir les propriétés suivantes (noms exacts) :
 python main.py
 ```
 
-Ouvre http://localhost:8080.
+Ouvre http://localhost:8090 (port configurable via la variable d'environnement `PORT`).
 
 ## Architecture
 
