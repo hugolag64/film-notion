@@ -2,7 +2,7 @@ from datetime import date as date_cls
 
 from nicegui import ui
 
-from frontend.components import media_card, media_poster
+from frontend.components import media_card, media_poster, open_media_detail_dialog
 from frontend.context import AppContext
 from frontend.format_utils import format_relative_timestamp
 
@@ -45,7 +45,7 @@ def _render_dashboard(ctx: AppContext) -> None:
 
     with ui.grid(columns=4).classes("w-full gap-3 mt-4"):
         for m in medias:
-            media_card(m)
+            media_card(m, on_click=lambda m=m: open_media_detail_dialog(m, ctx))
 
 
 def _force_switch(ctx: AppContext) -> None:

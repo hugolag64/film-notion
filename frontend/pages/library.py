@@ -4,7 +4,7 @@ from typing import List, Optional
 from nicegui import ui
 
 from backend.core.models import Media
-from frontend.components import media_card
+from frontend.components import media_card, open_media_detail_dialog
 from frontend.context import AppContext
 
 SORT_OPTIONS = ["Titre", "Année", "Note"]
@@ -65,6 +65,6 @@ def render(container: ui.element, ctx: AppContext) -> None:
                 else:
                     with ui.grid(columns=4).classes("w-full gap-3"):
                         for m in results:
-                            media_card(m)
+                            media_card(m, on_click=lambda m=m: open_media_detail_dialog(m, ctx))
 
         _refresh()
