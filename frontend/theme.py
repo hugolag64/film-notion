@@ -43,6 +43,7 @@ body {{ background-color: var(--bg); font-family: var(--font-body); color: var(-
   font-family: var(--font-body);
 }}
 .q-badge.bs-badge {{ background: var(--accent) !important; color: var(--bg) !important; }}
+.q-badge.bs-badge-secondary {{ background: var(--border) !important; color: var(--text) !important; }}
 }}
 .bs-poster-placeholder {{
   background: linear-gradient(135deg, var(--border), var(--accent-gold));

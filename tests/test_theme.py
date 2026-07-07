@@ -18,7 +18,8 @@ def test_build_theme_css_declares_all_tokens():
 def test_build_theme_css_defines_component_classes():
     css = build_theme_css()
     for class_name in (".bs-card", ".bs-title", ".bs-accent-btn", ".bs-outline-btn",
-                       ".bs-badge", ".bs-poster-placeholder", ".bs-topbar", ".bs-navlink"):
+                       ".bs-badge", ".bs-badge-secondary", ".bs-poster-placeholder",
+                       ".bs-topbar", ".bs-navlink"):
         assert class_name in css
 
 
