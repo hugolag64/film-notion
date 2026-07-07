@@ -6,8 +6,12 @@ from frontend.context import AppContext
 
 
 def rating_badge_text(media: Any) -> Optional[str]:
-    """Texte du badge note, ex. '⭐ 8/10', ou None si aucune note."""
-    return f"⭐ {media.rating}" if media.rating else None
+    """Texte du badge note. Les notes déjà saisies en étoiles (ex. '⭐️⭐️⭐️') sont affichées
+    telles quelles ; les notes textuelles (ex. '8/10') sont préfixées d'une étoile."""
+    if not media.rating:
+        return None
+    rating = media.rating.strip()
+    return rating if "⭐" in rating else f"⭐ {rating}"
 
 
 def primary_genre(media: Any) -> Optional[str]:
@@ -15,12 +19,13 @@ def primary_genre(media: Any) -> Optional[str]:
     return media.categories[0] if media.categories else None
 
 
-def media_poster(cover_url: Optional[str], *, height: str = "160px") -> None:
-    """Affiche le poster TMDB si disponible, sinon un placeholder dégradé cohérent avec le thème."""
+def media_poster(cover_url: Optional[str], *, width: str = "100%") -> None:
+    """Affiche le poster TMDB (ratio affiche 2:3) si disponible, sinon un placeholder dégradé cohérent avec le thème."""
+    style = f"width:{width}; aspect-ratio:2/3; object-fit:cover;"
     if cover_url:
-        ui.image(cover_url).classes("rounded w-full").style(f"height:{height}; object-fit:cover;")
+        ui.image(cover_url).classes("rounded").style(style)
     else:
-        with ui.element("div").classes("bs-poster-placeholder w-full").style(f"height:{height};"):
+        with ui.element("div").classes("bs-poster-placeholder").style(style):
             ui.icon("movie", size="2rem").classes("opacity-70")
 
 
@@ -30,7 +35,7 @@ def media_card(media: Any, *, on_click: Optional[Callable[[], None]] = None) -> 
     if on_click is not None:
         card.classes("cursor-pointer").on("click", on_click)
     with card:
-        media_poster(media.cover_url, height="140px")
+        media_poster(media.cover_url)
         ui.label(media.title).classes("bs-title text-sm mt-2")
         year = media.release_date.year if media.release_date else "—"
         ui.badge(f"{year} · {media.type or '?'}").classes("bs-badge mt-1")
@@ -55,7 +60,7 @@ def open_media_detail_dialog(media: Any, ctx: AppContext) -> None:
     dialog = ui.dialog().props("persistent")
     with dialog, ui.card().classes("bs-card w-full max-w-2xl p-6"):
         with ui.row().classes("w-full gap-4 items-start"):
-            media_poster(media.cover_url, height="220px")
+            media_poster(media.cover_url, width="180px")
             with ui.column().classes("gap-1"):
                 ui.label(media.title).classes("bs-title text-lg")
                 year = media.release_date.year if media.release_date else "—"

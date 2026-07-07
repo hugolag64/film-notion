@@ -16,6 +16,10 @@ def test_rating_badge_text_without_rating():
     assert rating_badge_text(_media(rating=None)) is None
 
 
+def test_rating_badge_text_already_containing_stars_not_double_prefixed():
+    assert rating_badge_text(_media(rating="⭐️⭐️⭐️⭐️⭐️⭐️")) == "⭐️⭐️⭐️⭐️⭐️⭐️"
+
+
 def test_primary_genre_with_categories():
     assert primary_genre(_media(categories=["Drame", "Thriller"])) == "Drame"
 
