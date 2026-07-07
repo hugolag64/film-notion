@@ -3,6 +3,16 @@ from typing import Any, Optional
 from nicegui import ui
 
 
+def rating_badge_text(media: Any) -> Optional[str]:
+    """Texte du badge note, ex. '⭐ 8/10', ou None si aucune note."""
+    return f"⭐ {media.rating}" if media.rating else None
+
+
+def primary_genre(media: Any) -> Optional[str]:
+    """Première catégorie du média (genre principal), ou None si absente."""
+    return media.categories[0] if media.categories else None
+
+
 def media_poster(cover_url: Optional[str], *, height: str = "160px") -> None:
     """Affiche le poster TMDB si disponible, sinon un placeholder dégradé cohérent avec le thème."""
     if cover_url:
