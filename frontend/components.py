@@ -91,8 +91,28 @@ def open_media_detail_dialog(media: Any, ctx: AppContext) -> None:
             dialog.close()
             await ctx.reload()
 
-        with ui.row().classes("w-full justify-end gap-2 mt-4"):
-            ui.button("Fermer", on_click=dialog.close).classes("bs-outline-btn")
-            ui.button("Enregistrer", on_click=_save).classes("bs-accent-btn")
+        async def _delete() -> None:
+            confirm_dialog = ui.dialog()
+            with confirm_dialog, ui.card().classes("bs-card p-6"):
+                ui.label(f"Supprimer définitivement « {media.title} » ?").classes("bs-title text-base")
+                ui.label("Cette action est irréversible.").classes("text-sm mt-1").style("color:var(--text-muted)")
+
+                async def _confirm() -> None:
+                    await ctx.store.delete(media.id)
+                    ui.notify(f"« {media.title} » supprimé.", type="positive")
+                    confirm_dialog.close()
+                    dialog.close()
+                    await ctx.reload()
+
+                with ui.row().classes("w-full justify-end gap-2 mt-4"):
+                    ui.button("Annuler", on_click=confirm_dialog.close).classes("bs-outline-btn")
+                    ui.button("Confirmer la suppression", on_click=_confirm).classes("bs-danger-btn")
+            confirm_dialog.open()
+
+        with ui.row().classes("w-full justify-between items-center mt-4"):
+            ui.button("Supprimer", on_click=_delete).classes("bs-danger-btn")
+            with ui.row().classes("gap-2"):
+                ui.button("Fermer", on_click=dialog.close).classes("bs-outline-btn")
+                ui.button("Enregistrer", on_click=_save).classes("bs-accent-btn")
 
     dialog.open()

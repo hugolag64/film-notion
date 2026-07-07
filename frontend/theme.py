@@ -6,6 +6,7 @@ TOKENS = {
     "--text-muted": "#8a8578",
     "--accent": "#7a2331",
     "--accent-gold": "#c9a35c",
+    "--danger": "#b3352c",
     "--font-display": "Georgia,'Times New Roman',serif",
     "--font-body": "Arial,Helvetica,sans-serif",
     "--radius": "10px",
@@ -38,6 +39,13 @@ body {{ background-color: var(--bg); font-family: var(--font-body); color: var(-
 .q-btn.bs-outline-btn {{
   border: 1px solid var(--accent) !important;
   color: var(--accent) !important;
+  border-radius: 999px !important;
+  background: transparent !important;
+  font-family: var(--font-body);
+}}
+.q-btn.bs-danger-btn {{
+  border: 1px solid var(--danger) !important;
+  color: var(--danger) !important;
   border-radius: 999px !important;
   background: transparent !important;
   font-family: var(--font-body);
