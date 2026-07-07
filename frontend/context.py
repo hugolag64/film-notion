@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from backend.core.processor import EnrichmentProcessor
 from backend.core.store import MediaStore
@@ -12,6 +12,7 @@ class AppState:
     force: bool = False
     running: bool = False
     last_synced: Optional[str] = None
+    ui_state: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass

@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 
 from backend.core.models import Media
-from frontend.pages.library import filter_and_sort_medias, paginate_medias, total_pages
+from frontend.pages.library import filter_and_sort_medias, get_library_state, paginate_medias, total_pages
 
 
 def _media(title, release_date=None, rating=None):
@@ -93,3 +93,29 @@ def test_paginate_medias_second_page_partial():
 def test_paginate_medias_out_of_range_page_is_empty():
     medias = [_media(str(i)) for i in range(10)]
     assert paginate_medias(medias, 5, page_size=24) == []
+
+
+def test_get_library_state_defaults_on_first_call():
+    ui_state = {}
+    state = get_library_state(ui_state)
+    assert state == {"query": "", "sort": "Titre", "page": 1}
+
+
+def test_get_library_state_persists_across_calls():
+    ui_state = {}
+    state1 = get_library_state(ui_state)
+    state1["sort"] = "Date d'ajout"
+    state1["page"] = 3
+
+    state2 = get_library_state(ui_state)
+    assert state2["sort"] == "Date d'ajout"
+    assert state2["page"] == 3
+
+
+def test_get_library_state_independent_per_ui_state_dict():
+    ui_state_a = {}
+    ui_state_b = {}
+    get_library_state(ui_state_a)["sort"] = "Note"
+
+    state_b = get_library_state(ui_state_b)
+    assert state_b["sort"] == "Titre"

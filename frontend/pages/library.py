@@ -1,5 +1,5 @@
 import re
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from nicegui import ui
 
@@ -54,9 +54,13 @@ def paginate_medias(medias: List[Media], page: int, page_size: int = PAGE_SIZE) 
     return medias[start:start + page_size]
 
 
+def get_library_state(ui_state: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    return ui_state.setdefault("library", {"query": "", "sort": SORT_OPTIONS[0], "page": 1})
+
+
 def render(container: ui.element, ctx: AppContext) -> None:
     container.clear()
-    state = {"query": "", "sort": SORT_OPTIONS[0], "page": 1}
+    state = get_library_state(ctx.state.ui_state)
 
     with container:
         with ui.row().classes("w-full items-center gap-3 mb-4"):
