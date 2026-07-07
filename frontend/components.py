@@ -19,9 +19,12 @@ def primary_genre(media: Any) -> Optional[str]:
     return media.categories[0] if media.categories else None
 
 
-def media_poster(cover_url: Optional[str], *, width: str = "100%") -> None:
+def media_poster(cover_url: Optional[str], *, width: Optional[str] = None, height: Optional[str] = None) -> None:
     """Affiche le poster TMDB (ratio affiche 2:3) si disponible, sinon un placeholder dégradé cohérent avec le thème."""
-    style = f"width:{width}; aspect-ratio:2/3; object-fit:cover;"
+    if not width and not height:
+        width = "100%"
+    dims = "".join(f"{prop}:{value}; " for prop, value in (("width", width), ("height", height)) if value)
+    style = f"{dims}aspect-ratio:2/3; object-fit:cover;"
     if cover_url:
         ui.image(cover_url).classes("rounded").style(style)
     else:
@@ -57,8 +60,11 @@ def source_badge(source: str) -> None:
 
 def open_media_detail_dialog(media: Any, ctx: AppContext) -> None:
     """Fiche détaillée d'un média : infos en lecture seule + note/avis éditables."""
-    dialog = ui.dialog().props("persistent")
+    dialog = ui.dialog()
     with dialog, ui.card().classes("bs-card w-full max-w-2xl p-6"):
+        with ui.row().classes("w-full justify-end -mb-2"):
+            ui.button(icon="close", on_click=dialog.close).props("flat round dense")
+
         with ui.row().classes("w-full gap-4 items-start"):
             media_poster(media.cover_url, width="180px")
             with ui.column().classes("gap-1"):

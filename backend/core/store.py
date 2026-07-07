@@ -66,7 +66,7 @@ class MediaStore:
     def _fetch_all_sync(self) -> List[Media]:
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute(f"SELECT {', '.join(_COLUMNS)} FROM media").fetchall()
+            rows = conn.execute(f"SELECT {', '.join(_COLUMNS)} FROM media ORDER BY rowid").fetchall()
         return [self._row_to_media(row) for row in rows]
 
     def _fetch_one_sync(self, media_id: str) -> Optional[Media]:
