@@ -40,3 +40,34 @@ def test_prepare_updates_does_not_overwrite_existing_fields():
 
     assert "director" not in updates
     assert "status" not in updates
+
+
+def test_prepare_updates_force_overwrites_existing_fields():
+    p = _bare_processor()
+    media = Media(
+        id="x", title="Dune", director="Ancien réal", synopsis="Ancien synopsis",
+        categories=["Ancien genre"], release_date=date(2000, 1, 1),
+    )
+    tmdb_data = {
+        "release_date": "2021-10-22",
+        "overview": "Nouveau synopsis",
+        "genres": [{"name": "Horreur"}, {"name": "Thriller"}],
+        "credits": {"crew": [{"job": "Director", "name": "Nouveau réal"}]},
+    }
+
+    updates, _ = p._prepare_updates(media, tmdb_data, force=True)
+
+    assert updates["director"] == "Nouveau réal"
+    assert updates["synopsis"] == "Nouveau synopsis"
+    assert updates["categories"] == ["Horreur", "Thriller"]
+    assert updates["release_date"] == date(2021, 10, 22)
+
+
+def test_prepare_updates_without_force_still_does_not_overwrite():
+    p = _bare_processor()
+    media = Media(id="x", title="Dune", director="Ancien réal")
+    tmdb_data = {"credits": {"crew": [{"job": "Director", "name": "Nouveau réal"}]}}
+
+    updates, _ = p._prepare_updates(media, tmdb_data, force=False)
+
+    assert "director" not in updates

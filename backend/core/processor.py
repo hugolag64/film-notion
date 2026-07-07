@@ -233,11 +233,10 @@ class EnrichmentProcessor:
         except ValueError:
             return None
 
-    async def enrich_media_with_tmdb_id(self, media_id: str, tmdb_id: int):
+    async def enrich_media_with_tmdb_id(self, media_id: str, tmdb_id: int, force: bool = False):
         """Enrichissement manuel : l'utilisateur a choisi explicitement ce film TMDB."""
         logger.info("Enrichissement manuel de %s avec TMDB ID %s", media_id, tmdb_id)
 
-        # État courant de la fiche (pour ne pas écraser ce qui est déjà rempli)
         media = await self.store.fetch_one(media_id)
         if media is None:
             raise ValueError("Impossible de récupérer la fiche")
@@ -246,9 +245,9 @@ class EnrichmentProcessor:
         if not tmdb_details:
             raise ValueError("Impossible de récupérer les détails TMDB")
 
-        updates, poster_url = self._prepare_updates(media, tmdb_details)
+        updates, poster_url = self._prepare_updates(media, tmdb_details, force=force)
 
-        cover_todo = poster_url if not media.cover_url else None
+        cover_todo = poster_url if (not media.cover_url or force) else None
         changes = summarize_changes(media, updates, poster_url=cover_todo)
 
         await self._apply_updates(media_id, updates, cover_url=cover_todo)
@@ -263,7 +262,7 @@ class EnrichmentProcessor:
             tags.append("⚠️ Film dur")
         return list(set(tags))
 
-    def _prepare_updates(self, media: Media, tmdb_data: Optional[Dict[str, Any]]) -> tuple[Dict[str, Any], Optional[str]]:
+    def _prepare_updates(self, media: Media, tmdb_data: Optional[Dict[str, Any]], force: bool = False) -> tuple[Dict[str, Any], Optional[str]]:
         updates: Dict[str, Any] = {}
         poster_url = None
         today = date.today()
@@ -271,9 +270,9 @@ class EnrichmentProcessor:
         if not media.status:
             updates["status"] = Values.STATUS_TO_WATCH
 
-        # Date (depuis la fiche si présente, sinon TMDB)
+        # Date (depuis la fiche si présente, sinon TMDB ; toujours écrasée si force)
         release_date = media.release_date
-        if tmdb_data and not release_date:
+        if tmdb_data and (not release_date or force):
             release_str = tmdb_data.get("release_date")
             if release_str:
                 try:
@@ -290,21 +289,21 @@ class EnrichmentProcessor:
                 updates["support"] = Values.SUPPORT_DOWNLOAD
 
         if tmdb_data:
-            if not media.director:
+            if not media.director or force:
                 director = self.tmdb.get_director(tmdb_data)
                 if director:
                     updates["director"] = director
 
-            if not media.synopsis:
+            if not media.synopsis or force:
                 overview = tmdb_data.get("overview")
                 if overview:
                     updates["synopsis"] = overview[:2000]
 
             genres = self.tmdb.get_genres(tmdb_data)
-            if not media.categories and genres:
+            if (not media.categories or force) and genres:
                 updates["categories"] = genres
 
-            if not media.tags and genres:
+            if (not media.tags or force) and genres:
                 suggested_tags = self._map_genres_to_tags(genres)
                 if suggested_tags:
                     updates["tags"] = suggested_tags
