@@ -82,8 +82,8 @@ def render(container: ui.element, ctx: AppContext) -> None:
                 state["page"] = 1
                 _refresh()
 
-            ui.input(placeholder="Rechercher un titre…", on_change=_on_search).classes("flex-grow")
-            ui.select(SORT_OPTIONS, value=SORT_OPTIONS[0], label="Trier par", on_change=_on_sort).classes("w-48")
+            ui.input(placeholder="Rechercher un titre…", value=state["query"], on_change=_on_search).classes("flex-grow")
+            ui.select(SORT_OPTIONS, value=state["sort"], label="Trier par", on_change=_on_sort).classes("w-48")
 
         grid_box = ui.column().classes("w-full")
         pager_box = ui.row().classes("w-full items-center justify-center gap-3 mt-4")
