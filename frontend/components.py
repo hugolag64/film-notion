@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from nicegui import ui
 
@@ -22,13 +22,25 @@ def media_poster(cover_url: Optional[str], *, height: str = "160px") -> None:
             ui.icon("movie", size="2rem").classes("opacity-70")
 
 
-def media_card(media: Any) -> None:
-    """Carte poster + titre + badge année/type, partagée par le dashboard et la bibliothèque."""
-    with ui.element("div").classes("bs-card p-2"):
+def media_card(media: Any, *, on_click: Optional[Callable[[], None]] = None) -> None:
+    """Carte poster + titre + badges année/type/note/genre, partagée par le dashboard et la bibliothèque."""
+    card = ui.element("div").classes("bs-card p-2")
+    if on_click is not None:
+        card.classes("cursor-pointer").on("click", on_click)
+    with card:
         media_poster(media.cover_url, height="140px")
         ui.label(media.title).classes("bs-title text-sm mt-2")
         year = media.release_date.year if media.release_date else "—"
         ui.badge(f"{year} · {media.type or '?'}").classes("bs-badge mt-1")
+
+        rating_text = rating_badge_text(media)
+        genre_text = primary_genre(media)
+        if rating_text or genre_text:
+            with ui.row().classes("gap-1 mt-1"):
+                if rating_text:
+                    ui.badge(rating_text).classes("bs-badge-secondary")
+                if genre_text:
+                    ui.badge(genre_text).classes("bs-badge-secondary")
 
 
 def source_badge(source: str) -> None:
