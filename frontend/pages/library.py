@@ -18,9 +18,42 @@ def _rating_value(media: Media) -> Optional[float]:
     return float(match.group(1)) if match else None
 
 
-def filter_and_sort_medias(medias: List[Media], query: str, sort_key: str) -> List[Media]:
+def distinct_filter_options(medias: List[Media], field: str) -> List[str]:
+    if field == "categories":
+        values = {c for m in medias for c in m.categories}
+    else:
+        values = {getattr(m, field) for m in medias if getattr(m, field)}
+    return sorted(values)
+
+
+def apply_filters(medias: List[Media], filters: Dict[str, List[str]]) -> List[Media]:
+    genres = set(filters.get("genres") or [])
+    statuses = set(filters.get("statuses") or [])
+    supports = set(filters.get("supports") or [])
+
+    def _matches(m: Media) -> bool:
+        if genres and not (set(m.categories) & genres):
+            return False
+        if statuses and m.status not in statuses:
+            return False
+        if supports and m.support not in supports:
+            return False
+        return True
+
+    return [m for m in medias if _matches(m)]
+
+
+def filter_and_sort_medias(
+    medias: List[Media],
+    query: str,
+    sort_key: str,
+    filters: Optional[Dict[str, List[str]]] = None,
+) -> List[Media]:
     query_norm = (query or "").strip().lower()
     filtered = [m for m in medias if query_norm in m.title.lower()] if query_norm else list(medias)
+
+    if filters:
+        filtered = apply_filters(filtered, filters)
 
     if sort_key == "Titre":
         return sorted(filtered, key=lambda m: m.title.lower())
@@ -55,7 +88,12 @@ def paginate_medias(medias: List[Media], page: int, page_size: int = PAGE_SIZE) 
 
 
 def get_library_state(ui_state: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-    return ui_state.setdefault("library", {"query": "", "sort": SORT_OPTIONS[0], "page": 1})
+    return ui_state.setdefault("library", {
+        "query": "",
+        "sort": SORT_OPTIONS[0],
+        "page": 1,
+        "filters": {"genres": [], "statuses": [], "supports": []},
+    })
 
 
 def render(container: ui.element, ctx: AppContext) -> None:
