@@ -66,6 +66,12 @@ export async function syncMediaServer() {
     return response.json();
 }
 
+export async function importMediaServerLibrary() {
+    const response = await fetch(`${API_BASE_URL}/media-server/import`, {method: 'POST'});
+    if (!response.ok) throw new Error((await response.json()).detail || 'Import impossible');
+    return response.json();
+}
+
 export async function fetchMediaServerActivity() {
     const response = await fetch(`${API_BASE_URL}/media-server/activity`);
     if (!response.ok) throw new Error((await response.json()).detail || 'Activité indisponible');

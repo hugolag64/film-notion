@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { fetchMedias, updateMedia, searchTMDB, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, fetchMediaServerOptions, requestAcquisition, fetchMediaServerActivity, syncMediaServer } from './api';
+import { fetchMedias, updateMedia, searchTMDB, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, fetchMediaServerOptions, requestAcquisition, fetchMediaServerActivity, syncMediaServer, importMediaServerLibrary } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
 
@@ -143,6 +143,12 @@ export default function BackstagePrototype() {
     const refreshMediaActivity = async () => {
         await syncMediaServer();
         setMediaActivity((await fetchMediaServerActivity()).items || []);
+    };
+
+    const importMediaLibrary = async () => {
+        await importMediaServerLibrary();
+        await loadRealMedias();
+        await openMediaActivity();
     };
 
     const handleRelinkMovie = async (mediaId, tmdbId) => {
@@ -1524,7 +1530,7 @@ export default function BackstagePrototype() {
             {showActivityModal && <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
                 <div className="w-full max-w-xl rounded-xl bg-white p-5 text-[#0a2540]">
                     <div className="flex items-center justify-between"><h2 className="font-serif text-lg font-bold">Activité serveur</h2><button onClick={() => setShowActivityModal(false)}>×</button></div>
-                    <button onClick={refreshMediaActivity} className="mt-3 rounded bg-[#635bff] px-3 py-1.5 text-xs text-white">Actualiser</button>
+                    <div className="mt-3 flex gap-2"><button onClick={refreshMediaActivity} className="rounded bg-[#635bff] px-3 py-1.5 text-xs text-white">Actualiser</button><button onClick={importMediaLibrary} className="rounded border px-3 py-1.5 text-xs">Importer la bibliothèque</button></div>
                     <div className="mt-4 max-h-80 space-y-2 overflow-y-auto">{mediaActivity.length ? mediaActivity.map(item => <div key={item.media_id} className="rounded border p-3 text-sm"><strong>{item.provider}</strong> — {item.state}{item.progress_percent != null ? ` (${item.progress_percent}%)` : ''}{item.last_error && <p className="mt-1 text-xs text-red-600">{item.last_error}</p>}</div>) : <p className="text-sm text-slate-500">Aucune activité.</p>}</div>
                 </div>
             </div>}
@@ -1543,6 +1549,7 @@ export default function BackstagePrototype() {
                             <select className="w-full rounded border p-2" value={acquisitionForm.root_folder} onChange={e => setAcquisitionForm({...acquisitionForm, root_folder: e.target.value})}>
                                 {mediaServerOptions?.root_folders?.map(folder => <option key={folder.path} value={folder.path}>{folder.path}</option>)}
                             </select>
+                            {selectedMedia.type === 'Série' && <select className="w-full rounded border p-2" value={acquisitionForm.monitor} onChange={e => setAcquisitionForm({...acquisitionForm, monitor: e.target.value})}><option value="all">Toutes les saisons</option><option value="future">Saisons futures</option></select>}
                         </div>
                         {mediaServerError && <p className="mt-3 text-xs text-red-600">{mediaServerError}</p>}
                         <div className="mt-5 flex justify-end gap-2"><button onClick={() => setShowAcquisitionModal(false)}>Annuler</button><button className="rounded bg-[#635bff] px-3 py-2 text-white" onClick={submitAcquisition}>Demander</button></div>

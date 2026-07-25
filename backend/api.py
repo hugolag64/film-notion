@@ -428,6 +428,13 @@ async def sync_media_server(service: MediaServerService = Depends(get_media_serv
     return await service.sync_all()
 
 
+@router.post("/media-server/import")
+async def import_media_server_library(service: MediaServerService = Depends(get_media_server_service)):
+    if not Config.media_server_enabled():
+        raise HTTPException(status_code=503, detail="Service non configuré")
+    return await service.import_existing_libraries()
+
+
 @router.get("/media-server/activity")
 async def media_server_activity(service: MediaServerService = Depends(get_media_server_service)):
     return await service.activity()
