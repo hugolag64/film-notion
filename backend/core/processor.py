@@ -308,10 +308,19 @@ class EnrichmentProcessor:
                 if suggested_tags:
                     updates["tags"] = suggested_tags
 
+            backdrop_url = self.tmdb.get_backdrop_url(tmdb_data)
+            if backdrop_url and (not media.backdrop_url or force):
+                updates["backdrop_url"] = backdrop_url
+
+            cast = self.tmdb.get_cast(tmdb_data)
+            if cast and (not media.cast or force):
+                updates["cast"] = cast
+
             updates["tmdb_ok"] = True
             poster_url = self.tmdb.get_poster_url(tmdb_data)
 
         return updates, poster_url
+
 
     async def _apply_updates(self, media_id: str, fields: Dict[str, Any], cover_url: Optional[str] = None):
         if cover_url:

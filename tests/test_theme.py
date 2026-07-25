@@ -1,4 +1,18 @@
+from pathlib import Path
+
 from frontend.theme import TOKENS, build_theme_css
+
+
+def test_topbar_uses_root_logo_from_static_url():
+    project_root = Path(__file__).resolve().parents[1]
+    ui_source = (project_root / "frontend" / "ui.py").read_text(encoding="utf-8")
+    app_source = (project_root / "main.py").read_text(encoding="utf-8")
+    react_source = (project_root / "proto-ui" / "src" / "BackstagePrototype.jsx").read_text(encoding="utf-8")
+
+    assert (project_root / "Logo.png").is_file()
+    assert 'ui.image("/static/Logo.png")' in ui_source
+    assert '@app.get("/static/Logo.png", include_in_schema=False)' in app_source
+    assert '<img src="/static/Logo.png" alt="Backstage"' in react_source
 
 
 def test_tokens_match_spec():

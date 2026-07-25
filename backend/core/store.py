@@ -3,7 +3,7 @@ import asyncio
 import json
 import sqlite3
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from backend.core.models import Media
@@ -11,9 +11,10 @@ from backend.core.models import Media
 _COLUMNS = [
     "id", "title", "type", "status", "support", "rating", "release_date",
     "director", "categories", "synopsis", "tags", "review", "tmdb_ok", "cover_url",
+    "watched_in_cinema", "watched_date", "backdrop_url", "cast", "created_at",
 ]
 
-_LIST_FIELDS = {"categories", "tags"}
+_LIST_FIELDS = {"categories", "tags", "cast"}
 
 
 class MediaStore:
@@ -38,10 +39,30 @@ class MediaStore:
                     tags TEXT,
                     review TEXT,
                     tmdb_ok INTEGER NOT NULL DEFAULT 0,
-                    cover_url TEXT
+                    cover_url TEXT,
+                    watched_in_cinema INTEGER NOT NULL DEFAULT 0,
+                    watched_date TEXT,
+                    backdrop_url TEXT,
+                    cast TEXT,
+                    created_at TEXT
                 )
                 """
             )
+            # Migration en douceur si les colonnes n'existent pas encore
+            cursor = conn.execute("PRAGMA table_info(media)")
+            columns = [column[1] for column in cursor.fetchall()]
+            if "watched_in_cinema" not in columns:
+                conn.execute("ALTER TABLE media ADD COLUMN watched_in_cinema INTEGER NOT NULL DEFAULT 0")
+            if "watched_date" not in columns:
+                conn.execute("ALTER TABLE media ADD COLUMN watched_date TEXT")
+            if "backdrop_url" not in columns:
+                conn.execute("ALTER TABLE media ADD COLUMN backdrop_url TEXT")
+            if "cast" not in columns:
+                conn.execute("ALTER TABLE media ADD COLUMN cast TEXT")
+            if "created_at" not in columns:
+                conn.execute("ALTER TABLE media ADD COLUMN created_at TEXT")
+            conn.execute("UPDATE media SET created_at = COALESCE(created_at, datetime('now'))")
+
 
     @staticmethod
     def _row_to_media(row: sqlite3.Row) -> Media:
@@ -49,8 +70,11 @@ class MediaStore:
         for field in _LIST_FIELDS:
             data[field] = json.loads(data[field]) if data[field] else []
         data["tmdb_ok"] = bool(data["tmdb_ok"])
-        if data["release_date"]:
+        data["watched_in_cinema"] = bool(data.get("watched_in_cinema", 0))
+        if data.get("release_date"):
             data["release_date"] = date.fromisoformat(data["release_date"])
+        if data.get("created_at"):
+            data["created_at"] = datetime.fromisoformat(data["created_at"])
         return Media(**data)
 
     @staticmethod
@@ -59,21 +83,25 @@ class MediaStore:
             return json.dumps(value or [])
         if field == "release_date" and value is not None:
             return value.isoformat() if isinstance(value, date) else value
-        if field == "tmdb_ok":
+        if field == "created_at" and value is not None:
+            return value.isoformat() if isinstance(value, datetime) else value
+        if field in ("tmdb_ok", "watched_in_cinema"):
             return int(bool(value))
         return value
 
     def _fetch_all_sync(self) -> List[Media]:
+        escaped_cols = ", ".join(f'"{col}"' for col in _COLUMNS)
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute(f"SELECT {', '.join(_COLUMNS)} FROM media ORDER BY rowid").fetchall()
+            rows = conn.execute(f"SELECT {escaped_cols} FROM media ORDER BY rowid").fetchall()
         return [self._row_to_media(row) for row in rows]
 
     def _fetch_one_sync(self, media_id: str) -> Optional[Media]:
+        escaped_cols = ", ".join(f'"{col}"' for col in _COLUMNS)
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
-                f"SELECT {', '.join(_COLUMNS)} FROM media WHERE id = ?", (media_id,)
+                f"SELECT {escaped_cols} FROM media WHERE id = ?", (media_id,)
             ).fetchone()
         return self._row_to_media(row) if row else None
 
@@ -81,11 +109,13 @@ class MediaStore:
         media_id = fields.get("id") or str(uuid.uuid4())
         values = {col: fields.get(col) for col in _COLUMNS if col != "id"}
         values["id"] = media_id
+        values["created_at"] = values["created_at"] or datetime.now(timezone.utc)
 
+        escaped_cols = ", ".join(f'"{col}"' for col in _COLUMNS)
         with sqlite3.connect(self.db_path) as conn:
             placeholders = ", ".join("?" for _ in _COLUMNS)
             conn.execute(
-                f"INSERT INTO media ({', '.join(_COLUMNS)}) VALUES ({placeholders})",
+                f"INSERT INTO media ({escaped_cols}) VALUES ({placeholders})",
                 [self._encode(col, values[col]) for col in _COLUMNS],
             )
         return self._fetch_one_sync(media_id)
@@ -96,13 +126,14 @@ class MediaStore:
         filtered_fields = {col: fields.get(col) for col in _COLUMNS if col != "id" and col in fields}
         if not filtered_fields:
             return self._fetch_one_sync(media_id) is not None
-        set_clause = ", ".join(f"{col} = ?" for col in filtered_fields)
+        set_clause = ", ".join(f'"{col}" = ?' for col in filtered_fields)
         values = [self._encode(col, val) for col, val in filtered_fields.items()]
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
                 f"UPDATE media SET {set_clause} WHERE id = ?", [*values, media_id]
             )
             return cursor.rowcount > 0
+
 
     def _delete_sync(self, media_id: str) -> bool:
         with sqlite3.connect(self.db_path) as conn:

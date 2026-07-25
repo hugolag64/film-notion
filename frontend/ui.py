@@ -102,7 +102,7 @@ async def main_page():
     ctx = AppContext(processor=processor, store=store, state=state, reload=reload, rerender=rerender, navigate=navigate)
 
     with ui.row().classes("bs-topbar w-full items-center justify-between px-6 py-3"):
-        ui.label("🎬 Backstage").classes("bs-title text-xl")
+        ui.image("/static/Logo.png").style("height:42px; width:auto;")
         with ui.row().classes("gap-2"):
             for key, label in SECTIONS:
                 if key == "ai" and not Config.ai_enabled():

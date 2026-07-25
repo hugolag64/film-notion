@@ -122,3 +122,13 @@ class TMDBClient:
     def get_poster_url(self, movie_details: Dict[str, Any]) -> Optional[str]:
         """Construit l'URL complète de l'affiche à partir des détails d'un film."""
         return self.poster_url_from_path(movie_details.get("poster_path"))
+
+    def get_backdrop_url(self, movie_details: Dict[str, Any]) -> Optional[str]:
+        """Construit l'URL complète de l'image de bannière horizontale (backdrop)."""
+        return self.poster_url_from_path(movie_details.get("backdrop_path"), size="w1280")
+
+    def get_cast(self, movie_details: Dict[str, Any], limit: int = 5) -> List[str]:
+        """Extrait les noms des acteurs principaux du film/série."""
+        credits = movie_details.get("credits", {})
+        cast = credits.get("cast", [])
+        return [member.get("name") for member in cast[:limit] if member.get("name")]

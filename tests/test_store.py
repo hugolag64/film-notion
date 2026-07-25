@@ -20,6 +20,11 @@ def test_create_generates_id_when_absent(tmp_path):
     assert media.tmdb_ok is False
 
 
+def test_create_sets_created_at(tmp_path):
+    media = asyncio.run(_store(tmp_path).create({"title": "Dune"}))
+    assert media.created_at is not None
+
+
 def test_create_preserves_supplied_id(tmp_path):
     store = _store(tmp_path)
     media = asyncio.run(store.create({"id": "notion-page-123", "title": "Arrival"}))

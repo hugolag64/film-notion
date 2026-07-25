@@ -5,6 +5,8 @@ credentials.json
 # === Cache / runtime data ===
 cache.json
 backstage.db
+backstage.db.*
+history.jsonl
 
 # === Logs ===
 *.log

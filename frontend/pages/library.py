@@ -131,43 +131,40 @@ def render(container: ui.element, ctx: AppContext) -> None:
                 count = sum(len(v) for v in state["filters"].values())
                 return f"Filtrer ({count})" if count else "Filtrer"
 
-            filter_button = ui.button(_filter_button_label(), icon="filter_list").props("flat")
+            with ui.button(_filter_button_label(), icon="filter_list").props("flat") as filter_button:
+                with ui.menu() as filter_menu:
+                    with ui.column().classes("p-4 gap-3").style("min-width:280px"):
+                        genre_select = ui.select(
+                            genre_options, multiple=True, label="Genre",
+                            value=list(state["filters"]["genres"]),
+                        ).classes("w-full").props("use-chips")
+                        status_select = ui.select(
+                            status_options, multiple=True, label="Statut",
+                            value=list(state["filters"]["statuses"]),
+                        ).classes("w-full").props("use-chips")
+                        support_select = ui.select(
+                            support_options, multiple=True, label="Support",
+                            value=list(state["filters"]["supports"]),
+                        ).classes("w-full").props("use-chips")
 
-            with ui.menu() as filter_menu:
-                with ui.column().classes("p-4 gap-3").style("min-width:280px"):
-                    genre_select = ui.select(
-                        genre_options, multiple=True, label="Genre",
-                        value=list(state["filters"]["genres"]),
-                    ).classes("w-full").props("use-chips")
-                    status_select = ui.select(
-                        status_options, multiple=True, label="Statut",
-                        value=list(state["filters"]["statuses"]),
-                    ).classes("w-full").props("use-chips")
-                    support_select = ui.select(
-                        support_options, multiple=True, label="Support",
-                        value=list(state["filters"]["supports"]),
-                    ).classes("w-full").props("use-chips")
+                        def _apply_filter_selection() -> None:
+                            state["filters"]["genres"] = genre_select.value or []
+                            state["filters"]["statuses"] = status_select.value or []
+                            state["filters"]["supports"] = support_select.value or []
+                            state["page"] = 1
+                            filter_button.set_text(_filter_button_label())
+                            filter_menu.close()
+                            _refresh()
 
-                    def _apply_filter_selection() -> None:
-                        state["filters"]["genres"] = genre_select.value or []
-                        state["filters"]["statuses"] = status_select.value or []
-                        state["filters"]["supports"] = support_select.value or []
-                        state["page"] = 1
-                        filter_button.set_text(_filter_button_label())
-                        filter_menu.close()
-                        _refresh()
+                        def _reset_filter_selection() -> None:
+                            genre_select.value = []
+                            status_select.value = []
+                            support_select.value = []
+                            _apply_filter_selection()
 
-                    def _reset_filter_selection() -> None:
-                        genre_select.value = []
-                        status_select.value = []
-                        support_select.value = []
-                        _apply_filter_selection()
-
-                    with ui.row().classes("w-full justify-between mt-2"):
-                        ui.button("Réinitialiser", on_click=_reset_filter_selection).classes("bs-outline-btn")
-                        ui.button("Appliquer", on_click=_apply_filter_selection).classes("bs-accent-btn")
-
-            filter_button.on("click", filter_menu.open)
+                        with ui.row().classes("w-full justify-between mt-2"):
+                            ui.button("Réinitialiser", on_click=_reset_filter_selection).classes("bs-outline-btn")
+                            ui.button("Appliquer", on_click=_apply_filter_selection).classes("bs-accent-btn")
 
         grid_box = ui.column().classes("w-full")
         pager_box = ui.row().classes("w-full items-center justify-center gap-3 mt-4")

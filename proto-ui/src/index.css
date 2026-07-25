@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+@keyframes slideLeftSmooth {
+    from {
+        transform: translateX(100%);
+        opacity: 0.5;
+    }
+
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes fadeInSmooth {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+.animate-slide-left-smooth {
+    animation: slideLeftSmooth 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-fade-in-smooth {
+    animation: fadeInSmooth 0.25s ease-out forwards;
+}

@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional
-from datetime import date
+from datetime import date, datetime
 
 
 class Media(BaseModel):
@@ -19,5 +19,14 @@ class Media(BaseModel):
     review: Optional[str] = None
     tmdb_ok: bool = False
 
-    # URL de l'image de couverture
+    # URL de l'image de couverture et de bannière horizontale
     cover_url: Optional[str] = None
+    backdrop_url: Optional[str] = None
+
+    # Acteurs principaux
+    cast: List[str] = Field(default_factory=list)
+
+    # Nouvelles métadonnées de visionnage (Stripe / A24 UI)
+    watched_in_cinema: bool = False
+    watched_date: Optional[str] = None
+    created_at: Optional[datetime] = None
