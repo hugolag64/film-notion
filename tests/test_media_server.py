@@ -57,7 +57,7 @@ def test_import_existing_library_links_matching_tmdb_media(tmp_path):
 
     linked = asyncio.run(service.import_existing_libraries())
 
-    assert linked == 1
+    assert linked["linked"] == 1
     assert asyncio.run(store.get_availability(media.id)).arr_id == 42
 
 
@@ -71,3 +71,21 @@ def test_queue_progress_maps_to_downloading(tmp_path):
 
     assert availability.state == "downloading"
     assert availability.progress_percent == 50
+
+
+def test_import_creates_missing_film_from_remote_tmdb_id(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    radarr = FakeRadarr()
+    radarr.list_library = lambda: _async_result([{"id": 42, "tmdbId": 438631, "title": "Dune", "hasFile": True}])
+    service = MediaServerService(store, radarr=radarr)
+
+    summary = asyncio.run(service.import_existing_libraries())
+
+    medias = asyncio.run(store.fetch_all())
+    assert summary["created"] == 1
+    assert medias[0].tmdb_id == 438631
+
+
+async def _async_result(value):
+    return value
