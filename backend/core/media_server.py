@@ -96,3 +96,26 @@ class MediaServerService:
         if availability and availability.jellyfin_id and self.jellyfin:
             return self.jellyfin.playback_url(availability.jellyfin_id)
         return None
+
+    async def import_existing_libraries(self) -> int:
+        """Link already-managed Arr items to local TMDB-linked records."""
+        medias = await self.store.fetch_all()
+        linked = 0
+        for provider, client, media_type in (
+            ("radarr", self.radarr, "Film"),
+            ("sonarr", self.sonarr, "Série"),
+        ):
+            if client is None:
+                continue
+            for remote in await client.list_library():
+                tmdb_id = remote.get("tmdbId")
+                media = next((item for item in medias if item.type == media_type and item.tmdb_id == tmdb_id), None)
+                if not media:
+                    continue
+                await self.store.upsert_availability(Availability(
+                    media_id=media.id, provider=provider, arr_id=remote.get("id"),
+                    state="imported" if remote.get("hasFile") else "requested",
+                    last_synced_at=datetime.now(timezone.utc),
+                ))
+                linked += 1
+        return linked

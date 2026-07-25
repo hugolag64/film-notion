@@ -44,3 +44,15 @@ def test_add_film_creates_requested_availability(tmp_path):
 
     assert availability.state == "requested"
     assert availability.arr_id == 42
+
+
+def test_import_existing_library_links_matching_tmdb_media(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    media = asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    service = MediaServerService(store, radarr=FakeRadarr())
+
+    linked = asyncio.run(service.import_existing_libraries())
+
+    assert linked == 1
+    assert asyncio.run(store.get_availability(media.id)).arr_id == 42
