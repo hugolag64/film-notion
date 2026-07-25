@@ -15,6 +15,48 @@ def test_topbar_uses_root_logo_from_static_url():
     assert '<img src="/static/Logo.png" alt="Backstage"' in react_source
 
 
+def test_react_exposes_series_collection_switch():
+    project_root = Path(__file__).resolve().parents[1]
+    source = (project_root / "proto-ui" / "src" / "BackstagePrototype.jsx").read_text(encoding="utf-8")
+
+    assert "Films | Séries" in source
+    assert "series-progress" in source
+
+
+def test_react_preserves_series_progress_statuses():
+    project_root = Path(__file__).resolve().parents[1]
+    source = (project_root / "proto-ui" / "src" / "library.js").read_text(encoding="utf-8")
+
+    assert "'Terminée'" in source
+    assert "'En cours'" in source
+
+
+def test_react_series_completed_filter_accepts_feminine_status():
+    project_root = Path(__file__).resolve().parents[1]
+    source = (project_root / "proto-ui" / "src" / "BackstagePrototype.jsx").read_text(encoding="utf-8")
+
+    assert "['Terminé', 'Terminée'].includes(movie.status)" in source
+
+
+def test_react_serializes_episode_updates_and_guards_series_loads():
+    project_root = Path(__file__).resolve().parents[1]
+    source = (project_root / "proto-ui" / "src" / "BackstagePrototype.jsx").read_text(encoding="utf-8")
+
+    assert "episodeUpdateQueue" in source
+    assert "seriesRequestId" in source
+
+
+def test_react_reconciles_queued_episode_successes_in_grid_and_drawer():
+    project_root = Path(__file__).resolve().parents[1]
+    source = (project_root / "proto-ui" / "src" / "BackstagePrototype.jsx").read_text(encoding="utf-8")
+    toggle_source = source[source.index("const toggleEpisode"):]
+
+    assert "replaceEpisode(current, result.episode)" in toggle_source
+    assert toggle_source.index("setMovies((current)") < toggle_source.index("const isCurrentSeries")
+    assert "episodeIntents" in toggle_source
+    assert "const isCurrentSeries" in toggle_source
+
+
 def test_tokens_match_spec():
     assert TOKENS["--bg"] == "#faf6ef"
     assert TOKENS["--accent"] == "#7a2331"

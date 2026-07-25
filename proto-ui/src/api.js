@@ -103,3 +103,37 @@ export async function createMediaFromTMDB(tmdbId) {
     if (!response.ok) throw new Error(`Failed to create media: ${response.statusText}`);
     return response.json();
 }
+
+export async function searchTMDBTV(query) {
+    const response = await fetch(`${API_BASE_URL}/tmdb/search/tv?query=${encodeURIComponent(query)}`);
+    if (!response.ok) throw new Error(`Failed to search TV: ${response.statusText}`);
+    return response.json();
+}
+
+export async function createSeriesFromTMDB(tmdbId) {
+    const response = await fetch(`${API_BASE_URL}/series/from_tmdb`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({tmdb_id: tmdbId}),
+    });
+    if (!response.ok) throw new Error(`Failed to create series: ${response.statusText}`);
+    return response.json();
+}
+
+export async function fetchSeriesEpisodes(mediaId) {
+    const response = await fetch(`${API_BASE_URL}/medias/${mediaId}/episodes`);
+    if (!response.ok) throw new Error(`Failed to fetch series episodes: ${response.statusText}`);
+    return response.json();
+}
+
+export async function updateEpisode(episodeId, watched) {
+    const response = await fetch(`${API_BASE_URL}/episodes/${episodeId}`, {
+        method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({watched}),
+    });
+    if (!response.ok) throw new Error(`Failed to update episode: ${response.statusText}`);
+    return response.json();
+}
+
+export async function refreshSeriesFromTMDB(mediaId) {
+    const response = await fetch(`${API_BASE_URL}/series/${mediaId}/refresh`, { method: 'POST' });
+    if (!response.ok) throw new Error(`Failed to refresh series: ${response.statusText}`);
+    return response.json();
+}

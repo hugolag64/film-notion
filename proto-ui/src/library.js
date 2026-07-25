@@ -1,7 +1,10 @@
 const STATUS_MAP = { watched: 'Terminé', watchlist: 'À regarder' };
 
 export function normalizeStatus(status) {
-    return STATUS_MAP[status] || (status === 'Terminé' ? 'Terminé' : 'À regarder');
+    const normalized = STATUS_MAP[status] || status;
+    return ['Terminé', 'Terminée', 'En cours', 'À regarder'].includes(normalized)
+        ? normalized
+        : 'À regarder';
 }
 
 export function filterAndSortMovies(movies, filters, sort) {

@@ -91,6 +91,19 @@ class TMDBClient:
             logger.error("Erreur détails série TMDB ID %s: %s", tmdb_id, e)
             return None
 
+    async def get_tv_season_details(
+        self, tmdb_id: int, season_number: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch a TV season's episodes."""
+        url = f"{self.BASE_URL}/tv/{tmdb_id}/season/{season_number}"
+        try:
+            response = await http.request_with_retry("GET", url, params=self.params)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error("TMDB season details failed for %s/%s: %s", tmdb_id, season_number, e)
+            return None
+
     async def get_details(self, tmdb_id: int, is_series: bool = False) -> Optional[Dict[str, Any]]:
         return await (self.get_tv_details(tmdb_id) if is_series else self.get_movie_details(tmdb_id))
 

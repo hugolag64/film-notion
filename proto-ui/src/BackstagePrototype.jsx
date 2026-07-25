@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { fetchMedias, updateMedia, searchTMDB, relinkTMDB, createMediaFromTMDB } from './api';
+import React, { useState, useEffect, useRef } from 'react';
+import { fetchMedias, updateMedia, searchTMDB, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
+import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
 
 const ALL_GENRES = [
     'Action', 'Aventure', 'Animation', 'Biopic', 'Comédie', 'Crime',
@@ -40,10 +41,21 @@ const INITIAL_MOVIES = [];
 
 export default function BackstagePrototype() {
     const [movies, setMovies] = useState(INITIAL_MOVIES);
+    const [collection, setCollection] = useState('Films');
     const [, setLoading] = useState(true);
     const [, setError] = useState(null);
     const [activeFilter, setActiveFilter] = useState('all'); // 'all' | 'watched' | 'watchlist' | 'favorite'
     const [selectedMovie, setSelectedMovie] = useState(null);
+    const [selectedSeries, setSelectedSeries] = useState(null);
+    const [seriesEpisodes, setSeriesEpisodes] = useState([]);
+    const [seriesProgress, setSeriesProgress] = useState(null);
+    const [openSeasons, setOpenSeasons] = useState({});
+    const [seriesTab, setSeriesTab] = useState('details');
+    const [seriesRefreshing, setSeriesRefreshing] = useState(false);
+    const seriesRequestId = useRef(0);
+    const selectedSeriesId = useRef(null);
+    const episodeUpdateQueue = useRef(Promise.resolve());
+    const episodeIntents = useRef(new Map());
     const [searchQuery, setSearchQuery] = useState('');
     const [filters, setFilters] = useState({ genre: '', director: '', status: '', support: '' });
     const [sort, setSort] = useState({ key: 'createdAt', direction: 'desc' });
@@ -167,7 +179,10 @@ export default function BackstagePrototype() {
 
                     return {
                         id: m.id || `media-${index}`,
+                        type: m.type || 'Film',
                         title: m.title || 'Sans titre',
+                        originalTitle: m.original_title || '',
+                        tmdbId: m.tmdb_id || null,
                         director: m.director || 'Réalisateur inconnu',
                         year: m.release_date ? (new Date(m.release_date).getFullYear() || '—') : '—',
                         genre: catList,
@@ -180,8 +195,8 @@ export default function BackstagePrototype() {
                         status: normalizeStatus(m.status || (numericRating > 0 ? 'Terminé' : 'À regarder')),
                         isFavorite: isFav,
                         runtime: '120 min',
-                        supports: (m.support ? (m.support.startsWith('[') ? JSON.parse(m.support) : [m.support]) : ['Serveur']),
-                        support: m.support || 'Serveur',
+                        supports: (m.support ? (m.support.startsWith('[') ? JSON.parse(m.support) : [m.support]) : []),
+                        support: m.support || null,
                         ratingCount: 1,
                         watchedInCinema: m.watched_in_cinema || false,
                         watchedDate: m.watched_date || '',
@@ -209,9 +224,9 @@ export default function BackstagePrototype() {
         loadRealMedias();
     }, []);
 
-    // Filter movies
-    const filteredMovies = filterAndSortMovies(movies, { ...filters, query: searchQuery }, sort)
-        .filter(movie => activeFilter === 'all' || activeFilter === 'watched' ? activeFilter === 'all' || movie.status === 'Terminé'
+    const collectionMedias = movies.filter((movie) => movie.type === (collection === 'Séries' ? 'Série' : 'Film'));
+    const filteredMovies = filterAndSortMovies(collectionMedias, { ...filters, query: searchQuery }, sort)
+        .filter(movie => activeFilter === 'all' || activeFilter === 'watched' ? activeFilter === 'all' || ['Terminé', 'Terminée'].includes(movie.status)
             : activeFilter === 'watchlist' ? movie.status === 'À regarder' : movie.isFavorite);
 
     // Toggle Favorite
@@ -310,13 +325,10 @@ export default function BackstagePrototype() {
 
         let currentSupports = Array.isArray(movie.supports) && movie.supports.length > 0
             ? [...movie.supports]
-            : [movie.support || 'Serveur'];
+            : (movie.support ? [movie.support] : []);
 
         if (currentSupports.includes(targetSupport)) {
-            // Prevent removing all supports - keep at least one
-            if (currentSupports.length > 1) {
-                currentSupports = currentSupports.filter(s => s !== targetSupport);
-            }
+            currentSupports = currentSupports.filter(s => s !== targetSupport);
         } else {
             currentSupports.push(targetSupport);
         }
@@ -421,20 +433,156 @@ export default function BackstagePrototype() {
         }
     };
 
-    const searchToAdd = async () => {
-        if (!addQuery.trim()) return;
-        setAddLoading(true);
-        try { setAddResults(await searchTMDB(addQuery)); } finally { setAddLoading(false); }
-    };
-
     const addFromTMDB = async (tmdbId) => {
         setAddLoading(true);
         try {
-            const created = await createMediaFromTMDB(tmdbId);
+            const created = collection === 'Séries'
+                ? await createSeriesFromTMDB(tmdbId)
+                : await createMediaFromTMDB(tmdbId);
             await loadRealMedias();
             setShowAddDialog(false);
-            setSelectedMovie(created);
+            if (collection === 'Séries') {
+                await openSeries({
+                    ...created,
+                    poster: created.cover_url,
+                    backdrop: created.backdrop_url,
+                    year: created.release_date ? new Date(created.release_date).getFullYear() : '—',
+                });
+            }
+            else setSelectedMovie(created);
         } finally { setAddLoading(false); }
+    };
+
+    const searchToAdd = async () => {
+        if (!addQuery.trim()) return;
+        setAddLoading(true);
+        try {
+            setAddResults(collection === 'Séries'
+                ? await searchTMDBTV(addQuery)
+                : await searchTMDB(addQuery));
+        } finally { setAddLoading(false); }
+    };
+
+    const changeCollection = (nextCollection) => {
+        if (nextCollection === collection) return;
+        setCollection(nextCollection);
+        setActiveFilter('all');
+        setFilters({ genre: '', director: '', status: '', support: '' });
+        setSearchQuery('');
+    };
+
+    const openSeries = async (series) => {
+        const requestId = ++seriesRequestId.current;
+        selectedSeriesId.current = series.id;
+        setSelectedSeries({
+            ...series,
+            type: 'Série',
+            originalTitle: series.originalTitle || series.original_title || '',
+            tmdbId: series.tmdbId || series.tmdb_id || null,
+            poster: series.poster || series.cover_url,
+            backdrop: series.backdrop || series.backdrop_url,
+            genre: series.genre || series.categories || [],
+            year: series.year || (series.release_date ? new Date(series.release_date).getFullYear() : '—'),
+        });
+        setSeriesEpisodes([]);
+        setSeriesProgress(null);
+        setOpenSeasons({});
+        setSeriesTab('details');
+        try {
+            const details = await fetchSeriesEpisodes(series.id);
+            if (requestId !== seriesRequestId.current || selectedSeriesId.current !== series.id) return;
+            setSeriesEpisodes(details.episodes || []);
+            setSeriesProgress(details.progress);
+            const firstSeason = details.progress?.seasons?.[0]?.season_number;
+            if (firstSeason !== undefined) setOpenSeasons({ [firstSeason]: true });
+        } catch (error) {
+            console.error('Impossible de charger les épisodes de la série:', error);
+        }
+    };
+
+    const closeSeries = () => {
+        seriesRequestId.current += 1;
+        selectedSeriesId.current = null;
+        setSelectedSeries(null);
+    };
+
+    const useOriginalSeriesTitle = async () => {
+        if (!selectedSeries?.originalTitle || selectedSeries.originalTitle === selectedSeries.title) return;
+        const updated = await updateMedia(selectedSeries.id, { title: selectedSeries.originalTitle });
+        setSelectedSeries((current) => current ? { ...current, title: updated.title } : null);
+        setMovies((current) => current.map((media) => media.id === updated.id ? { ...media, title: updated.title } : media));
+    };
+
+    const refreshSelectedSeries = async () => {
+        if (!selectedSeries?.tmdbId || seriesRefreshing) return;
+        setSeriesRefreshing(true);
+        try {
+            const refreshed = await refreshSeriesFromTMDB(selectedSeries.id);
+            const mapped = {
+                ...selectedSeries,
+                originalTitle: refreshed.original_title || selectedSeries.originalTitle,
+                director: refreshed.director || selectedSeries.director,
+                genre: refreshed.categories || selectedSeries.genre,
+                synopsis: refreshed.synopsis || selectedSeries.synopsis,
+                poster: refreshed.cover_url || selectedSeries.poster,
+                backdrop: refreshed.backdrop_url || selectedSeries.backdrop,
+                year: refreshed.release_date ? new Date(refreshed.release_date).getFullYear() : selectedSeries.year,
+            };
+            setSelectedSeries(mapped);
+            setMovies((current) => current.map((media) => media.id === refreshed.id ? { ...media, ...mapped, status: refreshed.status } : media));
+            const details = await fetchSeriesEpisodes(refreshed.id);
+            setSeriesEpisodes(details.episodes || []);
+            setSeriesProgress(details.progress);
+        } catch (error) {
+            console.error('Impossible d’actualiser la série depuis TMDB:', error);
+        } finally {
+            setSeriesRefreshing(false);
+        }
+    };
+
+    const toggleEpisode = (episode) => {
+        const optimisticEpisode = { ...episode, watched: !episode.watched };
+        const previousIntent = episodeIntents.current.get(episode.id);
+        const intentId = (previousIntent?.id || 0) + 1;
+        episodeIntents.current.set(episode.id, { id: intentId, watched: optimisticEpisode.watched });
+        setSeriesEpisodes((current) => replaceEpisode(current, optimisticEpisode));
+        const mediaId = episode.media_id;
+        episodeUpdateQueue.current = episodeUpdateQueue.current
+            .catch(() => undefined)
+            .then(async () => {
+                try {
+                    const result = await updateEpisode(episode.id, optimisticEpisode.watched);
+                    setMovies((current) => current.map((movie) => (
+                        movie.id === mediaId ? { ...movie, status: result.progress.status } : movie
+                    )));
+                    const isCurrentSeries = selectedSeriesId.current === mediaId;
+                    const isLatestIntent = episodeIntents.current.get(episode.id)?.id === intentId;
+                    if (isLatestIntent) {
+                        episodeIntents.current.delete(episode.id);
+                    }
+                    if (!isCurrentSeries) return;
+                    if (isLatestIntent) {
+                        setSeriesEpisodes((current) => replaceEpisode(current, result.episode));
+                    }
+                    setSeriesProgress(result.progress);
+                    setSelectedSeries((current) => current ? { ...current, status: result.progress.status } : null);
+                } catch (error) {
+                    console.error('Impossible de mettre à jour cet épisode:', error);
+                    const isCurrentSeries = selectedSeriesId.current === mediaId;
+                    if (episodeIntents.current.get(episode.id)?.id === intentId) {
+                        episodeIntents.current.delete(episode.id);
+                    }
+                    if (!isCurrentSeries) return;
+                    const details = await fetchSeriesEpisodes(mediaId);
+                    if (selectedSeriesId.current === mediaId) {
+                        setSeriesEpisodes((details.episodes || []).map((serverEpisode) => {
+                            const pendingIntent = episodeIntents.current.get(serverEpisode.id);
+                            return pendingIntent ? { ...serverEpisode, watched: pendingIntent.watched } : serverEpisode;
+                        }));
+                        setSeriesProgress(details.progress);
+                    }
+                }
+            });
     };
 
 
@@ -459,6 +607,13 @@ export default function BackstagePrototype() {
                     </div>
 
                     <div className="flex items-center gap-4">
+                        <div className={`flex rounded-lg border p-1 text-xs font-semibold ${isDarkMode ? 'border-white/15 bg-white/5' : 'border-[#e3e8ee] bg-[#f6f9fc]'}`} aria-label="Films | Séries">
+                            {['Films', 'Séries'].map((item) => (
+                                <button key={item} onClick={() => changeCollection(item)} className={`rounded-md px-3 py-1.5 transition-all ${collection === item ? 'bg-[#635bff] text-white shadow-sm' : isDarkMode ? 'text-white/60 hover:text-white' : 'text-[#425466] hover:text-[#0a2540]'}`}>
+                                    {item}
+                                </button>
+                            ))}
+                        </div>
                         {/* Light / Dark Mode Switcher Button */}
                         <button
                             onClick={() => setIsDarkMode(!isDarkMode)}
@@ -475,7 +630,7 @@ export default function BackstagePrototype() {
                         <div className="relative">
                             <input
                                 type="text"
-                                placeholder="Rechercher un film, réalisateur..."
+                                placeholder={collection === 'Séries' ? 'Rechercher une série, créateur...' : 'Rechercher un film, réalisateur...'}
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
                                 className={`text-xs rounded-lg px-3 py-2 w-72 transition-all outline-none border ${isDarkMode
@@ -486,7 +641,7 @@ export default function BackstagePrototype() {
                         </div>
 
                         <button onClick={() => setShowAddDialog(true)} className="bg-[#635bff] hover:bg-[#5048e5] text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all shadow-md cursor-pointer">
-                            + Ajouter un film
+                            {collection === 'Séries' ? '+ Ajouter une série' : '+ Ajouter un film'}
                         </button>
                     </div>
                 </div>
@@ -511,10 +666,10 @@ export default function BackstagePrototype() {
 
                         <nav className="space-y-1.5">
                             {[
-                                { id: 'all', label: 'Tous les films', icon: '🎬', count: movies.length },
-                                { id: 'watched', label: 'Films vus', icon: '👁️', count: movies.filter(m => m.status === 'Terminé').length },
-                                { id: 'watchlist', label: 'Watchlist', icon: '🔖', count: movies.filter(m => m.status === 'À regarder').length },
-                                { id: 'favorite', label: 'Favoris', icon: '❤️', count: movies.filter(m => m.isFavorite).length },
+                                { id: 'all', label: collection === 'Séries' ? 'Toutes les séries' : 'Tous les films', icon: '🎬', count: collectionMedias.length },
+                                { id: 'watched', label: collection === 'Séries' ? 'Séries terminées' : 'Films vus', icon: '👁️', count: collectionMedias.filter(m => ['Terminé', 'Terminée'].includes(m.status)).length },
+                                { id: 'watchlist', label: 'À regarder', icon: '🔖', count: collectionMedias.filter(m => m.status === 'À regarder').length },
+                                { id: 'favorite', label: 'Favoris', icon: '❤️', count: collectionMedias.filter(m => m.isFavorite).length },
                             ].map((item) => (
                                 <button
                                     key={item.id}
@@ -586,7 +741,7 @@ export default function BackstagePrototype() {
                 </aside>
 
                 {/* Main Content Area */}
-                <main className="flex-1 min-w-0">
+                <main key={collection} className="series-portal flex-1 min-w-0">
                     {/* Header Section */}
                     <div className={`flex items-end justify-between mb-6 pb-4 border-b ${isDarkMode ? 'border-white/10' : 'border-[#e3e8ee]'
                         }`}>
@@ -596,10 +751,13 @@ export default function BackstagePrototype() {
                             </span>
                             <h1 className={`text-3xl font-serif font-bold tracking-tight mt-1 ${isDarkMode ? 'text-white' : 'text-[#0a2540]'
                                 }`}>
+                                {collection === 'Séries' && (activeFilter === 'all' ? 'Toutes les séries' : activeFilter === 'watched' ? 'Séries terminées' : activeFilter === 'watchlist' ? 'Séries à regarder' : 'Favoris')}
+                                {collection === 'Films' && <>
                                 {activeFilter === 'all' && 'Tous les Films'}
                                 {activeFilter === 'watched' && 'Films Vus'}
                                 {activeFilter === 'watchlist' && 'Watchlist'}
                                 {activeFilter === 'favorite' && 'Favoris'}
+                                </>}
                             </h1>
                         </div>
                         <div className={`text-xs font-mono ${isDarkMode ? 'text-white/50' : 'text-[#425466]'
@@ -611,7 +769,7 @@ export default function BackstagePrototype() {
                     <div className="flex flex-wrap gap-2 mb-6">
                         <select value={sort.key} onChange={e => setSort(prev => ({ ...prev, key: e.target.value }))} className="text-xs rounded border px-2 py-1.5"><option value="createdAt">Date d'ajout</option><option value="title">Titre</option><option value="year">Année</option><option value="rating">Note</option></select>
                         <button onClick={() => setSort(prev => ({ ...prev, direction: prev.direction === 'asc' ? 'desc' : 'asc' }))} className="text-xs rounded border px-2 py-1.5">{sort.direction === 'asc' ? '↑ Croissant' : '↓ Décroissant'}</button>
-                        {[['genre', 'Genre', filterOptions(movies, 'genre')], ['director', 'Réalisateur', filterOptions(movies, 'director')], ['status', 'Statut', ['À regarder', 'Terminé']], ['support', 'Support', filterOptions(movies, 'supports')]].map(([key, label, options]) => <select key={key} value={filters[key]} onChange={e => setFilters(prev => ({ ...prev, [key]: e.target.value }))} className="text-xs rounded border px-2 py-1.5"><option value="">{label}</option>{options.map(option => <option key={option} value={option}>{option}</option>)}</select>)}
+                        {[['genre', 'Genre', filterOptions(collectionMedias, 'genre')], ['director', 'Réalisateur', filterOptions(collectionMedias, 'director')], ['status', 'Statut', ['À regarder', 'En cours', 'Terminé', 'Terminée']], ['support', 'Support', filterOptions(collectionMedias, 'supports')]].map(([key, label, options]) => <select key={key} value={filters[key]} onChange={e => setFilters(prev => ({ ...prev, [key]: e.target.value }))} className="text-xs rounded border px-2 py-1.5"><option value="">{label}</option>{options.map(option => <option key={option} value={option}>{option}</option>)}</select>)}
                         <button onClick={() => setFilters({ genre: '', director: '', status: '', support: '' })} className="text-xs text-[#635bff] px-2">Réinitialiser</button>
                     </div>
 
@@ -620,7 +778,7 @@ export default function BackstagePrototype() {
                         {filteredMovies.map((movie) => (
                             <div
                                 key={movie.id}
-                                onClick={() => setSelectedMovie(movie)}
+                                onClick={() => movie.type === 'Série' ? openSeries(movie) : setSelectedMovie(movie)}
                                 className={`group relative flex flex-col rounded-xl overflow-hidden border transition-all duration-300 cursor-pointer transform hover:-translate-y-1.5 ${isDarkMode
                                     ? 'bg-[#0a0a0a] border-white/10 hover:border-[#635bff]/60 shadow-xl'
                                     : 'bg-white border-[#e3e8ee] hover:border-[#635bff] hover:shadow-xl shadow-sm'
@@ -638,7 +796,7 @@ export default function BackstagePrototype() {
                                     {/* Support pills and favorite */}
                                     <div className="absolute top-2.5 left-2.5 right-2.5 flex justify-start gap-1 pointer-events-none">
                                         <div className="flex w-full items-center gap-1 pointer-events-auto">
-                                            {(Array.isArray(movie.supports) ? movie.supports : [movie.support || 'Serveur']).slice(0, 2).map((sup, idx) => (
+                                            {(Array.isArray(movie.supports) ? movie.supports : (movie.support ? [movie.support] : [])).filter((sup) => ['Serveur', 'Physique', 'Streaming', 'Cinéma'].includes(sup)).slice(0, 2).map((sup, idx) => (
                                                 <span
                                                     key={idx}
                                                     className={`text-[8.5px] font-mono font-bold px-1.5 py-0.5 rounded-md shadow backdrop-blur-md text-white ${sup === 'Cinéma'
@@ -691,8 +849,13 @@ export default function BackstagePrototype() {
                                     <div className={`mt-3 flex items-center justify-between text-[10px] font-mono border-t pt-2 ${isDarkMode ? 'text-white/40 border-white/5' : 'text-[#425466] border-[#e3e8ee]'
                                         }`}>
                                         <span>{movie.runtime}</span>
-                                        <span className="font-semibold text-[#635bff]">{movie.status === 'Terminé' ? 'Vu' : 'À regarder'}</span>
+                                        <span className="font-semibold text-[#635bff]">{['Terminé', 'Terminée'].includes(movie.status) ? 'Vu' : movie.status}</span>
                                     </div>
+                                    {movie.type === 'Série' && (
+                                        <div className="series-progress mt-2 text-[10px] font-mono text-[#635bff]">
+                                            Suivi des épisodes disponible
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         ))}
@@ -706,6 +869,82 @@ export default function BackstagePrototype() {
                     )}
                 </main>
             </div>
+
+
+            {selectedSeries && (
+                <div className="fixed inset-0 z-50 flex justify-end bg-black/80 backdrop-blur-md animate-fade-in-smooth" onClick={closeSeries}>
+                    <section className={`w-full max-w-xl h-full overflow-y-auto border-l shadow-2xl ${isDarkMode ? 'bg-[#0a0a0a] text-white border-white/10' : 'bg-[#f6f9fc] text-[#0a2540] border-[#e3e8ee]'}`} onClick={(event) => event.stopPropagation()}>
+                        <div className="relative h-52 overflow-hidden bg-slate-950">
+                            <img src={selectedSeries.backdrop || selectedSeries.poster} alt="" className="h-full w-full object-cover opacity-50 blur-sm scale-110" />
+                            <div className="absolute inset-0 bg-gradient-to-t from-black via-black/45 to-transparent" />
+                            <button onClick={closeSeries} className="absolute right-4 top-4 rounded-full bg-black/60 px-3 py-2 text-xs text-white">✕</button>
+                            <div className="absolute bottom-5 left-6 right-6 text-white">
+                                <span className="rounded bg-[#635bff] px-2 py-1 text-[10px] font-mono font-bold">FICHE SÉRIE</span>
+                                <h2 className="mt-2 text-3xl font-serif font-bold">{selectedSeries.title}</h2>
+                                <p className="mt-1 text-xs text-white/70">{selectedSeries.director} • {selectedSeries.year}</p>
+                            </div>
+                        </div>
+
+                        <div className="p-5">
+                            <div className={`mb-5 flex rounded-xl border p-1 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
+                                {[['details', 'Détails'], ['episodes', 'Épisodes']].map(([tab, label]) => <button key={tab} onClick={() => setSeriesTab(tab)} className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold transition ${seriesTab === tab ? 'bg-[#635bff] text-white shadow-lg' : 'opacity-60 hover:opacity-100'}`}>{label}</button>)}
+                            </div>
+
+                            {seriesTab === 'details' && <div className="space-y-5 animate-fade-in-smooth">
+                                {selectedSeries.originalTitle && selectedSeries.originalTitle !== selectedSeries.title && <div className={`rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
+                                    <p className="text-[10px] font-mono uppercase tracking-widest opacity-60">Titre original</p>
+                                    <div className="mt-2 flex items-center justify-between gap-3"><strong>{selectedSeries.originalTitle}</strong><button onClick={useOriginalSeriesTitle} className="rounded-lg border border-[#635bff]/40 px-3 py-1.5 text-xs font-semibold text-[#635bff]">Utiliser comme titre principal</button></div>
+                                </div>}
+                                <div className={`rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
+                                    <div className="flex items-center justify-between gap-3"><p className="text-[10px] font-mono uppercase tracking-widest opacity-60">Synopsis</p>{selectedSeries.tmdbId && <button onClick={refreshSelectedSeries} disabled={seriesRefreshing} className="rounded-lg bg-[#635bff] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{seriesRefreshing ? 'Actualisation…' : 'Actualiser TMDB'}</button>}</div>
+                                    <p className="mt-3 text-sm leading-6 opacity-80">{selectedSeries.synopsis || 'Aucun synopsis disponible.'}</p>
+                                </div>
+                                <div className={`rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
+                                    <p className="text-[10px] font-mono uppercase tracking-widest opacity-60">Informations</p>
+                                    <div className="mt-3 grid grid-cols-2 gap-4 text-sm"><div><span className="block text-xs opacity-60">Créateur</span>{selectedSeries.director || '—'}</div><div><span className="block text-xs opacity-60">Statut</span>{selectedSeries.status || 'À regarder'}</div><div className="col-span-2"><span className="block text-xs opacity-60">Genres</span>{(selectedSeries.genre || []).join(' • ') || '—'}</div><div className="col-span-2"><span className="block text-xs opacity-60">Casting</span>{(selectedSeries.cast || []).join(' • ') || '—'}</div></div>
+                                </div>
+                            </div>}
+
+                            {seriesTab === 'episodes' && <div className="space-y-4 animate-fade-in-smooth">
+                            <div className={`series-progress rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
+                                <div className="flex items-center justify-between gap-3 text-xs font-mono">
+                                    <strong>Progression générale</strong>
+                                    <span>{seriesProgressText(seriesProgress)}</span>
+                                </div>
+                                <div className="mt-3 h-2 overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
+                                    <div className="series-progress-fill h-full rounded-full bg-[#635bff]" style={{ width: `${seriesProgress?.percentage || 0}%` }} />
+                                </div>
+                            </div>
+
+                            {Object.entries(groupEpisodesBySeason(seriesEpisodes)).map(([seasonNumber, episodes]) => {
+                                const progress = seriesProgress?.seasons?.find((season) => String(season.season_number) === seasonNumber);
+                                const isOpen = openSeasons[seasonNumber];
+                                return (
+                                    <div key={seasonNumber} className={`overflow-hidden rounded-xl border ${isDarkMode ? 'border-white/10' : 'border-[#e3e8ee] bg-white'}`}>
+                                        <button onClick={() => setOpenSeasons((current) => ({ ...current, [seasonNumber]: !isOpen }))} className="flex w-full items-center justify-between gap-3 p-4 text-left">
+                                            <span className="font-semibold">Saison {seasonNumber}</span>
+                                            <span className="text-xs font-mono text-[#635bff]">{progress ? `${progress.watched} / ${progress.total} • ${Math.round(progress.percentage)} %` : 'Chargement…'} {isOpen ? '⌃' : '⌄'}</span>
+                                        </button>
+                                        <div className="h-1 bg-black/10 dark:bg-white/10"><div className="series-progress-fill h-full bg-[#635bff]" style={{ width: `${progress?.percentage || 0}%` }} /></div>
+                                        <div className={`season-content divide-y divide-black/10 dark:divide-white/10 ${isOpen ? 'season-content-open' : ''}`}>
+                                            {episodes.map((episode) => (
+                                                <label key={episode.id} className="flex cursor-pointer items-center gap-3 p-3 text-sm">
+                                                    <input type="checkbox" checked={episode.watched} onChange={() => toggleEpisode(episode)} className="h-4 w-4 accent-[#635bff]" />
+                                                    <span className="font-mono text-xs text-[#635bff]">E{String(episode.episode_number).padStart(2, '0')}</span>
+                                                    <span className={episode.watched ? 'line-through opacity-50' : ''}>{episode.title}</span>
+                                                    {episode.synopsis && <span className="text-xs opacity-60">{episode.synopsis}</span>}
+                                                </label>
+                                            ))}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                            {!seriesEpisodes.length && <p className="py-8 text-center text-xs font-mono opacity-60">Aucun épisode disponible.</p>}
+                            </div>}
+                        </div>
+                    </section>
+                </div>
+            )}
 
 
             {/* Stripe-style Dense Detail Drawer */}
@@ -781,11 +1020,11 @@ export default function BackstagePrototype() {
                                             FICHE CINÉMA
                                         </span>
                                         <span className="text-xs font-mono text-white/70">{selectedMovie.year}</span>
-                                        {selectedMovie.support && (
+                                        {selectedMovie.supports?.filter((support) => ['Serveur', 'Physique', 'Streaming', 'Cinéma'].includes(support)).map((support) => (
                                             <span className="text-[9px] font-mono uppercase bg-[#d9351c] text-white px-2 py-0.5 rounded-full font-bold shadow">
-                                                {selectedMovie.support}
+                                                {support}
                                             </span>
-                                        )}
+                                        ))}
                                     </div>
 
                                     <h2 className="text-3xl font-serif font-bold text-white tracking-tight leading-tight drop-shadow-md">
@@ -850,7 +1089,7 @@ export default function BackstagePrototype() {
                                         ].map((sup) => {
                                             const activeSupports = Array.isArray(selectedMovie.supports) && selectedMovie.supports.length > 0
                                                 ? selectedMovie.supports
-                                                : [selectedMovie.support || 'Serveur'];
+                                                : (selectedMovie.support ? [selectedMovie.support] : []);
                                             const isSelected = activeSupports.includes(sup.id);
                                             return (
                                                 <button
@@ -1192,8 +1431,8 @@ export default function BackstagePrototype() {
             {showAddDialog && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
                     <div className="w-full max-w-xl rounded-xl bg-white p-5 text-[#0a2540]">
-                        <div className="flex justify-between items-center mb-3"><h2 className="font-serif text-lg font-bold">Ajouter un film</h2><button onClick={() => setShowAddDialog(false)}>✕</button></div>
-                        <div className="flex gap-2"><input value={addQuery} onChange={e => setAddQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && searchToAdd()} placeholder="Titre du film" className="flex-1 rounded border px-3 py-2"/><button onClick={searchToAdd} className="rounded bg-[#635bff] px-3 py-2 text-white">Rechercher</button></div>
+                        <div className="flex justify-between items-center mb-3"><h2 className="font-serif text-lg font-bold">{collection === 'Séries' ? 'Ajouter une série' : 'Ajouter un film'}</h2><button onClick={() => setShowAddDialog(false)}>✕</button></div>
+                        <div className="flex gap-2"><input value={addQuery} onChange={e => setAddQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && searchToAdd()} placeholder={collection === 'Séries' ? 'Titre de la série' : 'Titre du film'} className="flex-1 rounded border px-3 py-2"/><button onClick={searchToAdd} className="rounded bg-[#635bff] px-3 py-2 text-white">Rechercher</button></div>
                         <div className="mt-4 space-y-2">{addLoading ? 'Chargement…' : addResults.map(result => <button key={result.tmdb_id} onClick={() => addFromTMDB(result.tmdb_id)} className="block w-full rounded border p-3 text-left hover:border-[#635bff]"><strong>{result.title}</strong> {result.release_date?.slice(0, 4)}</button>)}</div>
                     </div>
                 </div>

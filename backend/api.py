@@ -17,6 +17,8 @@ def get_store() -> MediaStore:
 
 
 class UpdateMediaRequest(BaseModel):
+    title: Optional[str] = None
+    original_title: Optional[str] = None
     rating: Optional[str] = None
     review: Optional[str] = None
     watched_in_cinema: Optional[bool] = None
@@ -35,6 +37,10 @@ class RelinkTMDBRequest(BaseModel):
 
 class CreateFromTMDBRequest(BaseModel):
     tmdb_id: int
+
+
+class UpdateEpisodeRequest(BaseModel):
+    watched: bool
 
 
 @router.get("/tmdb/search")
@@ -58,6 +64,25 @@ async def search_tmdb(query: str):
     return out
 
 
+async def search_tmdb_tv(query: str, tmdb: TMDBClient):
+    if not query or not query.strip():
+        return []
+    results = await tmdb.search_tv(query.strip())
+    return [{
+        "tmdb_id": result["id"],
+        "title": result.get("title") or result.get("name") or "",
+        "release_date": result.get("release_date") or result.get("first_air_date") or "",
+        "poster_url": tmdb.get_poster_url(result),
+        "backdrop_url": tmdb.get_backdrop_url(result),
+        "overview": result.get("overview") or "",
+    } for result in results]
+
+
+@router.get("/tmdb/search/tv")
+async def search_tmdb_tv_endpoint(query: str):
+    return await search_tmdb_tv(query, TMDBClient())
+
+
 @router.post("/medias/{media_id}/relink_tmdb", response_model=Media)
 async def relink_tmdb(
     media_id: str,
@@ -75,6 +100,7 @@ async def relink_tmdb(
 
     updates = {
         "title": details.get("title") or media.title,
+        "original_title": details.get("original_title") or media.original_title,
         "cover_url": tmdb.get_poster_url(details) or media.cover_url,
         "backdrop_url": tmdb.get_backdrop_url(details) or media.backdrop_url,
         "cast": tmdb.get_cast(details, limit=5),
@@ -82,6 +108,7 @@ async def relink_tmdb(
         "synopsis": (details.get("overview") or media.synopsis)[:2000],
         "categories": tmdb.get_genres(details) or media.categories,
         "tmdb_ok": True,
+        "tmdb_id": payload.tmdb_id,
     }
     if details.get("release_date"):
         updates["release_date"] = details["release_date"]
@@ -104,6 +131,34 @@ async def get_media(media_id: str, store: MediaStore = Depends(get_store)):
     return media
 
 
+@router.get("/medias/{media_id}/episodes")
+async def get_series_episodes(media_id: str, store: MediaStore = Depends(get_store)):
+    media = await store.fetch_one(media_id)
+    if not media:
+        raise HTTPException(status_code=404, detail="Média non trouvé")
+
+    return {
+        "episodes": await store.list_episodes(media_id),
+        "progress": await store.series_progress(media_id),
+    }
+
+
+@router.patch("/episodes/{episode_id}")
+async def update_episode(
+    episode_id: str,
+    payload: UpdateEpisodeRequest,
+    store: MediaStore = Depends(get_store),
+):
+    episode = await store.set_episode_watched(episode_id, payload.watched)
+    if not episode:
+        raise HTTPException(status_code=404, detail="Épisode non trouvé")
+
+    return {
+        "episode": episode,
+        "progress": await store.series_progress(episode["media_id"]),
+    }
+
+
 @router.post("/medias/from_tmdb", response_model=Media)
 async def create_media_from_tmdb(
     payload: CreateFromTMDBRequest,
@@ -115,6 +170,7 @@ async def create_media_from_tmdb(
         raise HTTPException(status_code=400, detail="Impossible de récupérer les détails TMDB")
     return await store.create({
         "title": details.get("title") or details.get("original_title") or "Sans titre",
+        "original_title": details.get("original_title") or None,
         "type": "Film",
         "status": "À regarder",
         "rating": None,
@@ -126,7 +182,114 @@ async def create_media_from_tmdb(
         "backdrop_url": tmdb.get_backdrop_url(details),
         "cast": tmdb.get_cast(details, limit=5),
         "tmdb_ok": True,
+        "tmdb_id": payload.tmdb_id,
     })
+
+
+async def create_series_from_tmdb(
+    payload: CreateFromTMDBRequest,
+    store: MediaStore,
+    tmdb: TMDBClient,
+) -> Media:
+    details = await tmdb.get_tv_details(payload.tmdb_id)
+    if not details:
+        raise HTTPException(status_code=400, detail="Impossible de récupérer les détails TMDB")
+
+    episodes = await _fetch_tmdb_series_episodes(payload.tmdb_id, details, tmdb)
+
+    series = await store.create({
+        "title": details.get("name") or details.get("title") or details.get("original_name") or "Sans titre",
+        "original_title": details.get("original_name") or None,
+        "type": "Série",
+        "status": "À regarder",
+        "rating": None,
+        "release_date": details.get("first_air_date") or details.get("release_date") or None,
+        "director": tmdb.get_director(details),
+        "categories": tmdb.get_genres(details),
+        "synopsis": (details.get("overview") or "")[:2000],
+        "cover_url": tmdb.get_poster_url(details),
+        "backdrop_url": tmdb.get_backdrop_url(details),
+        "cast": tmdb.get_cast(details, limit=5),
+        "tmdb_ok": True,
+        "tmdb_id": payload.tmdb_id,
+    })
+    await store.create_episodes(series.id, episodes)
+    return await store.fetch_one(series.id)
+
+
+async def _fetch_tmdb_series_episodes(
+    tmdb_id: int, details: Dict[str, Any], tmdb: TMDBClient,
+) -> List[Dict[str, Any]]:
+    """Load every non-special TMDB episode for an import or refresh."""
+    episodes: List[Dict[str, Any]] = []
+    for season in details.get("seasons") or []:
+        season_number = season.get("season_number")
+        if not isinstance(season_number, int) or season_number <= 0:
+            continue
+        season_details = await tmdb.get_tv_season_details(tmdb_id, season_number)
+        if season_details is None:
+            raise HTTPException(
+                status_code=502,
+                detail="Impossible de récupérer les épisodes TMDB",
+            )
+        for episode in (season_details or {}).get("episodes") or []:
+            episode_number = episode.get("episode_number")
+            if not isinstance(episode_number, int):
+                continue
+            episodes.append({
+                "season_number": season_number,
+                "episode_number": episode_number,
+                "title": episode.get("name") or "Sans titre",
+                "synopsis": (episode.get("overview") or "")[:2000],
+                "watched": False,
+            })
+    return episodes
+
+
+async def refresh_series_from_tmdb(media_id: str, store: MediaStore, tmdb: TMDBClient) -> Media:
+    """Refresh a linked series while retaining local watched episode state."""
+    series = await store.fetch_one(media_id)
+    if not series:
+        raise HTTPException(status_code=404, detail="Média non trouvé")
+    if series.type != "Série":
+        raise HTTPException(status_code=400, detail="Ce média n'est pas une série")
+    if not series.tmdb_id:
+        raise HTTPException(status_code=400, detail="Cette série doit d'abord être liée à TMDB")
+
+    details = await tmdb.get_tv_details(series.tmdb_id)
+    if not details:
+        raise HTTPException(status_code=502, detail="Impossible de récupérer les détails TMDB")
+    episodes = await _fetch_tmdb_series_episodes(series.tmdb_id, details, tmdb)
+    updates = {
+        "original_title": details.get("original_name") or series.original_title,
+        "release_date": details.get("first_air_date") or details.get("release_date") or series.release_date,
+        "director": tmdb.get_director(details) or series.director,
+        "categories": tmdb.get_genres(details) or series.categories,
+        "synopsis": (details.get("overview") or series.synopsis or "")[:2000],
+        "cover_url": tmdb.get_poster_url(details) or series.cover_url,
+        "backdrop_url": tmdb.get_backdrop_url(details) or series.backdrop_url,
+        "cast": tmdb.get_cast(details, limit=5) or series.cast,
+        "tmdb_ok": True,
+    }
+    await store.update(media_id, updates)
+    await store.upsert_episodes(media_id, episodes)
+    return await store.fetch_one(media_id)
+
+
+@router.post("/series/from_tmdb", response_model=Media)
+async def create_series_from_tmdb_endpoint(
+    payload: CreateFromTMDBRequest,
+    store: MediaStore = Depends(get_store),
+):
+    return await create_series_from_tmdb(payload, store, TMDBClient())
+
+
+@router.post("/series/{media_id}/refresh", response_model=Media)
+async def refresh_series_from_tmdb_endpoint(
+    media_id: str,
+    store: MediaStore = Depends(get_store),
+):
+    return await refresh_series_from_tmdb(media_id, store, TMDBClient())
 
 
 @router.patch("/medias/{media_id}", response_model=Media)
@@ -140,6 +303,10 @@ async def update_media(
         raise HTTPException(status_code=404, detail="Média non trouvé")
 
     update_fields: Dict[str, Any] = {}
+    if payload.title is not None:
+        update_fields["title"] = payload.title
+    if payload.original_title is not None:
+        update_fields["original_title"] = payload.original_title
     if payload.rating is not None:
         update_fields["rating"] = payload.rating
     if payload.review is not None:
