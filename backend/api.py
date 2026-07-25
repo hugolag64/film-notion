@@ -368,22 +368,6 @@ async def update_media(
 
 
 
-@router.post("/medias/{media_id}/stream")
-async def trigger_stream(media_id: str, store: MediaStore = Depends(get_store)):
-    media = await store.fetch_one(media_id)
-    if not media:
-        raise HTTPException(status_code=404, detail="Média non trouvé")
-
-    return {
-        "status": "playing",
-        "server": "HP ProDesk 600 G4",
-        "media_id": media.id,
-        "title": media.title,
-        "stream_url": f"http://hp-prodesk.local:8090/stream/{media.id}.mkv",
-        "message": f"Lecture de « {media.title} » lancée sur le serveur HP ProDesk."
-    }
-
-
 @router.get("/media-server/status")
 async def media_server_status():
     return {

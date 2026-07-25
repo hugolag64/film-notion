@@ -25,3 +25,9 @@ def test_watching_later_clears_rating():
     assert result.status == "À regarder"
     assert result.rating is None
     assert store.updates == {"status": "À regarder", "rating": None}
+import backend.api as api
+
+
+def test_api_module_has_no_simulated_stream_route():
+    paths = {route.path for route in api.router.routes}
+    assert "/api/medias/{media_id}/stream" not in paths

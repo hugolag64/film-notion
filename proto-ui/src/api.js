@@ -40,24 +40,6 @@ export async function updateMedia(mediaId, payload) {
     }
 }
 
-/**
- * Trigger local stream simulation on HP ProDesk server.
- */
-export async function triggerStream(mediaId) {
-    try {
-        const response = await fetch(`${API_BASE_URL}/medias/${mediaId}/stream`, {
-            method: 'POST',
-        });
-        if (!response.ok) {
-            throw new Error(`Failed to trigger stream: ${response.statusText}`);
-        }
-        return await response.json();
-    } catch (error) {
-        console.error('Error triggering stream:', error);
-        throw error;
-    }
-}
-
 export async function fetchAvailability(mediaId) {
     const response = await fetch(`${API_BASE_URL}/medias/${mediaId}/availability`);
     if (!response.ok) throw new Error(`Disponibilité impossible: ${response.statusText}`);
