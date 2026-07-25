@@ -71,6 +71,8 @@ export default function BackstagePrototype() {
     const [showAcquisitionModal, setShowAcquisitionModal] = useState(false);
     const [showActivityModal, setShowActivityModal] = useState(false);
     const [mediaActivity, setMediaActivity] = useState([]);
+    const [mediaDisks, setMediaDisks] = useState([]);
+    const [availabilityByMedia, setAvailabilityByMedia] = useState({});
     const [acquisitionForm, setAcquisitionForm] = useState({ quality_profile_id: '', language_profile_id: '', root_folder: '', monitor: 'all' });
     const [isPlaying, setIsPlaying] = useState(false);
     const [isDarkMode, setIsDarkMode] = useState(false); // Theme toggle state
@@ -106,6 +108,13 @@ export default function BackstagePrototype() {
             .catch(() => setMediaAvailability(null));
     }, [selectedMedia?.id]);
 
+    useEffect(() => {
+        fetchMediaServerActivity().then((activity) => {
+            const items = activity.items || [];
+            setAvailabilityByMedia(Object.fromEntries(items.map(item => [item.media_id, item])));
+        }).catch(() => {});
+    }, []);
+
     const openAcquisition = async () => {
         try {
             setMediaServerError(null);
@@ -135,14 +144,22 @@ export default function BackstagePrototype() {
     const openMediaActivity = async () => {
         try {
             setMediaServerError(null);
-            setMediaActivity((await fetchMediaServerActivity()).items || []);
+            const activity = await fetchMediaServerActivity();
+            const items = activity.items || [];
+            setMediaActivity(items);
+            setMediaDisks(activity.disks || []);
+            setAvailabilityByMedia(Object.fromEntries(items.map(item => [item.media_id, item])));
             setShowActivityModal(true);
         } catch (error) { setMediaServerError(error.message); }
     };
 
     const refreshMediaActivity = async () => {
         await syncMediaServer();
-        setMediaActivity((await fetchMediaServerActivity()).items || []);
+        const activity = await fetchMediaServerActivity();
+        const items = activity.items || [];
+        setMediaActivity(items);
+        setMediaDisks(activity.disks || []);
+        setAvailabilityByMedia(Object.fromEntries(items.map(item => [item.media_id, item])));
     };
 
     const importMediaLibrary = async () => {
@@ -894,6 +911,7 @@ export default function BackstagePrototype() {
                                                     {sup === 'Cinéma' ? '🍿 Cinéma' : sup === 'Serveur' ? '🖥️ Serveur' : sup === 'Physique' ? '📀 Physique' : '🌐 Streaming'}
                                                 </span>
                                             ))}
+                                            {availabilityByMedia[movie.id] && <span className="text-[8.5px] font-mono font-bold px-1.5 py-0.5 rounded-md bg-[#635bff]/90 text-white shadow">{availabilityByMedia[movie.id].state === 'available' ? 'Disponible' : availabilityByMedia[movie.id].state === 'imported' ? 'Possédé' : availabilityByMedia[movie.id].state === 'downloading' ? `${availabilityByMedia[movie.id].progress_percent || 0}%` : availabilityByMedia[movie.id].state === 'searching' ? 'Recherche' : availabilityByMedia[movie.id].state === 'error' ? 'Erreur' : 'Demandé'}</span>}
                                             <button
                                                 onClick={(e) => toggleFavorite(movie.id, e)}
                                                 className="w-6 h-6 rounded-full bg-black/60 backdrop-blur-md flex items-center justify-center text-xs hover:bg-black/80 transition-all text-white/80 shrink-0 ml-auto"
@@ -1108,7 +1126,7 @@ export default function BackstagePrototype() {
                                         </span>
                                         <span className="text-xs font-mono text-white/70">{selectedMovie.year}</span>
                                         {selectedMovie.supports?.filter((support) => ['Serveur', 'Physique', 'Streaming', 'Cinéma'].includes(support)).map((support) => (
-                                            <span className="text-[9px] font-mono uppercase bg-[#d9351c] text-white px-2 py-0.5 rounded-full font-bold shadow">
+                                            <span key={support} className="text-[9px] font-mono uppercase bg-[#d9351c] text-white px-2 py-0.5 rounded-full font-bold shadow">
                                                 {support}
                                             </span>
                                         ))}
@@ -1532,6 +1550,7 @@ export default function BackstagePrototype() {
                     <div className="flex items-center justify-between"><h2 className="font-serif text-lg font-bold">Activité serveur</h2><button onClick={() => setShowActivityModal(false)}>×</button></div>
                     <div className="mt-3 flex gap-2"><button onClick={refreshMediaActivity} className="rounded bg-[#635bff] px-3 py-1.5 text-xs text-white">Actualiser</button><button onClick={importMediaLibrary} className="rounded border px-3 py-1.5 text-xs">Importer la bibliothèque</button></div>
                     <div className="mt-4 max-h-80 space-y-2 overflow-y-auto">{mediaActivity.length ? mediaActivity.map(item => <div key={item.media_id} className="rounded border p-3 text-sm"><strong>{item.provider}</strong> — {item.state}{item.progress_percent != null ? ` (${item.progress_percent}%)` : ''}{item.last_error && <p className="mt-1 text-xs text-red-600">{item.last_error}</p>}</div>) : <p className="text-sm text-slate-500">Aucune activité.</p>}</div>
+                    {mediaDisks.length > 0 && <div className="mt-4 border-t pt-3"><h3 className="text-xs font-bold uppercase tracking-wide">Espace disque</h3><div className="mt-2 grid grid-cols-2 gap-2">{mediaDisks.map((disk, index) => <div key={`${disk.provider}-${disk.path || index}`} className="rounded border p-2 text-xs"><strong>{disk.provider}</strong><br />{disk.path || 'Volume'}<br />{disk.freeSpace != null ? `${Math.round(disk.freeSpace / 1024 / 1024 / 1024)} Go libres` : 'Espace non communiqué'}</div>)}</div></div>}
                 </div>
             </div>}
 
