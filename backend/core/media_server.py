@@ -72,11 +72,28 @@ class MediaServerService:
             remote = next((item for item in await arr.list_library() if item.get("tmdbId") == media.tmdb_id), None)
             if not remote:
                 return await self.store.get_availability(media_id)
+            queue_id_key = "seriesId" if provider == "sonarr" else "movieId"
+            queue_item = next(
+                (item for item in await arr.list_queue() if item.get(queue_id_key) == remote.get("id")),
+                None,
+            )
             jellyfin_item = await self.jellyfin.find_by_tmdb(media.tmdb_id, media.type) if self.jellyfin else None
+            progress_percent = None
+            last_error = None
+            if queue_item and queue_item.get("errorMessage"):
+                state = "error"
+                last_error = str(queue_item["errorMessage"])
+            elif queue_item and isinstance(queue_item.get("size"), (int, float)) and queue_item["size"] > 0:
+                progress_percent = round((1 - queue_item.get("sizeleft", queue_item["size"]) / queue_item["size"]) * 100)
+                state = "downloading"
+            elif queue_item:
+                state = "searching"
+            else:
+                state = "available" if jellyfin_item else "imported" if remote.get("hasFile") else "requested"
             availability = Availability(
                 media_id=media.id, provider=provider, arr_id=remote.get("id"),
                 jellyfin_id=jellyfin_item.get("Id") if jellyfin_item else None,
-                state="available" if jellyfin_item else "imported" if remote.get("hasFile") else "requested",
+                state=state, progress_percent=progress_percent, last_error=last_error,
                 last_synced_at=datetime.now(timezone.utc),
             )
             saved = await self.store.upsert_availability(availability)

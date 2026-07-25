@@ -5,13 +5,16 @@ from backend.core.store import MediaStore
 
 
 class FakeRadarr:
+    def __init__(self, queue=None):
+        self.queue = queue or []
+
     async def add_movie(self, tmdb_id, quality_profile_id, root_folder):
         return {"id": 42, "tmdbId": tmdb_id}
     async def list_library(self):
         return [{"id": 42, "tmdbId": 438631, "hasFile": True}]
 
     async def list_queue(self):
-        return []
+        return self.queue
 
 
 class FakeJellyfin:
@@ -56,3 +59,15 @@ def test_import_existing_library_links_matching_tmdb_media(tmp_path):
 
     assert linked == 1
     assert asyncio.run(store.get_availability(media.id)).arr_id == 42
+
+
+def test_queue_progress_maps_to_downloading(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    service = MediaServerService(store, radarr=FakeRadarr([{"movieId": 42, "size": 100, "sizeleft": 50}]))
+
+    availability = asyncio.run(service.sync_media("dune"))
+
+    assert availability.state == "downloading"
+    assert availability.progress_percent == 50
