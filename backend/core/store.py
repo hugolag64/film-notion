@@ -7,6 +7,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from backend.core.models import Media
+from backend.core.media_server import Availability
 
 _COLUMNS = [
     "id", "title", "original_title", "type", "status", "support", "rating", "release_date",
@@ -64,6 +65,28 @@ class MediaStore:
                     FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE CASCADE
                 )
                 """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS media_availability (
+                    media_id TEXT PRIMARY KEY,
+                    provider TEXT NOT NULL,
+                    arr_id INTEGER,
+                    jellyfin_id TEXT,
+                    state TEXT NOT NULL,
+                    progress_percent INTEGER,
+                    root_folder TEXT,
+                    quality_profile_id INTEGER,
+                    language_profile_id INTEGER,
+                    last_error TEXT,
+                    last_synced_at TEXT,
+                    FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_media_availability_arr "
+                "ON media_availability(provider, arr_id) WHERE arr_id IS NOT NULL"
             )
             # Migration en douceur si les colonnes n'existent pas encore
             cursor = conn.execute("PRAGMA table_info(media)")
@@ -320,6 +343,42 @@ class MediaStore:
             ).fetchone()
         return self._row_to_episode(row)
 
+    @staticmethod
+    def _row_to_availability(row: sqlite3.Row) -> Availability:
+        data = dict(row)
+        if data.get("last_synced_at"):
+            data["last_synced_at"] = datetime.fromisoformat(data["last_synced_at"])
+        return Availability(**data)
+
+    def _get_availability_sync(self, media_id: str) -> Optional[Availability]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM media_availability WHERE media_id = ?", (media_id,)
+            ).fetchone()
+        return self._row_to_availability(row) if row else None
+
+    def _upsert_availability_sync(self, availability: Availability) -> Availability:
+        values = availability.model_dump()
+        if values["last_synced_at"] is not None:
+            values["last_synced_at"] = values["last_synced_at"].isoformat()
+        columns = list(values)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                f"INSERT INTO media_availability ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)}) "
+                "ON CONFLICT(media_id) DO UPDATE SET " + ", ".join(
+                    f"{column} = excluded.{column}" for column in columns if column != "media_id"
+                ),
+                [values[column] for column in columns],
+            )
+        return self._get_availability_sync(availability.media_id)
+
+    def _list_availabilities_sync(self) -> List[Availability]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT * FROM media_availability ORDER BY last_synced_at DESC").fetchall()
+        return [self._row_to_availability(row) for row in rows]
+
     async def fetch_all(self) -> List[Media]:
         return await asyncio.to_thread(self._fetch_all_sync)
 
@@ -349,3 +408,12 @@ class MediaStore:
 
     async def series_progress(self, media_id: str) -> Optional[Dict[str, Any]]:
         return await asyncio.to_thread(self._series_progress_sync, media_id)
+
+    async def get_availability(self, media_id: str) -> Optional[Availability]:
+        return await asyncio.to_thread(self._get_availability_sync, media_id)
+
+    async def upsert_availability(self, availability: Availability) -> Availability:
+        return await asyncio.to_thread(self._upsert_availability_sync, availability)
+
+    async def list_availabilities(self) -> List[Availability]:
+        return await asyncio.to_thread(self._list_availabilities_sync)

@@ -2,6 +2,7 @@ import asyncio
 from datetime import date
 
 from backend.core.store import MediaStore
+from backend.core.media_server import Availability
 
 
 def _store(tmp_path) -> MediaStore:
@@ -124,3 +125,19 @@ def test_update_silently_ignores_unknown_field_keys(tmp_path):
     assert fetched.title == "Dune Remastered"
     assert fetched.director == "Denis Villeneuve"
     # Unknown keys did not cause an error, they were silently ignored
+
+
+def test_upsert_and_fetch_availability(tmp_path):
+    store = _store(tmp_path)
+    media = asyncio.run(store.create({"title": "Dune", "type": "Film"}))
+
+    saved = asyncio.run(store.upsert_availability(Availability(
+        media_id=media.id,
+        provider="radarr",
+        arr_id=42,
+        state="downloading",
+        progress_percent=63,
+    )))
+
+    assert saved.arr_id == 42
+    assert asyncio.run(store.get_availability(media.id)).state == "downloading"

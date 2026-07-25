@@ -17,6 +17,13 @@ class Config:
     OMDB_API_KEY = os.getenv("OMDB_API_KEY")
     # Intervalle de sync auto en minutes (0 = désactivé)
     SYNC_INTERVAL_MIN = int(os.getenv("SYNC_INTERVAL_MIN", "0") or "0")
+    RADARR_URL = os.getenv("RADARR_URL", "http://127.0.0.1:7878")
+    RADARR_API_KEY = os.getenv("RADARR_API_KEY")
+    SONARR_URL = os.getenv("SONARR_URL", "http://127.0.0.1:8989")
+    SONARR_API_KEY = os.getenv("SONARR_API_KEY")
+    JELLYFIN_URL = os.getenv("JELLYFIN_URL", "http://127.0.0.1:8096")
+    JELLYFIN_API_KEY = os.getenv("JELLYFIN_API_KEY")
+    MEDIA_SYNC_INTERVAL_SEC = int(os.getenv("MEDIA_SYNC_INTERVAL_SEC", "60") or "60")
 
     @classmethod
     def ai_enabled(cls) -> bool:
@@ -25,3 +32,19 @@ class Config:
     @classmethod
     def omdb_enabled(cls) -> bool:
         return bool(cls.OMDB_API_KEY)
+
+    @classmethod
+    def radarr_enabled(cls) -> bool:
+        return bool(cls.RADARR_API_KEY)
+
+    @classmethod
+    def sonarr_enabled(cls) -> bool:
+        return bool(cls.SONARR_API_KEY)
+
+    @classmethod
+    def jellyfin_enabled(cls) -> bool:
+        return bool(cls.JELLYFIN_API_KEY)
+
+    @classmethod
+    def media_server_enabled(cls) -> bool:
+        return cls.radarr_enabled() or cls.sonarr_enabled()
