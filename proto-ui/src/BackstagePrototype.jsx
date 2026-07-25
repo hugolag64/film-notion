@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { fetchMedias, updateMedia, searchTMDB, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, fetchMediaServerOptions, requestAcquisition, fetchMediaServerActivity, syncMediaServer, importMediaServerLibrary } from './api';
+import Hls from 'hls.js';
+import { fetchMedias, updateMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, requestAcquisition, fetchMediaServerActivity, syncMediaServer, importMediaServerLibrary } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
 
@@ -73,8 +74,15 @@ export default function BackstagePrototype() {
     const [mediaActivity, setMediaActivity] = useState([]);
     const [mediaDisks, setMediaDisks] = useState([]);
     const [availabilityByMedia, setAvailabilityByMedia] = useState({});
+    const [actorQuery, setActorQuery] = useState('');
+    const [actorSuggestions, setActorSuggestions] = useState([]);
+    const [actorSearchLoading, setActorSearchLoading] = useState(false);
     const [acquisitionForm, setAcquisitionForm] = useState({ quality_profile_id: '', language_profile_id: '', root_folder: '', monitor: 'all' });
-    const [isPlaying, setIsPlaying] = useState(false);
+    const [playerMedia, setPlayerMedia] = useState(null);
+    const [playerLoading, setPlayerLoading] = useState(false);
+    const [playerError, setPlayerError] = useState(null);
+    const videoRef = useRef(null);
+    const hlsRef = useRef(null);
     const [isDarkMode, setIsDarkMode] = useState(false); // Theme toggle state
 
     // TMDB Relink Modal State
@@ -101,12 +109,111 @@ export default function BackstagePrototype() {
 
     const selectedMedia = selectedMovie || selectedSeries;
 
+    const closePlayer = () => {
+        setPlayerMedia(null);
+        setPlayerError(null);
+        setPlayerLoading(false);
+    };
+
+    const openPlayer = () => {
+        if (!selectedMedia?.id || !mediaAvailability?.availability?.jellyfin_id) return;
+        setPlayerError(null);
+        setPlayerLoading(true);
+        setPlayerMedia({
+            title: selectedMedia.title,
+            manifestUrl: getPlaybackManifest(selectedMedia.id),
+        });
+    };
+
+    useEffect(() => {
+        if (!playerMedia || !videoRef.current) return undefined;
+        const video = videoRef.current;
+        const manifestUrl = playerMedia.manifestUrl;
+        let hls;
+
+        const handleReady = () => setPlayerLoading(false);
+        const handleError = () => {
+            setPlayerLoading(false);
+            setPlayerError('Impossible de démarrer la lecture de ce média.');
+        };
+        video.addEventListener('loadeddata', handleReady);
+        video.addEventListener('error', handleError);
+
+        if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            video.src = manifestUrl;
+            video.play().catch(() => {});
+        } else if (Hls.isSupported()) {
+            hls = new Hls({ enableWorker: true });
+            hlsRef.current = hls;
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                setPlayerLoading(false);
+                video.play().catch(() => {});
+            });
+            hls.on(Hls.Events.ERROR, (_event, data) => {
+                if (data.fatal) handleError();
+            });
+            hls.loadSource(manifestUrl);
+            hls.attachMedia(video);
+        } else {
+            handleError();
+        }
+
+        return () => {
+            video.removeEventListener('loadeddata', handleReady);
+            video.removeEventListener('error', handleError);
+            hls?.destroy();
+            hlsRef.current = null;
+            video.pause();
+            video.removeAttribute('src');
+            video.load();
+        };
+    }, [playerMedia]);
+
     useEffect(() => {
         if (!selectedMedia?.id) return;
-        fetchAvailability(selectedMedia.id)
-            .then(setMediaAvailability)
-            .catch(() => setMediaAvailability(null));
+        let cancelled = false;
+        const loadAvailability = () => fetchAvailability(selectedMedia.id)
+            .then((result) => { if (!cancelled) setMediaAvailability(result); })
+            .catch(() => { if (!cancelled) setMediaAvailability(null); });
+        setMediaAvailability(null);
+        loadAvailability();
+        window.addEventListener('focus', loadAvailability);
+        return () => {
+            cancelled = true;
+            window.removeEventListener('focus', loadAvailability);
+        };
     }, [selectedMedia?.id]);
+
+    useEffect(() => {
+        setActorQuery('');
+        setActorSuggestions([]);
+    }, [selectedMovie?.id]);
+
+    useEffect(() => {
+        const query = actorQuery.trim();
+        if (query.length < 2) {
+            setActorSuggestions([]);
+            setActorSearchLoading(false);
+            return undefined;
+        }
+        let cancelled = false;
+        const timer = window.setTimeout(async () => {
+            setActorSearchLoading(true);
+            try {
+                const results = await searchTMDBPerson(query);
+                if (!cancelled) setActorSuggestions(results || []);
+            } catch (error) {
+                console.error('Erreur recherche acteur TMDB:', error);
+                if (!cancelled) setActorSuggestions([]);
+            } finally {
+                if (!cancelled) setActorSearchLoading(false);
+            }
+        }, 250);
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timer);
+        };
+    }, [actorQuery]);
 
     useEffect(() => {
         fetchMediaServerActivity().then((activity) => {
@@ -484,7 +591,9 @@ export default function BackstagePrototype() {
         if (!actorName || !actorName.trim()) return;
         const target = movies.find(m => m.id === id);
         if (!target) return;
-        const updated = [...target.cast, actorName.trim()];
+        const canonicalName = actorName.trim();
+        if (target.cast.some((actor) => actor.toLocaleLowerCase() === canonicalName.toLocaleLowerCase())) return;
+        const updated = [...target.cast, canonicalName];
 
         setMovies(prev => prev.map(m => m.id === id ? { ...m, cast: updated } : m));
         if (selectedMovie && selectedMovie.id === id) {
@@ -495,6 +604,13 @@ export default function BackstagePrototype() {
         } catch (err) {
             console.error('API update cast failed:', err);
         }
+    };
+
+    const selectCastActor = (person) => {
+        if (!selectedMovie || !person?.name) return;
+        handleAddCastActor(selectedMovie.id, person.name);
+        setActorQuery('');
+        setActorSuggestions([]);
     };
 
     const handleRemoveCastActor = async (id, actorIndex) => {
@@ -1284,12 +1400,13 @@ export default function BackstagePrototype() {
                                     </div>
                                 </div>
                                 <button
-                                    onClick={mediaAvailability?.playback_url
-                                        ? () => window.open(mediaAvailability.playback_url, '_blank', 'noopener,noreferrer')
-                                        : openAcquisition}
-                                    className="bg-[#635bff] hover:bg-[#5048e5] text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all shadow-md cursor-pointer flex items-center gap-2"
+                                    onClick={mediaAvailability?.availability?.jellyfin_id ? openPlayer : openAcquisition}
+                                    className={mediaAvailability?.availability?.jellyfin_id
+                                        ? 'bg-emerald-500 hover:bg-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-300 text-white text-sm font-bold px-5 py-3 rounded-xl transition-all shadow-lg shadow-emerald-950/40 cursor-pointer flex items-center gap-2 whitespace-nowrap'
+                                        : 'bg-[#635bff] hover:bg-[#5048e5] focus-visible:ring-2 focus-visible:ring-[#a9a3ff] text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all shadow-md cursor-pointer flex items-center gap-2 whitespace-nowrap'}
                                 >
-                                    <span>{mediaAvailability?.playback_url ? 'Lire dans Jellyfin' : 'Ajouter au serveur'}</span>
+                                    <span aria-hidden="true" className={mediaAvailability?.availability?.jellyfin_id ? 'text-base leading-none' : ''}>{mediaAvailability?.availability?.jellyfin_id ? '▶' : '+'}</span>
+                                    <span>{mediaAvailability?.availability?.jellyfin_id ? 'Lire' : 'Ajouter au serveur'}</span>
                                 </button>
                             </div>
 
@@ -1384,33 +1501,32 @@ export default function BackstagePrototype() {
                                             </li>
                                         ))}
                                     </ul>
-                                    <form
-                                        onSubmit={(e) => {
-                                            e.preventDefault();
-                                            const input = e.target.elements.actorInput;
-                                            if (input && input.value.trim()) {
-                                                handleAddCastActor(selectedMovie.id, input.value);
-                                                input.value = '';
-                                            }
-                                        }}
-                                        className="flex gap-1.5"
-                                    >
+                                    <div className="relative">
                                         <input
                                             name="actorInput"
                                             type="text"
-                                            placeholder="+ Ajouter un acteur..."
+                                            value={actorQuery}
+                                            onChange={(e) => setActorQuery(e.target.value)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter' && actorSuggestions[0]) {
+                                                    e.preventDefault();
+                                                    selectCastActor(actorSuggestions[0]);
+                                                }
+                                            }}
+                                            placeholder="Rechercher un acteur TMDB..."
                                             className={`flex-1 text-[11px] px-2 py-1 rounded border outline-none font-sans ${isDarkMode
                                                 ? 'bg-black border-white/20 text-white placeholder-white/40 focus:border-[#635bff]'
                                                 : 'bg-[#f6f9fc] border-[#e3e8ee] text-[#0a2540] placeholder-[#425466]/50 focus:border-[#635bff]'
                                                 }`}
                                         />
-                                        <button
-                                            type="submit"
-                                            className="text-[11px] bg-[#635bff] hover:bg-[#5048e5] text-white px-2.5 py-1 rounded font-medium cursor-pointer"
-                                        >
-                                            +
-                                        </button>
-                                    </form>
+                                        {(actorSearchLoading || actorSuggestions.length > 0) && <div className={`absolute left-0 right-0 top-full z-20 mt-1 overflow-hidden rounded-lg border shadow-lg ${isDarkMode ? 'border-white/15 bg-[#161616]' : 'border-[#e3e8ee] bg-white'}`}>
+                                            {actorSearchLoading && <div className="px-3 py-2 text-[11px] opacity-60">Recherche TMDB…</div>}
+                                            {!actorSearchLoading && actorSuggestions.map((person) => <button key={person.tmdb_id} type="button" onClick={() => selectCastActor(person)} className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-[11px] hover:bg-[#635bff]/10 ${isDarkMode ? 'text-white' : 'text-[#0a2540]'}`}>
+                                                {person.profile_url ? <img src={person.profile_url} alt="" className="h-8 w-8 rounded-full object-cover" /> : <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#635bff]/10 text-[#635bff]">•</span>}
+                                                <span><strong className="block">{person.name}</strong><span className="opacity-60">{person.known_for_department || 'Acteur'}</span></span>
+                                            </button>)}
+                                        </div>}
+                                    </div>
                                 </div>
 
                                 {/* Genres avec sélection complète */}
@@ -1679,36 +1795,43 @@ export default function BackstagePrototype() {
                 </div>
             )}
 
-            {/* Video Player Modal for HP ProDesk Server simulation */}
-            {isPlaying && selectedMovie && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md p-6">
-                    <div className="w-full max-w-4xl bg-[#0a0a0a] rounded-2xl border border-white/20 overflow-hidden shadow-2xl flex flex-col">
+            {/* Full-screen Jellyfin player */}
+            {playerMedia && (
+                <div className="fixed inset-0 z-[70] flex flex-col bg-black">
+                    <div className="w-full h-full bg-[#0a0a0a] overflow-hidden flex flex-col">
                         <div className="p-4 bg-black flex items-center justify-between border-b border-white/10">
                             <div className="flex items-center gap-2">
                                 <span className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse" />
                                 <span className="text-xs font-mono font-bold text-white">
-                                    HP PRODESK MEDIA STREAM • {selectedMovie.title}
+                                    JELLYFIN PLAYER • {playerMedia.title}
                                 </span>
                             </div>
                             <button
-                                onClick={() => setIsPlaying(false)}
+                                onClick={closePlayer}
                                 className="text-white/60 hover:text-white text-xs font-mono px-3 py-1 bg-white/10 rounded"
                             >
                                 ✕ Fermer le lecteur
                             </button>
                         </div>
-                        <div className="aspect-video bg-black flex items-center justify-center relative group">
-                            <div className="text-center space-y-3">
-                                <div className="w-16 h-16 rounded-full bg-[#635bff] mx-auto flex items-center justify-center text-white text-2xl shadow-xl shadow-[#635bff]/40 animate-pulse">
-                                    ▶
+                        <div className="relative flex-1 min-h-0 bg-black flex items-center justify-center group">
+                            <video ref={videoRef} controls autoPlay playsInline className="relative z-10 w-full h-full object-contain" />
+                            {playerLoading && !playerError && (
+                                <div className="absolute inset-0 z-20 flex items-center justify-center text-white/80 bg-black/40">
+                                    <div className="text-center space-y-3">
+                                        <div className="w-12 h-12 border-4 border-white/20 border-t-emerald-400 rounded-full animate-spin mx-auto" />
+                                        <p className="text-sm">Préparation du flux Jellyfin…</p>
+                                    </div>
                                 </div>
-                                <div className="text-sm font-mono text-white/80">
-                                    Flux vidéo en provenance du HP ProDesk...
+                            )}
+                            {playerError && (
+                                <div className="absolute inset-0 z-30 flex items-center justify-center text-white bg-black/70 p-6">
+                                    <div className="text-center space-y-4 max-w-md">
+                                        <p className="text-lg font-semibold">Lecture impossible</p>
+                                        <p className="text-sm text-white/70">{playerError}</p>
+                                        <button onClick={closePlayer} className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 font-semibold cursor-pointer">Fermer</button>
+                                    </div>
                                 </div>
-                                <div className="text-xs font-mono text-white/40">
-                                    {selectedMovie.localStreamUrl}
-                                </div>
-                            </div>
+                            )}
                         </div>
                     </div>
                 </div>

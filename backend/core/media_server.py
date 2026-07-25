@@ -114,6 +114,21 @@ class MediaServerService:
             return self.jellyfin.playback_url(availability.jellyfin_id)
         return None
 
+    async def playback_manifest(self, media_id: str) -> Optional[dict[str, str]]:
+        availability = await self.store.get_availability(media_id)
+        if availability and availability.jellyfin_id and self.jellyfin:
+            return {
+                "item_id": availability.jellyfin_id,
+                "url": self.jellyfin.playback_manifest_url(availability.jellyfin_id),
+            }
+        return None
+
+    async def playback_resource(self, media_id: str, resource_path: str, query: dict[str, str]):
+        availability = await self.store.get_availability(media_id)
+        if not availability or not availability.jellyfin_id or not self.jellyfin:
+            return None
+        return await self.jellyfin.fetch_playback_resource(availability.jellyfin_id, resource_path, query)
+
     async def import_existing_libraries(self) -> dict[str, int]:
         """Link already-managed Arr items to local TMDB-linked records."""
         medias = await self.store.fetch_all()

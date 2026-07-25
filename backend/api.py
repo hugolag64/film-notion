@@ -1,6 +1,8 @@
 """FastAPI REST API for Backstage UI integration."""
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, HTTPException, Depends
+import httpx
+from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from backend.config import Config
@@ -8,11 +10,29 @@ from backend.core.store import MediaStore
 from backend.core.models import Media
 
 from backend.core.tmdb import TMDBClient
+from backend.core.mapping import is_series
+from backend.core.tmdb_relink import build_relink_updates
 from backend.core.arr import RadarrClient, SonarrClient
 from backend.core.jellyfin import JellyfinClient
 from backend.core.media_server import MediaServerService
+from urllib.parse import quote, parse_qsl, urlencode, urlsplit
 
 router = APIRouter(prefix="/api", tags=["medias"])
+
+
+def _rewrite_hls_manifest(manifest: str, media_id: str) -> str:
+    rewritten = []
+    for line in manifest.splitlines():
+        if not line or line.startswith("#"):
+            rewritten.append(line)
+            continue
+        parsed = urlsplit(line)
+        query = [(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True) if key.lower() != "api_key"]
+        resource = f"/api/medias/{quote(media_id, safe='')}/playback/resource/{quote(parsed.path, safe='/')}"
+        if query:
+            resource += f"?{urlencode(query)}"
+        rewritten.append(resource)
+    return "\n".join(rewritten) + ("\n" if manifest.endswith("\n") else "")
 
 
 def get_store() -> MediaStore:
@@ -56,7 +76,10 @@ class AcquisitionRequest(BaseModel):
 def get_media_server_service(store: MediaStore = Depends(get_store)) -> MediaServerService:
     radarr = RadarrClient(Config.RADARR_URL, Config.RADARR_API_KEY) if Config.radarr_enabled() else None
     sonarr = SonarrClient(Config.SONARR_URL, Config.SONARR_API_KEY) if Config.sonarr_enabled() else None
-    jellyfin = JellyfinClient(Config.JELLYFIN_URL, Config.JELLYFIN_API_KEY) if Config.jellyfin_enabled() else None
+    jellyfin = JellyfinClient(
+        Config.JELLYFIN_URL, Config.JELLYFIN_API_KEY,
+        server_id=Config.JELLYFIN_SERVER_ID,
+    ) if Config.jellyfin_enabled() else None
     return MediaServerService(store, radarr=radarr, sonarr=sonarr, jellyfin=jellyfin)
 
 
@@ -100,6 +123,20 @@ async def search_tmdb_tv_endpoint(query: str):
     return await search_tmdb_tv(query, TMDBClient())
 
 
+@router.get("/tmdb/search/person")
+async def search_tmdb_person_endpoint(query: str):
+    if not query or len(query.strip()) < 2:
+        return []
+    tmdb = TMDBClient()
+    results = await tmdb.search_person(query.strip())
+    return [{
+        "tmdb_id": result.get("id"),
+        "name": result.get("name") or "",
+        "known_for_department": result.get("known_for_department") or "",
+        "profile_url": tmdb.poster_url_from_path(result.get("profile_path"), "w185"),
+    } for result in results if result.get("id") and result.get("name")]
+
+
 @router.post("/medias/{media_id}/relink_tmdb", response_model=Media)
 async def relink_tmdb(
     media_id: str,
@@ -111,26 +148,11 @@ async def relink_tmdb(
         raise HTTPException(status_code=404, detail="Média non trouvé")
 
     tmdb = TMDBClient()
-    details = await tmdb.get_movie_details(payload.tmdb_id)
+    details = await tmdb.get_details(payload.tmdb_id, is_series=is_series(media.type))
     if not details:
         raise HTTPException(status_code=400, detail="Impossible de récupérer les détails TMDB pour cet ID")
 
-    updates = {
-        "title": details.get("title") or media.title,
-        "original_title": details.get("original_title") or media.original_title,
-        "cover_url": tmdb.get_poster_url(details) or media.cover_url,
-        "backdrop_url": tmdb.get_backdrop_url(details) or media.backdrop_url,
-        "cast": tmdb.get_cast(details, limit=5),
-        "director": tmdb.get_director(details) or media.director,
-        "synopsis": (details.get("overview") or media.synopsis)[:2000],
-        "categories": tmdb.get_genres(details) or media.categories,
-        "tmdb_ok": True,
-        "tmdb_id": payload.tmdb_id,
-    }
-    if details.get("release_date"):
-        updates["release_date"] = details["release_date"]
-
-    await store.update(media_id, updates)
+    await store.update(media_id, build_relink_updates(media, details, tmdb, payload.tmdb_id))
     refreshed = await store.fetch_one(media_id)
     return refreshed
 
@@ -385,6 +407,48 @@ async def get_availability(
     availability = await service.store.get_availability(media_id)
     playback_url = await service.playback_url(media_id)
     return {"availability": availability, "playback_url": playback_url}
+
+
+@router.get("/medias/{media_id}/playback/manifest")
+async def get_playback_manifest(
+    media_id: str,
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    playback = await service.playback_manifest(media_id)
+    if not playback or not service.jellyfin:
+        raise HTTPException(status_code=404, detail="Lecture indisponible")
+    try:
+        response = await service.jellyfin.fetch_playback_resource(
+            playback["item_id"], "master.m3u8",
+            {"VideoCodec": "h264", "AudioCodec": "aac", "Container": "ts",
+             "TranscodingContainer": "ts", "TranscodingProtocol": "hls",
+             "MaxWidth": "1920", "MaxHeight": "1080", "MediaSourceId": playback["item_id"]},
+        )
+    except (httpx.HTTPError, ValueError):
+        raise HTTPException(status_code=502, detail="Flux Jellyfin indisponible") from None
+    manifest = _rewrite_hls_manifest(response.text, media_id)
+    return Response(content=manifest, media_type="application/vnd.apple.mpegurl")
+
+
+@router.get("/medias/{media_id}/playback/resource/{resource_path:path}")
+async def get_playback_resource(
+    media_id: str,
+    resource_path: str,
+    request: Request,
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    query = {key: value for key, value in request.query_params.multi_items() if key.lower() != "api_key"}
+    try:
+        response = await service.playback_resource(media_id, resource_path, query)
+    except (httpx.HTTPError, ValueError):
+        raise HTTPException(status_code=502, detail="Ressource Jellyfin indisponible") from None
+    if response is None:
+        raise HTTPException(status_code=404, detail="Lecture indisponible")
+    media_type = response.headers.get("content-type", "application/octet-stream").split(";", 1)[0]
+    return Response(content=response.content, media_type=media_type, headers={
+        key: value for key, value in response.headers.items()
+        if key.lower() in {"content-length", "content-range", "accept-ranges", "cache-control"}
+    })
 
 
 @router.post("/medias/{media_id}/acquisition")

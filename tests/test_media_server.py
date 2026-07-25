@@ -24,6 +24,9 @@ class FakeJellyfin:
     def playback_url(self, item_id):
         return f"https://jellyfin.test/web/index.html#!/details?id={item_id}"
 
+    def playback_manifest_url(self, item_id):
+        return f"https://jellyfin.test/Videos/{item_id}/master.m3u8"
+
 
 def test_imported_arr_item_becomes_available_when_jellyfin_matches(tmp_path):
     store = MediaStore(str(tmp_path / "test.db"))
@@ -99,3 +102,26 @@ def test_activity_returns_availability_items_and_disks(tmp_path):
     activity = asyncio.run(service.activity())
 
     assert set(activity) == {"items", "disks"}
+
+
+def test_playback_manifest_returns_available_jellyfin_item(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    media = asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film"}))
+    asyncio.run(store.upsert_availability(Availability(
+        media_id=media.id, provider="radarr", jellyfin_id="jelly-dune", state="available",
+    )))
+    service = MediaServerService(store, jellyfin=FakeJellyfin())
+
+    result = asyncio.run(service.playback_manifest(media.id))
+
+    assert result == {"item_id": "jelly-dune", "url": "https://jellyfin.test/Videos/jelly-dune/master.m3u8"}
+
+
+def test_playback_manifest_returns_none_without_availability(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    media = asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film"}))
+    service = MediaServerService(store, jellyfin=FakeJellyfin())
+
+    assert asyncio.run(service.playback_manifest(media.id)) is None

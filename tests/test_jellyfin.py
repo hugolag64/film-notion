@@ -6,8 +6,19 @@ from backend.core.jellyfin import JellyfinClient
 
 
 def test_playback_url_points_to_jellyfin_item():
+    client = JellyfinClient("https://jellyfin.example.test", "secret", server_id="server-1")
+    assert client.playback_url("abc") == "https://jellyfin.example.test/web/index.html#/details?id=abc&serverId=server-1"
+
+
+def test_playback_manifest_url_requests_browser_compatible_hls_without_api_key():
     client = JellyfinClient("https://jellyfin.example.test", "secret")
-    assert client.playback_url("abc") == "https://jellyfin.example.test/web/index.html#!/details?id=abc"
+    url = client.playback_manifest_url("abc")
+
+    assert url.startswith("https://jellyfin.example.test/Videos/abc/master.m3u8?")
+    assert "VideoCodec=h264" in url
+    assert "AudioCodec=aac" in url
+    assert "TranscodingProtocol=hls" in url
+    assert "secret" not in url
 
 
 def test_find_by_tmdb_filters_item_type():
@@ -22,5 +33,21 @@ def test_find_by_tmdb_filters_item_type():
             client = JellyfinClient("http://127.0.0.1:8096", "secret", http_client)
             match = await client.find_by_tmdb(438631, "Film")
         assert match["Id"] == "right"
+
+    asyncio.run(run())
+
+
+def test_find_by_tmdb_requests_provider_ids_from_jellyfin():
+    async def handler(request):
+        assert request.url.params.get("Fields") == "ProviderIds"
+        return httpx.Response(200, json={"Items": [
+            {"Id": "interstellar", "Type": "Movie", "ProviderIds": {"Tmdb": "157336"}},
+        ]})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            client = JellyfinClient("http://127.0.0.1:8096", "secret", http_client)
+            match = await client.find_by_tmdb(157336, "Film")
+        assert match["Id"] == "interstellar"
 
     asyncio.run(run())

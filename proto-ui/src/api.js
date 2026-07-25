@@ -46,6 +46,10 @@ export async function fetchAvailability(mediaId) {
     return response.json();
 }
 
+export function getPlaybackManifest(mediaId) {
+    return `${API_BASE_URL}/medias/${encodeURIComponent(mediaId)}/playback/manifest`;
+}
+
 export async function fetchMediaServerOptions(mediaType) {
     const response = await fetch(`${API_BASE_URL}/media-server/options?media_type=${encodeURIComponent(mediaType)}`);
     if (!response.ok) throw new Error((await response.json()).detail || 'Service non configuré');
@@ -127,6 +131,12 @@ export async function createMediaFromTMDB(tmdbId) {
 export async function searchTMDBTV(query) {
     const response = await fetch(`${API_BASE_URL}/tmdb/search/tv?query=${encodeURIComponent(query)}`);
     if (!response.ok) throw new Error(`Failed to search TV: ${response.statusText}`);
+    return response.json();
+}
+
+export async function searchTMDBPerson(query) {
+    const response = await fetch(`${API_BASE_URL}/tmdb/search/person?query=${encodeURIComponent(query)}`);
+    if (!response.ok) throw new Error(`Failed to search TMDB people: ${response.statusText}`);
     return response.json();
 }
 
