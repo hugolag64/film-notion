@@ -78,6 +78,18 @@ export async function requestAcquisition(mediaId, payload) {
     return response.json();
 }
 
+export async function syncMediaServer() {
+    const response = await fetch(`${API_BASE_URL}/media-server/sync`, {method: 'POST'});
+    if (!response.ok) throw new Error((await response.json()).detail || 'Synchronisation impossible');
+    return response.json();
+}
+
+export async function fetchMediaServerActivity() {
+    const response = await fetch(`${API_BASE_URL}/media-server/activity`);
+    if (!response.ok) throw new Error((await response.json()).detail || 'Activité indisponible');
+    return response.json();
+}
+
 /**
  * Search TMDB for movies by query.
  */

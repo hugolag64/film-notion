@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { fetchMedias, updateMedia, searchTMDB, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, fetchMediaServerOptions, requestAcquisition } from './api';
+import { fetchMedias, updateMedia, searchTMDB, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, fetchMediaServerOptions, requestAcquisition, fetchMediaServerActivity, syncMediaServer } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
 
@@ -69,6 +69,8 @@ export default function BackstagePrototype() {
     const [mediaServerError, setMediaServerError] = useState(null);
     const [mediaServerOptions, setMediaServerOptions] = useState(null);
     const [showAcquisitionModal, setShowAcquisitionModal] = useState(false);
+    const [showActivityModal, setShowActivityModal] = useState(false);
+    const [mediaActivity, setMediaActivity] = useState([]);
     const [acquisitionForm, setAcquisitionForm] = useState({ quality_profile_id: '', language_profile_id: '', root_folder: '', monitor: 'all' });
     const [isPlaying, setIsPlaying] = useState(false);
     const [isDarkMode, setIsDarkMode] = useState(false); // Theme toggle state
@@ -95,17 +97,19 @@ export default function BackstagePrototype() {
         }
     };
 
+    const selectedMedia = selectedMovie || selectedSeries;
+
     useEffect(() => {
-        if (!selectedMovie?.id) return;
-        fetchAvailability(selectedMovie.id)
+        if (!selectedMedia?.id) return;
+        fetchAvailability(selectedMedia.id)
             .then(setMediaAvailability)
             .catch(() => setMediaAvailability(null));
-    }, [selectedMovie?.id]);
+    }, [selectedMedia?.id]);
 
     const openAcquisition = async () => {
         try {
             setMediaServerError(null);
-            const options = await fetchMediaServerOptions(selectedMovie.type || 'Film');
+            const options = await fetchMediaServerOptions(selectedMedia.type || 'Film');
             setMediaServerOptions(options);
             setAcquisitionForm({
                 quality_profile_id: options.quality_profiles?.[0]?.id || '',
@@ -118,7 +122,7 @@ export default function BackstagePrototype() {
 
     const submitAcquisition = async () => {
         try {
-            const result = await requestAcquisition(selectedMovie.id, {
+            const result = await requestAcquisition(selectedMedia.id, {
                 ...acquisitionForm,
                 quality_profile_id: Number(acquisitionForm.quality_profile_id),
                 language_profile_id: acquisitionForm.language_profile_id ? Number(acquisitionForm.language_profile_id) : null,
@@ -126,6 +130,19 @@ export default function BackstagePrototype() {
             setMediaAvailability({ availability: result.availability, playback_url: null });
             setShowAcquisitionModal(false);
         } catch (error) { setMediaServerError(error.message); }
+    };
+
+    const openMediaActivity = async () => {
+        try {
+            setMediaServerError(null);
+            setMediaActivity(await fetchMediaServerActivity());
+            setShowActivityModal(true);
+        } catch (error) { setMediaServerError(error.message); }
+    };
+
+    const refreshMediaActivity = async () => {
+        await syncMediaServer();
+        setMediaActivity(await fetchMediaServerActivity());
     };
 
     const handleRelinkMovie = async (mediaId, tmdbId) => {
@@ -819,6 +836,7 @@ export default function BackstagePrototype() {
                                 </>}
                             </h1>
                         </div>
+                        <button onClick={openMediaActivity} className="rounded border px-2 py-1 text-xs text-[#635bff]">Activité serveur</button>
                         <div className={`text-xs font-mono ${isDarkMode ? 'text-white/50' : 'text-[#425466]'
                             }`}>
                             {filteredMovies.length} Titre{filteredMovies.length > 1 ? 's' : ''} affiché{filteredMovies.length > 1 ? 's' : ''}
@@ -957,6 +975,7 @@ export default function BackstagePrototype() {
                                 <div className={`rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
                                     <div className="flex items-center justify-between gap-3"><p className="text-[10px] font-mono uppercase tracking-widest opacity-60">Synopsis</p><button onClick={refreshSelectedSeries} disabled={seriesRefreshing} className="rounded-lg bg-[#635bff] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{seriesRefreshing ? 'Actualisation…' : 'Actualiser TMDB'}</button></div>
                                     <p className="mt-3 text-sm leading-6 opacity-80">{selectedSeries.synopsis || 'Aucun synopsis disponible.'}</p>
+                                    <button onClick={openAcquisition} className="mt-3 rounded-lg bg-[#635bff] px-3 py-1.5 text-xs font-semibold text-white">Ajouter au serveur</button>
                                 </div>
                                 <div className={`rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
                                     <p className="text-[10px] font-mono uppercase tracking-widest opacity-60">Informations</p>
@@ -1502,15 +1521,23 @@ export default function BackstagePrototype() {
                 </div>
             )}
 
-            {showAcquisitionModal && selectedMovie && (
+            {showActivityModal && <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
+                <div className="w-full max-w-xl rounded-xl bg-white p-5 text-[#0a2540]">
+                    <div className="flex items-center justify-between"><h2 className="font-serif text-lg font-bold">Activité serveur</h2><button onClick={() => setShowActivityModal(false)}>×</button></div>
+                    <button onClick={refreshMediaActivity} className="mt-3 rounded bg-[#635bff] px-3 py-1.5 text-xs text-white">Actualiser</button>
+                    <div className="mt-4 max-h-80 space-y-2 overflow-y-auto">{mediaActivity.length ? mediaActivity.map(item => <div key={item.media_id} className="rounded border p-3 text-sm"><strong>{item.provider}</strong> — {item.state}{item.progress_percent != null ? ` (${item.progress_percent}%)` : ''}{item.last_error && <p className="mt-1 text-xs text-red-600">{item.last_error}</p>}</div>) : <p className="text-sm text-slate-500">Aucune activité.</p>}</div>
+                </div>
+            </div>}
+
+            {showAcquisitionModal && selectedMedia && (
                 <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
                     <div className="w-full max-w-md rounded-xl bg-white p-5 text-[#0a2540]">
-                        <h2 className="font-serif text-lg font-bold">Ajouter au serveur</h2>
+                        <h2 className="font-serif text-lg font-bold">Ajouter {selectedMedia.title} au serveur</h2>
                         <div className="mt-4 space-y-3">
                             <select className="w-full rounded border p-2" value={acquisitionForm.quality_profile_id} onChange={e => setAcquisitionForm({...acquisitionForm, quality_profile_id: e.target.value})}>
                                 {mediaServerOptions?.quality_profiles?.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                             </select>
-                            {selectedMovie.type === 'Série' && <select className="w-full rounded border p-2" value={acquisitionForm.language_profile_id} onChange={e => setAcquisitionForm({...acquisitionForm, language_profile_id: e.target.value})}>
+                            {selectedMedia.type === 'Série' && <select className="w-full rounded border p-2" value={acquisitionForm.language_profile_id} onChange={e => setAcquisitionForm({...acquisitionForm, language_profile_id: e.target.value})}>
                                 {mediaServerOptions?.language_profiles?.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                             </select>}
                             <select className="w-full rounded border p-2" value={acquisitionForm.root_folder} onChange={e => setAcquisitionForm({...acquisitionForm, root_folder: e.target.value})}>
