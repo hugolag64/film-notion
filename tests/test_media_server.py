@@ -89,3 +89,13 @@ def test_import_creates_missing_film_from_remote_tmdb_id(tmp_path):
 
 async def _async_result(value):
     return value
+
+
+def test_activity_returns_availability_items_and_disks(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    service = MediaServerService(store, radarr=FakeRadarr())
+
+    activity = asyncio.run(service.activity())
+
+    assert set(activity) == {"items", "disks"}

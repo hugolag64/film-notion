@@ -135,14 +135,14 @@ export default function BackstagePrototype() {
     const openMediaActivity = async () => {
         try {
             setMediaServerError(null);
-            setMediaActivity(await fetchMediaServerActivity());
+            setMediaActivity((await fetchMediaServerActivity()).items || []);
             setShowActivityModal(true);
         } catch (error) { setMediaServerError(error.message); }
     };
 
     const refreshMediaActivity = async () => {
         await syncMediaServer();
-        setMediaActivity(await fetchMediaServerActivity());
+        setMediaActivity((await fetchMediaServerActivity()).items || []);
     };
 
     const handleRelinkMovie = async (mediaId, tmdbId) => {

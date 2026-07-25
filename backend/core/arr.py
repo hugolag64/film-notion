@@ -39,6 +39,10 @@ class ArrClient:
         data = await self._request("GET", "/api/v3/queue")
         return data.get("records", []) if isinstance(data, dict) else []
 
+    async def disk_space(self) -> list[dict[str, Any]]:
+        data = await self._request("GET", "/api/v3/diskspace")
+        return data if isinstance(data, list) else []
+
 
 class RadarrClient(ArrClient):
     library_path = "/api/v3/movie"

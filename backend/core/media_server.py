@@ -152,5 +152,17 @@ class MediaServerService:
                     synced += 1
         return {"synced": synced}
 
-    async def activity(self) -> list[dict[str, Any]]:
-        return [availability.model_dump(mode="json") for availability in await self.store.list_availabilities()]
+    async def activity(self) -> dict[str, list[dict[str, Any]]]:
+        disks: list[dict[str, Any]] = []
+        for provider, client in (("radarr", self.radarr), ("sonarr", self.sonarr)):
+            if client is None or not hasattr(client, "disk_space"):
+                continue
+            try:
+                for disk in await client.disk_space():
+                    disks.append({"provider": provider, **disk})
+            except Exception:
+                continue
+        return {
+            "items": [availability.model_dump(mode="json") for availability in await self.store.list_availabilities()],
+            "disks": disks,
+        }
