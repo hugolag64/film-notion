@@ -54,6 +54,7 @@ MediaStore(Config.DB_PATH).init_schema()
 
 # Synchronisation auto périodique (si SYNC_INTERVAL_MIN > 0)
 app.on_startup(scheduler.start)
+app.on_startup(scheduler.start_media_server_sync)
 
 # Ferme proprement le client HTTP partagé à l'arrêt
 app.on_shutdown(http.aclose)

@@ -20,6 +20,13 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+## Serveur média local
+
+Ajoute les variables de `.env.example` pour activer Radarr, Sonarr et Jellyfin.
+Backstage garde les clés API côté serveur, synchronise les états régulièrement et
+ouvre Jellyfin pour la lecture. Garde les API *arr locales ; pour l'accès extérieur,
+protège Backstage et Jellyfin avec une couche privée ou un reverse proxy authentifié.
+
 ## Configuration
 
 Crée un fichier `.env` à la racine :

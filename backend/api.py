@@ -435,3 +435,15 @@ async def media_server_options(
     if not client:
         raise HTTPException(status_code=503, detail="Service non configuré")
     return await client.list_options()
+
+
+@router.post("/media-server/sync")
+async def sync_media_server(service: MediaServerService = Depends(get_media_server_service)):
+    if not Config.media_server_enabled():
+        raise HTTPException(status_code=503, detail="Service non configuré")
+    return await service.sync_all()
+
+
+@router.get("/media-server/activity")
+async def media_server_activity(service: MediaServerService = Depends(get_media_server_service)):
+    return await service.activity()

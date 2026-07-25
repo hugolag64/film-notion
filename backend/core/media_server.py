@@ -119,3 +119,14 @@ class MediaServerService:
                 ))
                 linked += 1
         return linked
+
+    async def sync_all(self) -> dict[str, int]:
+        synced = 0
+        for media in await self.store.fetch_all():
+            if media.tmdb_id and media.type in {"Film", "Série"}:
+                if await self.sync_media(media.id):
+                    synced += 1
+        return {"synced": synced}
+
+    async def activity(self) -> list[dict[str, Any]]:
+        return [availability.model_dump(mode="json") for availability in await self.store.list_availabilities()]
