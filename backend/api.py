@@ -253,13 +253,19 @@ async def refresh_series_from_tmdb(media_id: str, store: MediaStore, tmdb: TMDBC
         raise HTTPException(status_code=404, detail="Média non trouvé")
     if series.type != "Série":
         raise HTTPException(status_code=400, detail="Ce média n'est pas une série")
-    if not series.tmdb_id:
-        raise HTTPException(status_code=400, detail="Cette série doit d'abord être liée à TMDB")
+    tmdb_id = series.tmdb_id
+    if not tmdb_id:
+        # Les séries importées avant l'ajout de tmdb_id restent enrichissables :
+        # on les associe une première fois à partir de leur titre local.
+        matches = await tmdb.search_tv(series.title)
+        if not matches or not matches[0].get("id"):
+            raise HTTPException(status_code=404, detail="Aucune série TMDB trouvée pour ce titre")
+        tmdb_id = int(matches[0]["id"])
 
-    details = await tmdb.get_tv_details(series.tmdb_id)
+    details = await tmdb.get_tv_details(tmdb_id)
     if not details:
         raise HTTPException(status_code=502, detail="Impossible de récupérer les détails TMDB")
-    episodes = await _fetch_tmdb_series_episodes(series.tmdb_id, details, tmdb)
+    episodes = await _fetch_tmdb_series_episodes(tmdb_id, details, tmdb)
     updates = {
         "original_title": details.get("original_name") or series.original_title,
         "release_date": details.get("first_air_date") or details.get("release_date") or series.release_date,
@@ -270,6 +276,7 @@ async def refresh_series_from_tmdb(media_id: str, store: MediaStore, tmdb: TMDBC
         "backdrop_url": tmdb.get_backdrop_url(details) or series.backdrop_url,
         "cast": tmdb.get_cast(details, limit=5) or series.cast,
         "tmdb_ok": True,
+        "tmdb_id": tmdb_id,
     }
     await store.update(media_id, updates)
     await store.upsert_episodes(media_id, episodes)

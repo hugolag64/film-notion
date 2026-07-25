@@ -50,12 +50,14 @@ export default function BackstagePrototype() {
     const [seriesEpisodes, setSeriesEpisodes] = useState([]);
     const [seriesProgress, setSeriesProgress] = useState(null);
     const [openSeasons, setOpenSeasons] = useState({});
+    const [openEpisodes, setOpenEpisodes] = useState({});
     const [seriesTab, setSeriesTab] = useState('details');
     const [seriesRefreshing, setSeriesRefreshing] = useState(false);
     const seriesRequestId = useRef(0);
     const selectedSeriesId = useRef(null);
     const episodeUpdateQueue = useRef(Promise.resolve());
     const episodeIntents = useRef(new Map());
+    const episodeClickTimers = useRef(new Map());
     const [searchQuery, setSearchQuery] = useState('');
     const [filters, setFilters] = useState({ genre: '', director: '', status: '', support: '' });
     const [sort, setSort] = useState({ key: 'createdAt', direction: 'desc' });
@@ -514,12 +516,13 @@ export default function BackstagePrototype() {
     };
 
     const refreshSelectedSeries = async () => {
-        if (!selectedSeries?.tmdbId || seriesRefreshing) return;
+        if (!selectedSeries || seriesRefreshing) return;
         setSeriesRefreshing(true);
         try {
             const refreshed = await refreshSeriesFromTMDB(selectedSeries.id);
             const mapped = {
                 ...selectedSeries,
+                tmdbId: refreshed.tmdb_id || selectedSeries.tmdbId,
                 originalTitle: refreshed.original_title || selectedSeries.originalTitle,
                 director: refreshed.director || selectedSeries.director,
                 genre: refreshed.categories || selectedSeries.genre,
@@ -583,6 +586,24 @@ export default function BackstagePrototype() {
                     }
                 }
             });
+    };
+
+    const handleEpisodeClick = (episodeId) => {
+        const timer = window.setTimeout(() => {
+            episodeClickTimers.current.delete(episodeId);
+            setOpenEpisodes((current) => ({ ...current, [episodeId]: !current[episodeId] }));
+        }, 220);
+        episodeClickTimers.current.set(episodeId, timer);
+    };
+
+    const handleEpisodeDoubleClick = (event, episode) => {
+        event.preventDefault();
+        const timer = episodeClickTimers.current.get(episode.id);
+        if (timer) {
+            window.clearTimeout(timer);
+            episodeClickTimers.current.delete(episode.id);
+        }
+        toggleEpisode(episode);
     };
 
 
@@ -896,12 +917,13 @@ export default function BackstagePrototype() {
                                     <div className="mt-2 flex items-center justify-between gap-3"><strong>{selectedSeries.originalTitle}</strong><button onClick={useOriginalSeriesTitle} className="rounded-lg border border-[#635bff]/40 px-3 py-1.5 text-xs font-semibold text-[#635bff]">Utiliser comme titre principal</button></div>
                                 </div>}
                                 <div className={`rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
-                                    <div className="flex items-center justify-between gap-3"><p className="text-[10px] font-mono uppercase tracking-widest opacity-60">Synopsis</p>{selectedSeries.tmdbId && <button onClick={refreshSelectedSeries} disabled={seriesRefreshing} className="rounded-lg bg-[#635bff] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{seriesRefreshing ? 'Actualisation…' : 'Actualiser TMDB'}</button>}</div>
+                                    <div className="flex items-center justify-between gap-3"><p className="text-[10px] font-mono uppercase tracking-widest opacity-60">Synopsis</p><button onClick={refreshSelectedSeries} disabled={seriesRefreshing} className="rounded-lg bg-[#635bff] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{seriesRefreshing ? 'Actualisation…' : 'Actualiser TMDB'}</button></div>
                                     <p className="mt-3 text-sm leading-6 opacity-80">{selectedSeries.synopsis || 'Aucun synopsis disponible.'}</p>
                                 </div>
                                 <div className={`rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
                                     <p className="text-[10px] font-mono uppercase tracking-widest opacity-60">Informations</p>
                                     <div className="mt-3 grid grid-cols-2 gap-4 text-sm"><div><span className="block text-xs opacity-60">Créateur</span>{selectedSeries.director || '—'}</div><div><span className="block text-xs opacity-60">Statut</span>{selectedSeries.status || 'À regarder'}</div><div className="col-span-2"><span className="block text-xs opacity-60">Genres</span>{(selectedSeries.genre || []).join(' • ') || '—'}</div><div className="col-span-2"><span className="block text-xs opacity-60">Casting</span>{(selectedSeries.cast || []).join(' • ') || '—'}</div></div>
+                                    <div className="mt-4 flex flex-wrap gap-2">{['À regarder', 'Terminé', 'Watchlist'].map((status) => <button key={status} onClick={() => { handleStatusChange(selectedSeries.id, status); setSelectedSeries((current) => ({ ...current, status })); }} className={`rounded-lg border px-3 py-1.5 text-xs ${selectedSeries.status === status ? 'border-[#635bff] bg-[#635bff]/10 text-[#635bff]' : 'opacity-70'}`}>{status}</button>)}</div>
                                 </div>
                             </div>}
 
@@ -926,16 +948,18 @@ export default function BackstagePrototype() {
                                             <span className="text-xs font-mono text-[#635bff]">{progress ? `${progress.watched} / ${progress.total} • ${Math.round(progress.percentage)} %` : 'Chargement…'} {isOpen ? '⌃' : '⌄'}</span>
                                         </button>
                                         <div className="h-1 bg-black/10 dark:bg-white/10"><div className="series-progress-fill h-full bg-[#635bff]" style={{ width: `${progress?.percentage || 0}%` }} /></div>
-                                        <div className={`season-content divide-y divide-black/10 dark:divide-white/10 ${isOpen ? 'season-content-open' : ''}`}>
+                                        <div className={`season-content ${isOpen ? 'season-content-open' : ''}`}><div className="divide-y divide-black/10 dark:divide-white/10">
                                             {episodes.map((episode) => (
-                                                <label key={episode.id} className="flex cursor-pointer items-center gap-3 p-3 text-sm">
-                                                    <input type="checkbox" checked={episode.watched} onChange={() => toggleEpisode(episode)} className="h-4 w-4 accent-[#635bff]" />
+                                                <div key={episode.id} onClick={() => handleEpisodeClick(episode.id)} onDoubleClick={(event) => handleEpisodeDoubleClick(event, episode)} className="cursor-pointer p-3 text-sm">
+                                                    <div className="flex items-center gap-3">
+                                                    <input type="checkbox" checked={episode.watched} onClick={(event) => event.stopPropagation()} onChange={() => toggleEpisode(episode)} className="h-4 w-4 accent-[#635bff]" />
                                                     <span className="font-mono text-xs text-[#635bff]">E{String(episode.episode_number).padStart(2, '0')}</span>
                                                     <span className={episode.watched ? 'line-through opacity-50' : ''}>{episode.title}</span>
-                                                    {episode.synopsis && <span className="text-xs opacity-60">{episode.synopsis}</span>}
-                                                </label>
+                                                    </div>
+                                                    {openEpisodes[episode.id] && <p className="ml-7 mt-2 text-xs leading-relaxed opacity-70">{episode.synopsis || 'Aucun synopsis disponible pour cet épisode.'}</p>}
+                                                </div>
                                             ))}
-                                        </div>
+                                        </div></div>
                                     </div>
                                 );
                             })}

@@ -238,3 +238,24 @@ def test_refresh_series_updates_tmdb_metadata_and_preserves_watched_episodes(fak
         (2, False, "Episode two synopsis."),
         (3, False, "A new episode."),
     ]
+
+
+def test_refresh_series_links_legacy_series_and_adds_episode_synopses(fake_tmdb, store):
+    from backend.api import refresh_series_from_tmdb
+
+    legacy = asyncio.run(store.create({"title": "Severance", "type": "Série"}))
+    asyncio.run(store.create_episodes(legacy.id, [
+        {"season_number": 1, "episode_number": 1, "title": "Ancien titre"},
+    ]))
+
+    async def season_with_synopsis(tmdb_id, season_number):
+        return {"episodes": [
+            {"episode_number": 1, "name": "Nouveau titre", "overview": "Synopsis TMDB de l'épisode."},
+        ]}
+
+    fake_tmdb.get_tv_season_details = season_with_synopsis
+
+    refreshed = asyncio.run(refresh_series_from_tmdb(legacy.id, store, fake_tmdb))
+
+    assert refreshed.tmdb_id == 1
+    assert asyncio.run(store.list_episodes(legacy.id))[0]["synopsis"] == "Synopsis TMDB de l'épisode."
