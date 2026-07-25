@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { fetchMedias, updateMedia, searchTMDB, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB } from './api';
+import { fetchMedias, updateMedia, searchTMDB, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, fetchMediaServerOptions, requestAcquisition } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
 
@@ -65,6 +65,11 @@ export default function BackstagePrototype() {
     const [addQuery, setAddQuery] = useState('');
     const [addResults, setAddResults] = useState([]);
     const [addLoading, setAddLoading] = useState(false);
+    const [mediaAvailability, setMediaAvailability] = useState(null);
+    const [mediaServerError, setMediaServerError] = useState(null);
+    const [mediaServerOptions, setMediaServerOptions] = useState(null);
+    const [showAcquisitionModal, setShowAcquisitionModal] = useState(false);
+    const [acquisitionForm, setAcquisitionForm] = useState({ quality_profile_id: '', language_profile_id: '', root_folder: '', monitor: 'all' });
     const [isPlaying, setIsPlaying] = useState(false);
     const [isDarkMode, setIsDarkMode] = useState(false); // Theme toggle state
 
@@ -88,6 +93,39 @@ export default function BackstagePrototype() {
         } finally {
             setTmdbLoading(false);
         }
+    };
+
+    useEffect(() => {
+        if (!selectedMovie?.id) return;
+        fetchAvailability(selectedMovie.id)
+            .then(setMediaAvailability)
+            .catch(() => setMediaAvailability(null));
+    }, [selectedMovie?.id]);
+
+    const openAcquisition = async () => {
+        try {
+            setMediaServerError(null);
+            const options = await fetchMediaServerOptions(selectedMovie.type || 'Film');
+            setMediaServerOptions(options);
+            setAcquisitionForm({
+                quality_profile_id: options.quality_profiles?.[0]?.id || '',
+                language_profile_id: options.language_profiles?.[0]?.id || '',
+                root_folder: options.root_folders?.[0]?.path || '', monitor: 'all',
+            });
+            setShowAcquisitionModal(true);
+        } catch (error) { setMediaServerError(error.message); }
+    };
+
+    const submitAcquisition = async () => {
+        try {
+            const result = await requestAcquisition(selectedMovie.id, {
+                ...acquisitionForm,
+                quality_profile_id: Number(acquisitionForm.quality_profile_id),
+                language_profile_id: acquisitionForm.language_profile_id ? Number(acquisitionForm.language_profile_id) : null,
+            });
+            setMediaAvailability({ availability: result.availability, playback_url: null });
+            setShowAcquisitionModal(false);
+        } catch (error) { setMediaServerError(error.message); }
     };
 
     const handleRelinkMovie = async (mediaId, tmdbId) => {
@@ -1203,10 +1241,12 @@ export default function BackstagePrototype() {
                                     </div>
                                 </div>
                                 <button
-                                    onClick={() => setIsPlaying(true)}
+                                    onClick={mediaAvailability?.playback_url
+                                        ? () => window.open(mediaAvailability.playback_url, '_blank', 'noopener,noreferrer')
+                                        : openAcquisition}
                                     className="bg-[#635bff] hover:bg-[#5048e5] text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all shadow-md cursor-pointer flex items-center gap-2"
                                 >
-                                    <span>Lancer le film</span>
+                                    <span>{mediaAvailability?.playback_url ? 'Lire dans Jellyfin' : 'Ajouter au serveur'}</span>
                                 </button>
                             </div>
 
@@ -1458,6 +1498,27 @@ export default function BackstagePrototype() {
                         <div className="flex justify-between items-center mb-3"><h2 className="font-serif text-lg font-bold">{collection === 'Séries' ? 'Ajouter une série' : 'Ajouter un film'}</h2><button onClick={() => setShowAddDialog(false)}>✕</button></div>
                         <div className="flex gap-2"><input value={addQuery} onChange={e => setAddQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && searchToAdd()} placeholder={collection === 'Séries' ? 'Titre de la série' : 'Titre du film'} className="flex-1 rounded border px-3 py-2"/><button onClick={searchToAdd} className="rounded bg-[#635bff] px-3 py-2 text-white">Rechercher</button></div>
                         <div className="mt-4 space-y-2">{addLoading ? 'Chargement…' : addResults.map(result => <button key={result.tmdb_id} onClick={() => addFromTMDB(result.tmdb_id)} className="block w-full rounded border p-3 text-left hover:border-[#635bff]"><strong>{result.title}</strong> {result.release_date?.slice(0, 4)}</button>)}</div>
+                    </div>
+                </div>
+            )}
+
+            {showAcquisitionModal && selectedMovie && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
+                    <div className="w-full max-w-md rounded-xl bg-white p-5 text-[#0a2540]">
+                        <h2 className="font-serif text-lg font-bold">Ajouter au serveur</h2>
+                        <div className="mt-4 space-y-3">
+                            <select className="w-full rounded border p-2" value={acquisitionForm.quality_profile_id} onChange={e => setAcquisitionForm({...acquisitionForm, quality_profile_id: e.target.value})}>
+                                {mediaServerOptions?.quality_profiles?.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            </select>
+                            {selectedMovie.type === 'Série' && <select className="w-full rounded border p-2" value={acquisitionForm.language_profile_id} onChange={e => setAcquisitionForm({...acquisitionForm, language_profile_id: e.target.value})}>
+                                {mediaServerOptions?.language_profiles?.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            </select>}
+                            <select className="w-full rounded border p-2" value={acquisitionForm.root_folder} onChange={e => setAcquisitionForm({...acquisitionForm, root_folder: e.target.value})}>
+                                {mediaServerOptions?.root_folders?.map(folder => <option key={folder.path} value={folder.path}>{folder.path}</option>)}
+                            </select>
+                        </div>
+                        {mediaServerError && <p className="mt-3 text-xs text-red-600">{mediaServerError}</p>}
+                        <div className="mt-5 flex justify-end gap-2"><button onClick={() => setShowAcquisitionModal(false)}>Annuler</button><button className="rounded bg-[#635bff] px-3 py-2 text-white" onClick={submitAcquisition}>Demander</button></div>
                     </div>
                 </div>
             )}

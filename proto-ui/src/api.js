@@ -58,6 +58,26 @@ export async function triggerStream(mediaId) {
     }
 }
 
+export async function fetchAvailability(mediaId) {
+    const response = await fetch(`${API_BASE_URL}/medias/${mediaId}/availability`);
+    if (!response.ok) throw new Error(`Disponibilité impossible: ${response.statusText}`);
+    return response.json();
+}
+
+export async function fetchMediaServerOptions(mediaType) {
+    const response = await fetch(`${API_BASE_URL}/media-server/options?media_type=${encodeURIComponent(mediaType)}`);
+    if (!response.ok) throw new Error((await response.json()).detail || 'Service non configuré');
+    return response.json();
+}
+
+export async function requestAcquisition(mediaId, payload) {
+    const response = await fetch(`${API_BASE_URL}/medias/${mediaId}/acquisition`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload),
+    });
+    if (!response.ok) throw new Error((await response.json()).detail || 'Demande impossible');
+    return response.json();
+}
+
 /**
  * Search TMDB for movies by query.
  */

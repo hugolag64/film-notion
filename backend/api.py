@@ -8,6 +8,9 @@ from backend.core.store import MediaStore
 from backend.core.models import Media
 
 from backend.core.tmdb import TMDBClient
+from backend.core.arr import RadarrClient, SonarrClient
+from backend.core.jellyfin import JellyfinClient
+from backend.core.media_server import MediaServerService
 
 router = APIRouter(prefix="/api", tags=["medias"])
 
@@ -41,6 +44,20 @@ class CreateFromTMDBRequest(BaseModel):
 
 class UpdateEpisodeRequest(BaseModel):
     watched: bool
+
+
+class AcquisitionRequest(BaseModel):
+    quality_profile_id: int
+    root_folder: str
+    language_profile_id: Optional[int] = None
+    monitor: str = "all"
+
+
+def get_media_server_service(store: MediaStore = Depends(get_store)) -> MediaServerService:
+    radarr = RadarrClient(Config.RADARR_URL, Config.RADARR_API_KEY) if Config.radarr_enabled() else None
+    sonarr = SonarrClient(Config.SONARR_URL, Config.SONARR_API_KEY) if Config.sonarr_enabled() else None
+    jellyfin = JellyfinClient(Config.JELLYFIN_URL, Config.JELLYFIN_API_KEY) if Config.jellyfin_enabled() else None
+    return MediaServerService(store, radarr=radarr, sonarr=sonarr, jellyfin=jellyfin)
 
 
 @router.get("/tmdb/search")
@@ -365,3 +382,56 @@ async def trigger_stream(media_id: str, store: MediaStore = Depends(get_store)):
         "stream_url": f"http://hp-prodesk.local:8090/stream/{media.id}.mkv",
         "message": f"Lecture de « {media.title} » lancée sur le serveur HP ProDesk."
     }
+
+
+@router.get("/media-server/status")
+async def media_server_status():
+    return {
+        "radarr": {"configured": Config.radarr_enabled()},
+        "sonarr": {"configured": Config.sonarr_enabled()},
+        "jellyfin": {"configured": Config.jellyfin_enabled()},
+    }
+
+
+@router.get("/medias/{media_id}/availability")
+async def get_availability(
+    media_id: str,
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    availability = await service.store.get_availability(media_id)
+    playback_url = await service.playback_url(media_id)
+    return {"availability": availability, "playback_url": playback_url}
+
+
+@router.post("/medias/{media_id}/acquisition")
+async def request_acquisition(
+    media_id: str,
+    payload: AcquisitionRequest,
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    media = await service.store.fetch_one(media_id)
+    if not media:
+        raise HTTPException(status_code=404, detail="Média non trouvé")
+    if not media.tmdb_id:
+        raise HTTPException(status_code=409, detail="Associez d'abord ce média à TMDB")
+    try:
+        availability = await service.add(
+            media, payload.quality_profile_id, payload.root_folder,
+            payload.language_profile_id, payload.monitor,
+        )
+        return {"availability": availability}
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail="Service non configuré") from error
+
+
+@router.get("/media-server/options")
+async def media_server_options(
+    media_type: str,
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    client = service.sonarr if media_type == "Série" else service.radarr
+    if not client:
+        raise HTTPException(status_code=503, detail="Service non configuré")
+    return await client.list_options()

@@ -35,6 +35,31 @@ class MediaServerService:
         self.sonarr = sonarr
         self.jellyfin = jellyfin
 
+    async def add(
+        self, media, quality_profile_id: int, root_folder: str,
+        language_profile_id: Optional[int], monitor: str,
+    ) -> Availability:
+        if not media.tmdb_id:
+            raise ValueError("Associez d'abord ce média à TMDB")
+        if media.type == "Série":
+            if not self.sonarr or language_profile_id is None:
+                raise RuntimeError("Sonarr n'est pas configuré")
+            remote = await self.sonarr.add_series(
+                media.tmdb_id, quality_profile_id, language_profile_id, root_folder, monitor,
+            )
+            provider = "sonarr"
+        else:
+            if not self.radarr:
+                raise RuntimeError("Radarr n'est pas configuré")
+            remote = await self.radarr.add_movie(media.tmdb_id, quality_profile_id, root_folder)
+            provider = "radarr"
+        return await self.store.upsert_availability(Availability(
+            media_id=media.id, provider=provider, arr_id=remote.get("id"),
+            state="requested", root_folder=root_folder,
+            quality_profile_id=quality_profile_id, language_profile_id=language_profile_id,
+            last_synced_at=datetime.now(timezone.utc),
+        ))
+
     async def sync_media(self, media_id: str) -> Optional[Availability]:
         media = await self.store.fetch_one(media_id)
         if not media or not media.tmdb_id:
