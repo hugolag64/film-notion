@@ -18,6 +18,35 @@ class JellyfinClient:
         self.client = client
         self.server_id = server_id
 
+    async def list_users(self) -> list[dict[str, Any]]:
+        client = self.client or http.get_client()
+        response = await client.get(
+            f"{self.base_url}/Users",
+            headers={"X-Emby-Token": self.api_key},
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        try:
+            payload = response.json()
+        except (TypeError, ValueError) as error:
+            raise ValueError("invalid Jellyfin users response") from error
+        if not isinstance(payload, dict) or not isinstance(payload.get("Users"), list):
+            raise ValueError("invalid Jellyfin users response")
+
+        users = []
+        for item in payload["Users"]:
+            if not isinstance(item, dict) or not item.get("Id"):
+                raise ValueError("invalid Jellyfin users response")
+            policy = item.get("Policy") or {}
+            if not isinstance(policy, dict):
+                raise ValueError("invalid Jellyfin users response")
+            users.append({
+                "id": str(item["Id"]),
+                "name": str(item.get("Name") or item["Id"]),
+                "is_admin": bool(policy.get("IsAdministrator", False)),
+            })
+        return users
+
     async def find_by_tmdb(self, tmdb_id: int, media_type: str) -> Optional[dict[str, Any]]:
         item_type = "Series" if media_type == "Série" else "Movie"
         kwargs = {"headers": {"X-Emby-Token": self.api_key}, "params": {

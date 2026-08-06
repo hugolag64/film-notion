@@ -1,0 +1,41 @@
+services:
+  backstage:
+    build:
+      context: .
+    image: backstage:local
+    pull_policy: build
+    environment:
+      DB_PATH: /data/backstage.db
+      PORT: 8090
+      TMDB_API_KEY: "${TMDB_API_KEY:-}"
+      RADARR_URL: "${RADARR_URL:-http://127.0.0.1:7878}"
+      RADARR_API_KEY: "${RADARR_API_KEY:-}"
+      SONARR_URL: "${SONARR_URL:-http://127.0.0.1:8989}"
+      SONARR_API_KEY: "${SONARR_API_KEY:-}"
+      JELLYFIN_URL: "${JELLYFIN_URL:-http://127.0.0.1:8096}"
+      JELLYFIN_API_KEY: "${JELLYFIN_API_KEY:-}"
+      JELLYFIN_SERVER_ID: "${JELLYFIN_SERVER_ID:-}"
+      MEDIA_SYNC_INTERVAL_SEC: "${MEDIA_SYNC_INTERVAL_SEC:-60}"
+      SMTP_HOST: "${SMTP_HOST:-smtp.gmail.com}"
+      SMTP_PORT: "${SMTP_PORT:-587}"
+      SMTP_USERNAME: "${SMTP_USERNAME:-}"
+      SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
+      SMTP_FROM: "${SMTP_FROM:-}"
+      BACKSTAGE_PUBLIC_URL: "${BACKSTAGE_PUBLIC_URL:-http://localhost:8090}"
+    ports:
+      - "${BACKSTAGE_PORT:-8090}:8090"
+    volumes:
+      - "${BACKSTAGE_DATA_DIR:-./data/backstage}:/data"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

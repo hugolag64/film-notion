@@ -1,7 +1,12 @@
 import BackstagePrototype from './BackstagePrototype'
+import AuthGate from './AuthGate'
 
 function App() {
-  return <BackstagePrototype />
+  return (
+    <AuthGate>
+      <BackstagePrototype />
+    </AuthGate>
+  )
 }
 
 export default App

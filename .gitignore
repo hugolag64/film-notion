@@ -7,6 +7,7 @@ cache.json
 backstage.db
 backstage.db.*
 history.jsonl
+tmdb-a-verifier.csv
 
 # === Logs ===
 *.log

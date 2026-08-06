@@ -48,6 +48,18 @@ class TMDBClient:
             logger.error("Erreur recherche série '%s': %s", query, e)
             return []
 
+    async def search_person(self, query: str) -> List[Dict[str, Any]]:
+        """Recherche des personnes (notamment les acteurs) dans TMDB."""
+        url = f"{self.BASE_URL}/search/person"
+        params = {**self.params, "query": query}
+        try:
+            response = await http.request_with_retry("GET", url, params=params)
+            response.raise_for_status()
+            return response.json().get("results", [])[:8]
+        except Exception as e:
+            logger.error("Erreur recherche personne '%s': %s", query, e)
+            return []
+
     async def search(self, query: str, is_series: bool = False, year: Optional[int] = None) -> List[Dict[str, Any]]:
         """Dispatch film/série."""
         return await (self.search_tv(query, year) if is_series else self.search_movie(query, year))
