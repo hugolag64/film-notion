@@ -228,6 +228,57 @@ class MediaStore:
                 "ON recommendation_sessions(backstage_user_id, status)"
             )
             conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_recommendation_sessions_user_created "
+                "ON recommendation_sessions(backstage_user_id, created_at DESC)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS media_recommendation_preferences (
+                    backstage_user_id TEXT NOT NULL,
+                    media_id TEXT NOT NULL,
+                    fields TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (backstage_user_id, media_id),
+                    FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_media_recommendation_preferences_user_updated "
+                "ON media_recommendation_preferences(backstage_user_id, updated_at DESC)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_media_recommendation_preferences_media_updated "
+                "ON media_recommendation_preferences(media_id, updated_at DESC)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ai_usage (
+                    id TEXT PRIMARY KEY,
+                    backstage_user_id TEXT NOT NULL,
+                    session_id TEXT,
+                    model TEXT NOT NULL,
+                    input_tokens INTEGER NOT NULL DEFAULT 0,
+                    output_tokens INTEGER NOT NULL DEFAULT 0,
+                    cost_estimate_usd REAL NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ai_usage_user_created "
+                "ON ai_usage(backstage_user_id, created_at DESC)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ai_usage_session_created "
+                "ON ai_usage(session_id, created_at DESC)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ai_usage_created_at "
+                "ON ai_usage(created_at DESC)"
+            )
+            conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS playback_progress (
                     backstage_user_id TEXT NOT NULL,
@@ -336,6 +387,16 @@ class MediaStore:
             data["completed_at"] = datetime.fromisoformat(data["completed_at"])
         return RecommendationSession(**data)
 
+    @staticmethod
+    def _row_to_media_recommendation_preference(row: sqlite3.Row) -> Dict[str, Any]:
+        data = dict(row)
+        data["fields"] = json.loads(data.get("fields") or "{}")
+        return data
+
+    @staticmethod
+    def _row_to_ai_usage(row: sqlite3.Row) -> Dict[str, Any]:
+        return dict(row)
+
     def _record_recommendation_event_sync(self, event: RecommendationEvent) -> RecommendationEvent:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
@@ -401,6 +462,87 @@ class MediaStore:
                 [*updates.values(), session_id],
             )
         return self._get_recommendation_session_sync(session_id)
+
+    @staticmethod
+    def _coerce_iso_datetime(value: Any) -> str:
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value.isoformat()
+        return str(value)
+
+    def _count_recommendation_sessions_sync(self, user_id: str, day_start: Any) -> int:
+        day_start_iso = self._coerce_iso_datetime(day_start)
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM recommendation_sessions "
+                "WHERE backstage_user_id = ? AND created_at >= ?",
+                (user_id, day_start_iso),
+            ).fetchone()
+        return int(row[0] or 0)
+
+    def _get_recommendation_usage_sync(self, session_id: str) -> List[Dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM ai_usage WHERE session_id = ? ORDER BY created_at ASC, id ASC",
+                (session_id,),
+            ).fetchall()
+        return [self._row_to_ai_usage(row) for row in rows]
+
+    def _record_recommendation_usage_sync(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        usage_id = payload.get("id") or str(uuid.uuid4())
+        created_at = self._coerce_iso_datetime(payload.get("created_at") or datetime.now(timezone.utc))
+        values = {
+            "id": usage_id,
+            "backstage_user_id": payload["backstage_user_id"],
+            "session_id": payload.get("session_id"),
+            "model": payload["model"],
+            "input_tokens": payload.get("input_tokens", 0),
+            "output_tokens": payload.get("output_tokens", 0),
+            "cost_estimate_usd": payload.get("cost_estimate_usd", 0),
+            "created_at": created_at,
+        }
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO ai_usage
+                (id, backstage_user_id, session_id, model, input_tokens, output_tokens, cost_estimate_usd, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                tuple(values[column] for column in (
+                    "id", "backstage_user_id", "session_id", "model",
+                    "input_tokens", "output_tokens", "cost_estimate_usd", "created_at",
+                )),
+            )
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM ai_usage WHERE id = ?", (usage_id,)).fetchone()
+        return self._row_to_ai_usage(row)
+
+    def _upsert_media_recommendation_preference_sync(
+        self, user_id: str, media_id: str, fields: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        now = datetime.now(timezone.utc).isoformat()
+        fields_json = json.dumps(fields or {})
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO media_recommendation_preferences
+                (backstage_user_id, media_id, fields, created_at, updated_at)
+                VALUES (?, ?, ?, COALESCE((SELECT created_at FROM media_recommendation_preferences
+                    WHERE backstage_user_id = ? AND media_id = ?), ?), ?)
+                ON CONFLICT(backstage_user_id, media_id) DO UPDATE SET
+                    fields = excluded.fields,
+                    updated_at = excluded.updated_at
+                """,
+                (user_id, media_id, fields_json, user_id, media_id, now, now),
+            )
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM media_recommendation_preferences WHERE backstage_user_id = ? AND media_id = ?",
+                (user_id, media_id),
+            ).fetchone()
+        return self._row_to_media_recommendation_preference(row)
 
     def _get_user_media_state_sync(self, user_id: str, media_id: str) -> Optional[UserMediaState]:
         with sqlite3.connect(self.db_path) as conn:
@@ -1136,6 +1278,34 @@ class MediaStore:
         self, session_id: str, fields: Dict[str, Any],
     ) -> Optional[RecommendationSession]:
         return await asyncio.to_thread(self._update_recommendation_session_sync, session_id, fields)
+
+    def count_recommendation_sessions_sync(self, user_id: str, day_start: Any) -> int:
+        return self._count_recommendation_sessions_sync(user_id, day_start)
+
+    def get_recommendation_usage_sync(self, session_id: str) -> List[Dict[str, Any]]:
+        return self._get_recommendation_usage_sync(session_id)
+
+    def record_recommendation_usage_sync(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._record_recommendation_usage_sync(payload)
+
+    def upsert_media_recommendation_preference_sync(
+        self, user_id: str, media_id: str, fields: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._upsert_media_recommendation_preference_sync(user_id, media_id, fields)
+
+    async def count_recommendation_sessions(self, user_id: str, day_start: Any) -> int:
+        return await asyncio.to_thread(self._count_recommendation_sessions_sync, user_id, day_start)
+
+    async def get_recommendation_usage(self, session_id: str) -> List[Dict[str, Any]]:
+        return await asyncio.to_thread(self._get_recommendation_usage_sync, session_id)
+
+    async def record_recommendation_usage(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return await asyncio.to_thread(self._record_recommendation_usage_sync, payload)
+
+    async def upsert_media_recommendation_preference(
+        self, user_id: str, media_id: str, fields: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return await asyncio.to_thread(self._upsert_media_recommendation_preference_sync, user_id, media_id, fields)
 
     async def create(self, fields: Dict[str, Any]) -> Media:
         return await asyncio.to_thread(self._create_sync, fields)
