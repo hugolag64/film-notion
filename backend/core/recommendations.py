@@ -194,10 +194,11 @@ def score_recommendation_candidate(
     list_bonus = 1 if tmdb_id in set(exclusions.get("watchlisted_tmdb_ids", set())) else 0
     novelty = 1 if profile.confidence > 0 and not matching_affinities else 0.5
     exploration = 0.09 if profile.confidence else 0.18
+    temporary_penalty = float(exclusions.get("temporary_negative_tmdb_ids", {}).get(tmdb_id, 0))
     score = (
         SCORE_WEIGHTS["taste"] * taste + (SCORE_WEIGHTS["session"] + 0.07) * session
         + SCORE_WEIGHTS["tmdb_quality"] * quality + SCORE_WEIGHTS["list_bonus"] * list_bonus
-        + SCORE_WEIGHTS["novelty"] * novelty + exploration * novelty
+        + SCORE_WEIGHTS["novelty"] * novelty + exploration * novelty - temporary_penalty
     )
     reasons = ["not_seen"]
     if matching_affinities and max(matching_affinities) >= 0.7:

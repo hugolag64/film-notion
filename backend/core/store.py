@@ -262,10 +262,17 @@ class MediaStore:
                     input_tokens INTEGER NOT NULL DEFAULT 0,
                     output_tokens INTEGER NOT NULL DEFAULT 0,
                     cost_estimate_usd REAL NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'success',
+                    error TEXT,
                     created_at TEXT NOT NULL
                 )
                 """
             )
+            ai_usage_columns = {row[1] for row in conn.execute("PRAGMA table_info(ai_usage)").fetchall()}
+            if "status" not in ai_usage_columns:
+                conn.execute("ALTER TABLE ai_usage ADD COLUMN status TEXT NOT NULL DEFAULT 'success'")
+            if "error" not in ai_usage_columns:
+                conn.execute("ALTER TABLE ai_usage ADD COLUMN error TEXT")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_ai_usage_user_created "
                 "ON ai_usage(backstage_user_id, created_at DESC)"
@@ -435,6 +442,31 @@ class MediaStore:
             )
         return session
 
+    def _create_recommendation_session_if_available_sync(
+        self, session: RecommendationSession, limit: int, day_start: Any,
+    ) -> Optional[RecommendationSession]:
+        day_start_iso = self._coerce_iso_datetime(day_start)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            count = conn.execute(
+                "SELECT COUNT(*) FROM recommendation_sessions "
+                "WHERE backstage_user_id = ? AND created_at >= ? AND status != 'cancelled'",
+                (session.backstage_user_id, day_start_iso),
+            ).fetchone()[0]
+            if count >= limit:
+                return None
+            conn.execute(
+                "INSERT INTO recommendation_sessions "
+                "(id, backstage_user_id, question_count, session_preferences, status, created_at, completed_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    session.id, session.backstage_user_id, session.question_count,
+                    json.dumps(session.session_preferences), session.status,
+                    session.created_at.isoformat(), session.completed_at.isoformat() if session.completed_at else None,
+                ),
+            )
+        return session
+
     def _get_recommendation_session_sync(self, session_id: str) -> Optional[RecommendationSession]:
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -462,6 +494,17 @@ class MediaStore:
                 [*updates.values(), session_id],
             )
         return self._get_recommendation_session_sync(session_id)
+
+    def _advance_recommendation_session_sync(
+        self, session_id: str, expected_question_count: int, preferences: Dict[str, Any],
+    ) -> bool:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "UPDATE recommendation_sessions SET question_count = question_count + 1, session_preferences = ? "
+                "WHERE id = ? AND status = 'active' AND question_count = ?",
+                (json.dumps(preferences), session_id, expected_question_count),
+            )
+        return cursor.rowcount == 1
 
     @staticmethod
     def _coerce_iso_datetime(value: Any) -> str:
@@ -501,18 +544,20 @@ class MediaStore:
             "input_tokens": payload.get("input_tokens", 0),
             "output_tokens": payload.get("output_tokens", 0),
             "cost_estimate_usd": payload.get("cost_estimate_usd", 0),
+            "status": payload.get("status", "success"),
+            "error": payload.get("error"),
             "created_at": created_at,
         }
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
                 INSERT INTO ai_usage
-                (id, backstage_user_id, session_id, model, input_tokens, output_tokens, cost_estimate_usd, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (id, backstage_user_id, session_id, model, input_tokens, output_tokens, cost_estimate_usd, status, error, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 tuple(values[column] for column in (
                     "id", "backstage_user_id", "session_id", "model",
-                    "input_tokens", "output_tokens", "cost_estimate_usd", "created_at",
+                    "input_tokens", "output_tokens", "cost_estimate_usd", "status", "error", "created_at",
                 )),
             )
             conn.row_factory = sqlite3.Row
@@ -1271,6 +1316,13 @@ class MediaStore:
     ) -> RecommendationSession:
         return await asyncio.to_thread(self._create_recommendation_session_sync, session)
 
+    async def create_recommendation_session_if_available(
+        self, session: RecommendationSession, limit: int, day_start: Any,
+    ) -> Optional[RecommendationSession]:
+        return await asyncio.to_thread(
+            self._create_recommendation_session_if_available_sync, session, limit, day_start,
+        )
+
     async def get_recommendation_session(self, session_id: str) -> Optional[RecommendationSession]:
         return await asyncio.to_thread(self._get_recommendation_session_sync, session_id)
 
@@ -1278,6 +1330,13 @@ class MediaStore:
         self, session_id: str, fields: Dict[str, Any],
     ) -> Optional[RecommendationSession]:
         return await asyncio.to_thread(self._update_recommendation_session_sync, session_id, fields)
+
+    async def advance_recommendation_session(
+        self, session_id: str, expected_question_count: int, preferences: Dict[str, Any],
+    ) -> bool:
+        return await asyncio.to_thread(
+            self._advance_recommendation_session_sync, session_id, expected_question_count, preferences,
+        )
 
     def count_recommendation_sessions_sync(self, user_id: str, day_start: Any) -> int:
         return self._count_recommendation_sessions_sync(user_id, day_start)

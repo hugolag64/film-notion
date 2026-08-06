@@ -84,9 +84,7 @@ def _recommendation_quota(
 ) -> dict[str, Any]:
     if current.user.get("role") == "admin":
         return {"limit": None, "used": 0, "remaining": None, "unlimited": True}
-    timezone_name = getattr(Config, "RECOMMENDATION_TIMEZONE", "Europe/Paris")
-    local_now = now.astimezone(ZoneInfo(timezone_name))
-    day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    day_start = _recommendation_day_start(now)
     limit = max(0, int(getattr(Config, "RECOMMENDATION_DAILY_LIMIT", 2)))
     used = store.count_recommendation_sessions_sync(current.user["id"], day_start)
     return {
@@ -95,6 +93,12 @@ def _recommendation_quota(
         "remaining": max(0, limit - used),
         "unlimited": False,
     }
+
+
+def _recommendation_day_start(now: datetime) -> datetime:
+    timezone_name = getattr(Config, "RECOMMENDATION_TIMEZONE", "Europe/Paris")
+    local_now = now.astimezone(ZoneInfo(timezone_name))
+    return local_now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
 
 
 def _gemini_gateway() -> GeminiRecommendationGateway:
@@ -126,6 +130,22 @@ async def _record_gemini_usage(
         "input_tokens": usage.get("input_tokens", 0),
         "output_tokens": usage.get("output_tokens", 0),
         "cost_estimate_usd": _gemini_cost_estimate(usage),
+        "created_at": datetime.now(timezone.utc),
+    })
+
+
+async def _record_gemini_failure(
+    store: MediaStore,
+    current: AuthContext,
+    session_id: str,
+    error: Exception,
+) -> None:
+    await store.record_recommendation_usage({
+        "backstage_user_id": current.user["id"],
+        "session_id": session_id,
+        "model": Config.GEMINI_MODEL,
+        "status": "error",
+        "error": type(error).__name__,
         "created_at": datetime.now(timezone.utc),
     })
 
@@ -389,6 +409,26 @@ async def _recommendation_pool(
     hard_reject_tmdb_ids = {
         media.tmdb_id for media in medias if media.id in hard_reject_media_ids and media.tmdb_id
     }
+    hard_reject_tmdb_ids.update(
+        int(event.value) for event in events
+        if event.event_type == "hard_reject" and str(event.value or "").isdigit()
+    )
+    already_seen_tmdb_ids = {
+        int(event.value) for event in events
+        if event.event_type == "already_seen" and str(event.value or "").isdigit()
+    }
+    seen_tmdb_ids.update(already_seen_tmdb_ids)
+    temporary_negative_tmdb_ids: dict[int, float] = {}
+    for event in events:
+        if event.event_type not in {"not_now", "less_like_this"} or not str(event.value or "").isdigit():
+            continue
+        expires_at = event.created_at + timedelta(days=14 if event.event_type == "not_now" else 45)
+        if expires_at > now:
+            tmdb_id = int(event.value)
+            temporary_negative_tmdb_ids[tmdb_id] = max(
+                temporary_negative_tmdb_ids.get(tmdb_id, 0),
+                0.12 if event.event_type == "not_now" else 0.25,
+            )
     watchlisted_tmdb_ids = {
         media.tmdb_id
         for media in medias
@@ -400,7 +440,8 @@ async def _recommendation_pool(
         score_recommendation_candidate(
             candidate, profile, session_preferences,
             {"seen_tmdb_ids": seen_tmdb_ids, "watchlisted_tmdb_ids": watchlisted_tmdb_ids,
-             "hard_reject_tmdb_ids": hard_reject_tmdb_ids}, now,
+             "hard_reject_tmdb_ids": hard_reject_tmdb_ids,
+             "temporary_negative_tmdb_ids": temporary_negative_tmdb_ids}, now,
         )
         for candidate in candidates
     ]
@@ -489,18 +530,28 @@ async def start_recommendation_session(
             )
             if shortlist:
                 allowed_ids = set(shortlist.tmdb_ids)
-                candidates = [item for item in candidates if item.tmdb_id in allowed_ids]
+                if allowed_ids:
+                    candidates = [item for item in candidates if item.tmdb_id in allowed_ids]
                 session.session_preferences["gemini_shortlist_used"] = True
                 if shortlist.usage:
                     await _record_gemini_usage(store, current, session.id, shortlist.usage)
-        except (RuntimeError, ValueError, TypeError):
+        except Exception as error:
             # Local scoring remains the authoritative fallback.
-            pass
+            await _record_gemini_failure(store, current, session.id, error)
     question = _adaptive_question_from_candidates(candidates, session.session_preferences)
     if question is None:
         return {"session": session.model_dump(mode="json"), "state": "empty", "question": None, "result": None, "quota": quota}
-    await store.create_recommendation_session(session)
-    if not quota["unlimited"]:
+    if quota["unlimited"]:
+        await store.create_recommendation_session(session)
+    else:
+        reserved = await store.create_recommendation_session_if_available(
+            session, quota["limit"], _recommendation_day_start(datetime.now(timezone.utc)),
+        )
+        if reserved is None:
+            raise HTTPException(
+                status_code=429,
+                detail="Limite quotidienne atteinte : 2 sessions de sélection par jour.",
+            )
         quota["used"] += 1
         quota["remaining"] = max(0, quota["limit"] - quota["used"])
     await _remember_question_options(session, question, store)
@@ -540,10 +591,8 @@ async def answer_recommendation(
             pass
         preferences["preferred_tmdb_ids"] = preferred[-10:]
     question_count = session.question_count + 1
-    await store.update_recommendation_session(session_id, {
-        "question_count": question_count,
-        "session_preferences": preferences,
-    })
+    if not await store.advance_recommendation_session(session_id, session.question_count, preferences):
+        raise HTTPException(status_code=409, detail="Cette réponse a déjà été traitée")
     session.session_preferences = preferences
     feedback_event_type = {
         "skipped": "skipped", "not_now": "not_now", "less_like_this": "less_like_this",
@@ -552,7 +601,7 @@ async def answer_recommendation(
     await store.record_recommendation_event(RecommendationEvent(
         id=str(uuid.uuid4()), backstage_user_id=current.user["id"],
         session_id=session_id, media_id=payload.media_id,
-        event_type=feedback_event_type, value=payload.answer,
+        event_type=feedback_event_type, value=payload.value or payload.answer,
         created_at=datetime.now(timezone.utc),
     ))
     candidates = await _recommendation_pool(current, store, preferences)
@@ -570,8 +619,8 @@ async def answer_recommendation(
                     result = next((item for item in candidates if item.tmdb_id == selection.tmdb_id), None)
                     if selection.usage:
                         await _record_gemini_usage(store, current, session_id, selection.usage)
-            except (RuntimeError, ValueError, TypeError):
-                pass
+            except Exception as error:
+                await _record_gemini_failure(store, current, session_id, error)
         result = result or choose_from_top(candidates, Random(session_id), top_n=8)
         await store.update_recommendation_session(session_id, {
             "status": "completed", "completed_at": datetime.now(timezone.utc),
