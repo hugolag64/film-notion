@@ -30,11 +30,15 @@ class JellyfinClient:
             payload = response.json()
         except (TypeError, ValueError) as error:
             raise ValueError("invalid Jellyfin users response") from error
-        if not isinstance(payload, dict) or not isinstance(payload.get("Users"), list):
+        if isinstance(payload, list):
+            items = payload
+        elif isinstance(payload, dict) and isinstance(payload.get("Users"), list):
+            items = payload["Users"]
+        else:
             raise ValueError("invalid Jellyfin users response")
 
         users = []
-        for item in payload["Users"]:
+        for item in items:
             if not isinstance(item, dict) or not item.get("Id"):
                 raise ValueError("invalid Jellyfin users response")
             policy = item.get("Policy") or {}

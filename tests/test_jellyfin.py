@@ -102,6 +102,22 @@ def test_list_users_rejects_invalid_payload():
     asyncio.run(run())
 
 
+def test_list_users_accepts_jellyfin_array_response():
+    async def handler(request):
+        return httpx.Response(200, json=[
+            {"Id": "jf-ophelie", "Name": "Ophélie", "Policy": {"IsAdministrator": False}},
+        ])
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            client = JellyfinClient("http://127.0.0.1:8096", "secret", http_client)
+            assert await client.list_users() == [
+                {"id": "jf-ophelie", "name": "Ophélie", "is_admin": False},
+            ]
+
+    asyncio.run(run())
+
+
 def test_list_users_propagates_http_errors():
     async def handler(request):
         return httpx.Response(503)
