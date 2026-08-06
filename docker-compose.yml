@@ -3,11 +3,18 @@ services:
     build:
       context: .
     image: backstage:local
-    env_file:
-      - .env
     environment:
       DB_PATH: /data/backstage.db
       PORT: 8090
+      TMDB_API_KEY: "${TMDB_API_KEY:-}"
+      RADARR_URL: "${RADARR_URL:-http://127.0.0.1:7878}"
+      RADARR_API_KEY: "${RADARR_API_KEY:-}"
+      SONARR_URL: "${SONARR_URL:-http://127.0.0.1:8989}"
+      SONARR_API_KEY: "${SONARR_API_KEY:-}"
+      JELLYFIN_URL: "${JELLYFIN_URL:-http://127.0.0.1:8096}"
+      JELLYFIN_API_KEY: "${JELLYFIN_API_KEY:-}"
+      JELLYFIN_SERVER_ID: "${JELLYFIN_SERVER_ID:-}"
+      MEDIA_SYNC_INTERVAL_SEC: "${MEDIA_SYNC_INTERVAL_SEC:-60}"
     ports:
       - "${BACKSTAGE_PORT:-8090}:8090"
     volumes:
