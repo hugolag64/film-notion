@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Hls from 'hls.js';
+import AccountPanel from './AccountPanel';
+import { useAuth } from './auth-context';
 import { fetchMedias, updateMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, requestAcquisition, fetchMediaServerActivity, syncMediaServer, importMediaServerLibrary } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
@@ -41,6 +43,7 @@ const StarIcon = ({ fillRatio = 0, size = 20, isDarkMode = false }) => {
 const INITIAL_MOVIES = [];
 
 export default function BackstagePrototype() {
+    const {user} = useAuth();
     const [movies, setMovies] = useState(INITIAL_MOVIES);
     const [collection, setCollection] = useState('Films');
     const [, setLoading] = useState(true);
@@ -84,6 +87,7 @@ export default function BackstagePrototype() {
     const videoRef = useRef(null);
     const hlsRef = useRef(null);
     const [isDarkMode, setIsDarkMode] = useState(false); // Theme toggle state
+    const [showAccountPanel, setShowAccountPanel] = useState(false);
 
     // TMDB Relink Modal State
     const [showRelinkModal, setShowRelinkModal] = useState(false);
@@ -858,9 +862,14 @@ export default function BackstagePrototype() {
                         <button onClick={() => setShowAddDialog(true)} className="bg-[#635bff] hover:bg-[#5048e5] text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all shadow-md cursor-pointer">
                             {collection === 'Séries' ? '+ Ajouter une série' : '+ Ajouter un film'}
                         </button>
+                        <button onClick={() => setShowAccountPanel(true)} className="rounded-lg border px-3 py-2 text-xs font-semibold" title="Ouvrir le compte">
+                            {user?.display_name || 'Compte'}
+                        </button>
                     </div>
                 </div>
             </header>
+
+            {showAccountPanel && <AccountPanel isDarkMode={isDarkMode} onClose={() => setShowAccountPanel(false)} />}
 
             {/* Main App Layout with Dynamic Floating Sidebar */}
             <div className="flex-1 max-w-[1536px] w-full mx-auto flex p-6 gap-8">
