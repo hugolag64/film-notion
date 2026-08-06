@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
-import { changePassword, createUser, deleteUser, fetchDevices, fetchUsers, revokeDevice, revokeOtherDevices, updateUser } from './api';
+import { changePassword, createUser, deleteUser, fetchDevices, fetchJellyfinUsers, fetchUsers, linkJellyfinUser, revokeDevice, revokeOtherDevices, updateUser } from './api';
 import { useAuth } from './auth-context';
 
 export default function AccountPanel({isDarkMode, onClose}) {
     const {user, setUser, logout} = useAuth();
     const [devices, setDevices] = useState([]);
     const [users, setUsers] = useState([]);
+    const [jellyfinUsers, setJellyfinUsers] = useState([]);
+    const [jellyfinLoading, setJellyfinLoading] = useState(false);
+    const [jellyfinSaving, setJellyfinSaving] = useState({});
     const [displayName, setDisplayName] = useState(user.display_name);
     const [newUser, setNewUser] = useState({display_name: '', email: '', password: ''});
     const [passwordForm, setPasswordForm] = useState({current_password: '', new_password: '', password_confirmation: ''});
@@ -24,7 +27,22 @@ export default function AccountPanel({isDarkMode, onClose}) {
         }
     }, [user.role]);
 
-    useEffect(() => { refresh(); }, [refresh]);
+    const refreshJellyfinUsers = useCallback(async () => {
+        if (user.role !== 'admin') return;
+        try {
+            setJellyfinLoading(true);
+            setJellyfinUsers(await fetchJellyfinUsers());
+        } catch (requestError) {
+            setError(requestError.message);
+        } finally {
+            setJellyfinLoading(false);
+        }
+    }, [user.role]);
+
+    useEffect(() => {
+        refresh();
+        refreshJellyfinUsers();
+    }, [refresh, refreshJellyfinUsers]);
 
     const handleCreateUser = async (event) => {
         event.preventDefault();
@@ -71,6 +89,28 @@ export default function AccountPanel({isDarkMode, onClose}) {
             await refresh();
         } catch (requestError) {
             setError(requestError.message);
+        }
+    };
+
+    const handleJellyfinLink = async (target, jellyfinUserId) => {
+        const previousJellyfinUserId = target.jellyfin_user_id || null;
+        const nextJellyfinUserId = jellyfinUserId || null;
+        setJellyfinSaving((current) => ({...current, [target.id]: true}));
+        setUsers((current) => current.map((item) => item.id === target.id
+            ? {...item, jellyfin_user_id: nextJellyfinUserId}
+            : item));
+        try {
+            const updatedUser = await linkJellyfinUser(target.id, nextJellyfinUserId);
+            if (target.id === user.id) setUser(updatedUser);
+            setNotice(`Compte Jellyfin de ${target.display_name} mis à jour.`);
+            await refresh();
+        } catch (requestError) {
+            setUsers((current) => current.map((item) => item.id === target.id
+                ? {...item, jellyfin_user_id: previousJellyfinUserId}
+                : item));
+            setError(requestError.message);
+        } finally {
+            setJellyfinSaving((current) => ({...current, [target.id]: false}));
         }
     };
 
@@ -177,6 +217,23 @@ export default function AccountPanel({isDarkMode, onClose}) {
                                         <p className={`text-xs ${target.is_active ? 'text-emerald-500' : 'text-rose-500'}`}>{target.is_active ? 'Actif' : 'Désactivé'}</p>
                                     </div>
                                     <div className="flex items-center gap-2">
+                                        <select
+                                            value={target.jellyfin_user_id || ''}
+                                            onChange={(event) => handleJellyfinLink(target, event.target.value)}
+                                            disabled={jellyfinLoading || jellyfinSaving[target.id]}
+                                            className="max-w-48 rounded border bg-transparent px-2 py-1 text-xs"
+                                            aria-label={`Compte Jellyfin de ${target.email}`}
+                                        >
+                                            <option value="">Jellyfin : Non associé</option>
+                                            {jellyfinUsers.map((jellyfinUser) => {
+                                                const linkedToOther = users.some((item) => item.id !== target.id && item.jellyfin_user_id === jellyfinUser.id);
+                                                return (
+                                                    <option key={jellyfinUser.id} value={jellyfinUser.id} disabled={linkedToOther}>
+                                                        {jellyfinUser.name}{linkedToOther ? ' — déjà associé' : ''}
+                                                    </option>
+                                                );
+                                            })}
+                                        </select>
                                         <input
                                             type="password"
                                             minLength="8"

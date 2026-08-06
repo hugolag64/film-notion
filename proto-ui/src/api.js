@@ -78,6 +78,17 @@ export async function fetchUsers() {
     return (await authRequest('/users')).users;
 }
 
+export async function fetchJellyfinUsers() {
+    return (await authRequest('/jellyfin-users')).users;
+}
+
+export async function linkJellyfinUser(userId, jellyfinUserId) {
+    return (await authRequest(`/users/${encodeURIComponent(userId)}/jellyfin`, {
+        method: 'PUT',
+        body: JSON.stringify({jellyfin_user_id: jellyfinUserId || null}),
+    })).user;
+}
+
 export async function createUser(payload) {
     return (await authRequest('/users', {method: 'POST', body: JSON.stringify(payload)})).user;
 }
