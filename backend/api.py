@@ -484,7 +484,9 @@ async def request_acquisition(
         return {"availability": availability}
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    except (MediaServerError, RuntimeError) as error:
+    except MediaServerError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    except RuntimeError as error:
         raise HTTPException(status_code=503, detail="Service non configuré") from error
 
 

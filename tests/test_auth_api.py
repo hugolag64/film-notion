@@ -13,6 +13,7 @@ from backend.config import Config
 from backend.core.auth import AuthStore
 from backend.core.store import MediaStore
 from backend.core.media_server import Availability
+from backend.core.arr import MediaServerError
 
 
 class FakeJellyfinClient:
@@ -286,6 +287,26 @@ def test_regular_user_can_submit_an_acquisition_request(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert service.calls == [("dune", 5, "/media/movies")]
+
+
+def test_acquisition_returns_remote_media_server_reason(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    media = asyncio.run(MediaStore(Config.DB_PATH).create({
+        "id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631,
+    }))
+
+    class FailingAcquisitionService:
+        store = MediaStore(Config.DB_PATH)
+
+        async def add(self, *args):
+            raise MediaServerError("Seerr HTTP 400: No default Radarr server")
+
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: FailingAcquisitionService()
+    response = client.post(f"/api/medias/{media.id}/acquisition", json={})
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "Seerr HTTP 400: No default Radarr server"}
 
 
 def test_media_catalog_requires_authentication(tmp_path, monkeypatch):

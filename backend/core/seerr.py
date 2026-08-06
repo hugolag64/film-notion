@@ -22,8 +22,17 @@ class SeerrClient:
                 response = await http.get_client().request(method, f"{self.base_url}{path}", headers=headers, timeout=10.0, **kwargs)
             response.raise_for_status()
             return response.json()
+        except httpx.HTTPStatusError as error:
+            response = error.response
+            try:
+                body = response.json()
+                reason = body.get("message") if isinstance(body, dict) else str(body)
+            except ValueError:
+                reason = response.text
+            reason = (reason or response.reason_phrase or "réponse invalide").strip()[:300]
+            raise MediaServerError(f"Seerr HTTP {response.status_code}: {reason}") from error
         except (httpx.HTTPError, ValueError) as error:
-            raise MediaServerError("Seerr inaccessible ou demande refusée") from error
+            raise MediaServerError("Seerr inaccessible ou réponse invalide") from error
 
     async def request_media(
         self, *, tmdb_id: int, media_type: str, quality_profile_id: Optional[int],

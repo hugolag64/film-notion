@@ -4,6 +4,7 @@ import json
 import httpx
 
 from backend.core.arr import RadarrClient, SonarrClient
+from backend.core.arr import MediaServerError
 from backend.core.seerr import SeerrClient
 
 
@@ -93,3 +94,23 @@ def test_seerr_can_request_with_its_own_defaults():
     assert captured["json"] == {
         "mediaType": "movie", "mediaId": 27205, "is4k": False, "ignoreQuota": False,
     }
+
+
+def test_seerr_http_error_preserves_remote_reason():
+    async def handler(request):
+        return httpx.Response(400, json={"message": "No default Radarr server"})
+
+    async def run():
+        async with _client(handler) as client:
+            try:
+                await SeerrClient("http://seerr:5055", "secret", client).request_media(
+                    tmdb_id=27205, media_type="Film", quality_profile_id=None,
+                    root_folder=None, language_profile_id=None, monitor="all",
+                )
+            except MediaServerError as error:
+                assert "HTTP 400" in str(error)
+                assert "No default Radarr server" in str(error)
+            else:
+                raise AssertionError("Expected Seerr request failure")
+
+    asyncio.run(run())
