@@ -195,6 +195,12 @@ export async function fetchStorageStatus() {
     return response.json();
 }
 
+export async function fetchAdminDashboard() {
+    const response = await fetch(`${API_BASE_URL}/admin/dashboard`);
+    if (!response.ok) throw new Error((await response.json()).detail || 'Tableau de bord indisponible');
+    return response.json();
+}
+
 async function rentalDecision(rentalId, action) {
     const response = await fetch(`${API_BASE_URL}/admin/rentals/${rentalId}/${action}`, {method: 'POST'});
     if (!response.ok) throw new Error((await response.json()).detail || 'Action impossible');

@@ -563,6 +563,23 @@ class MediaStore:
             })
         return items
 
+    def _list_admin_rentals_sync(self) -> List[Dict[str, Any]]:
+        states = (*_ACTIVE_RENTAL_STATES, "kept")
+        placeholders = ", ".join("?" for _ in states)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT media_rentals.*, media.title AS media_title "
+                "FROM media_rentals JOIN media ON media.id = media_rentals.media_id "
+                f"WHERE media_rentals.status IN ({placeholders}) "
+                "ORDER BY media_rentals.expires_at IS NULL, media_rentals.expires_at",
+                states,
+            ).fetchall()
+        return [
+            {"media_title": row["media_title"], "rental": self._row_to_rental(row)}
+            for row in rows
+        ]
+
     def _decide_rental_sync(self, rental_id: str, decision: str, admin_id: str, decided_at: datetime) -> Optional[Rental]:
         if decision not in {"accepted", "refused"}:
             raise ValueError("invalid rental decision")
@@ -907,6 +924,9 @@ class MediaStore:
 
     async def list_keep_requested_rentals(self) -> List[Dict[str, Any]]:
         return await asyncio.to_thread(self._list_keep_requested_rentals_sync)
+
+    async def list_admin_rentals(self) -> List[Dict[str, Any]]:
+        return await asyncio.to_thread(self._list_admin_rentals_sync)
 
     async def decide_rental(
         self, rental_id: str, decision: str, admin_id: str, decided_at: datetime,

@@ -60,3 +60,13 @@ def test_storage_quota_controls_are_visible():
 
     assert "Espace de stockage" in account
     assert "fetchStorageStatus" in api
+
+
+def test_admin_dashboard_controls_are_visible():
+    account = ACCOUNT_SOURCE.read_text(encoding="utf-8")
+    api = API_SOURCE.read_text(encoding="utf-8")
+
+    assert "Tableau de bord administrateur" in account
+    assert "Expirations proches" in account
+    assert "Téléchargements en cours" in account
+    assert "fetchAdminDashboard" in api

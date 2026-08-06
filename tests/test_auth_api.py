@@ -534,6 +534,46 @@ def test_storage_status_is_admin_only(tmp_path, monkeypatch):
     assert client.get("/api/admin/storage/status").status_code == 403
 
 
+def test_admin_dashboard_summarizes_rentals_downloads_and_errors(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    media_store = MediaStore(Config.DB_PATH)
+    media = asyncio.run(media_store.create({"id": "dashboard-film", "title": "Dune", "type": "Film"}))
+    now = datetime.now(timezone.utc)
+    asyncio.run(media_store.create_rental(Rental(
+        id="dashboard-rental", media_id=media.id, backstage_user_id="hugo", status="available",
+        requested_at=now, expires_at=now, created_at=now, updated_at=now,
+    )))
+
+    class DashboardService:
+        async def activity(self):
+            return {"items": [
+                {"media_id": "dashboard-film", "state": "downloading", "last_error": None},
+                {"media_id": "broken-film", "state": "error", "last_error": "Erreur Radarr"},
+            ], "disks": []}
+
+        async def storage_status(self):
+            return {"temporary_gb": 1, "min_free_gb": 100}
+
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: DashboardService()
+    dashboard = client.get("/api/admin/dashboard")
+
+    assert dashboard.status_code == 200
+    payload = dashboard.json()
+    assert payload["expiring"][0]["media_title"] == "Dune"
+    assert payload["downloads"][0]["state"] == "downloading"
+    assert payload["errors"][0]["last_error"] == "Erreur Radarr"
+
+    client.post("/api/auth/users", json={
+        "display_name": "Paul", "email": "paul@example.com", "password": "12345678",
+    })
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={
+        "email": "paul@example.com", "password": "12345678", "remember_device": False,
+    })
+    assert client.get("/api/admin/dashboard").status_code == 403
+
+
 def test_media_activity_is_admin_only(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     _setup(client)

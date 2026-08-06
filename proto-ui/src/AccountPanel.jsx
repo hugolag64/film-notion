@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { acceptKeepRequest, changePassword, createUser, deleteUser, extendRental, fetchCleanupPreview, fetchDevices, fetchJellyfinUsers, fetchKeepRequests, fetchNotifications, fetchStorageStatus, fetchUsers, linkJellyfinUser, markNotificationRead, refuseKeepRequest, revokeDevice, revokeOtherDevices, updateUser } from './api';
+import { acceptKeepRequest, changePassword, createUser, deleteUser, extendRental, fetchAdminDashboard, fetchCleanupPreview, fetchDevices, fetchJellyfinUsers, fetchKeepRequests, fetchNotifications, fetchStorageStatus, fetchUsers, linkJellyfinUser, markNotificationRead, refuseKeepRequest, revokeDevice, revokeOtherDevices, updateUser } from './api';
 import { useAuth } from './auth-context';
 
 export default function AccountPanel({isDarkMode, onClose}) {
@@ -18,6 +18,7 @@ export default function AccountPanel({isDarkMode, onClose}) {
     const [cleanupPreview, setCleanupPreview] = useState(null);
     const [cleanupLoading, setCleanupLoading] = useState(false);
     const [storageStatus, setStorageStatus] = useState(null);
+    const [adminDashboard, setAdminDashboard] = useState(null);
     const [error, setError] = useState('');
     const [notice, setNotice] = useState('');
     const [savingName, setSavingName] = useState(false);
@@ -34,6 +35,11 @@ export default function AccountPanel({isDarkMode, onClose}) {
                     setStorageStatus(await fetchStorageStatus());
                 } catch {
                     setStorageStatus(null);
+                }
+                try {
+                    setAdminDashboard(await fetchAdminDashboard());
+                } catch {
+                    setAdminDashboard(null);
                 }
             }
         } catch (requestError) {
@@ -250,6 +256,17 @@ export default function AccountPanel({isDarkMode, onClose}) {
 
                 {user.role === 'admin' && (
                     <div>
+                        {adminDashboard && <div className="mb-8">
+                            <h3 className="mb-3 font-semibold">Tableau de bord administrateur</h3>
+                            <div className="grid gap-2 sm:grid-cols-3">
+                                <div className="rounded-lg border p-3 text-sm"><strong>Expirations proches</strong><p className={muted}>{adminDashboard.expiring.length} location(s) dans les 3 jours</p></div>
+                                <div className="rounded-lg border p-3 text-sm"><strong>Téléchargements en cours</strong><p className={muted}>{adminDashboard.downloads.length} contenu(s)</p></div>
+                                <div className="rounded-lg border p-3 text-sm"><strong>Erreurs</strong><p className={muted}>{adminDashboard.errors.length} erreur(s)</p></div>
+                            </div>
+                            {adminDashboard.expiring.length > 0 && <div className="mt-3 space-y-2">
+                                {adminDashboard.expiring.map((item) => <div key={item.rental.id} className="rounded-lg border p-3 text-sm"><strong>{item.media_title}</strong><p className={muted}>{item.requester_name} · expire le {new Date(item.rental.expires_at).toLocaleDateString()}</p></div>)}
+                            </div>}
+                        </div>}
                         <div className="mb-8">
                             <h3 className="mb-3 font-semibold">Espace de stockage</h3>
                             {storageStatus ? (

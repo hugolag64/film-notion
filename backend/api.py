@@ -1,5 +1,5 @@
 """FastAPI REST API for Backstage UI integration."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import uuid
 from typing import Any, Dict, List, Optional
 import httpx
@@ -716,6 +716,52 @@ async def admin_storage_status(
     service: MediaServerService = Depends(get_media_server_service),
 ):
     return await service.storage_status()
+
+
+@router.get("/admin/dashboard")
+async def admin_dashboard(
+    _: AuthContext = Depends(require_admin),
+    service: MediaServerService = Depends(get_media_server_service),
+    store: MediaStore = Depends(get_store),
+    auth_store: AuthStore = Depends(get_auth_store),
+):
+    now = datetime.now(timezone.utc)
+    activity = await service.activity()
+    availabilities = activity.get("items", [])
+    rentals = await store.list_admin_rentals()
+    users = {user["id"]: user["display_name"] for user in auth_store.list_users()}
+    expiring = []
+    for item in rentals:
+        rental = item["rental"]
+        if rental.expires_at and rental.expires_at <= now + timedelta(days=3):
+            expiring.append({
+                "media_title": item["media_title"],
+                "requester_name": users.get(rental.backstage_user_id, "Compte supprimé"),
+                "rental": _serialize_rental(rental),
+            })
+    return {
+        "expiring": expiring,
+        "downloads": [item for item in availabilities if item.get("state") in {"requested", "searching", "downloading"}],
+        "errors": [item for item in availabilities if item.get("state") == "error" or item.get("last_error")],
+        "services": {
+            "radarr": {"configured": Config.radarr_enabled()},
+            "sonarr": {"configured": Config.sonarr_enabled()},
+            "seerr": {"configured": Config.seerr_enabled()},
+            "jellyfin": {"configured": Config.jellyfin_enabled()},
+        },
+        "storage": await service.storage_status(),
+        "quotas": [
+            {
+                "user_id": user["id"],
+                "display_name": user["display_name"],
+                "active_rentals": await store.count_active_rentals(user["id"]),
+                "temporary_bytes": await store.active_temporary_bytes(user["id"]),
+                "max_active_rentals": MAX_ACTIVE_RENTALS,
+            }
+            for user in auth_store.list_users()
+            if user["role"] != "admin"
+        ],
+    }
 
 
 def _serialize_playback_summary(summary: dict[str, Any]) -> dict[str, Any]:

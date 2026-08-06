@@ -267,3 +267,18 @@ def test_active_temporary_storage_is_counted_per_user(tmp_path):
 
     assert asyncio.run(store.active_temporary_bytes("hugo")) == 3 * 1024**3
     assert asyncio.run(store.active_temporary_bytes("other")) == 0
+
+
+def test_admin_rentals_include_media_titles(tmp_path):
+    store = _store(tmp_path)
+    media = asyncio.run(store.create({"title": "Dune", "type": "Film"}))
+    now = datetime.now(timezone.utc)
+    asyncio.run(store.create_rental(Rental(
+        id="admin-rental", media_id=media.id, backstage_user_id="hugo", status="available",
+        requested_at=now, expires_at=now + timedelta(days=2), created_at=now, updated_at=now,
+    )))
+
+    rentals = asyncio.run(store.list_admin_rentals())
+
+    assert rentals[0]["media_title"] == "Dune"
+    assert rentals[0]["rental"].id == "admin-rental"
