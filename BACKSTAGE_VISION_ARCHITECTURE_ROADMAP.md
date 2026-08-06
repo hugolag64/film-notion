@@ -33,7 +33,8 @@ Cette section est la référence opérationnelle pour reprendre le projet dans u
 
 - Phase 0 à 11 : réalisées pour le périmètre actuellement validé.
 - Phase 12 : réalisée pour le modèle initial de location de séries ; à enrichir si une gestion par saison/épisode devient nécessaire.
-- Phase 13 : en cours de consolidation ; tests automatisés, sauvegardes et supervision sont en place. Il reste surtout le test de restauration réel et la documentation d’exploitation.
+- Phase 13 : en cours de consolidation ; tests automatisés et supervision sont en place. Les travaux de sauvegarde sont reportés jusqu’à la réception et au montage du disque dédié.
+- Phase 14 : conception validée ; implémentation à réaliser pour l’expérience utilisateur centrale, le Centre d’administration et les recommandations personnalisées.
 - Déploiement versionné dans GitHub Container Registry et stratégie dev/stable : non réalisés, à traiter uniquement si le déploiement Compose depuis le dépôt devient insuffisant.
 
 ### Déploiement actuel
@@ -52,11 +53,12 @@ Après une modification validée : pousser la branche utilisée par Portainer, p
 
 ### Prochaine reprise recommandée
 
-1. Installer et monter le disque dur de sauvegarde, puis déplacer `BACKUP_DIR` vers ce disque.
-2. Lancer une sauvegarde manuelle depuis le compte administrateur et vérifier son intégrité.
-3. Faire un test de restauration sur une copie temporaire de SQLite, sans écraser la base active.
-4. Documenter le chemin de montage définitif et la procédure de récupération après panne.
-5. Ensuite seulement, reprendre les améliorations d’interface ou la gestion avancée des séries.
+1. Implémenter l’expérience utilisateur centrale selon la spec validée.
+2. Remplacer la fiche film latérale par une fiche film centrée, large ou plein écran.
+3. Organiser un Centre d’administration unique avec activité serveur, demandes, locations, utilisateurs, stockage, services et paramètres.
+4. Implémenter le mode interactif « Choisir un film » personnalisé par utilisateur.
+5. Après réception du disque dédié, reprendre la configuration et les tests de sauvegarde.
+6. Ensuite seulement, reprendre la gestion avancée des séries.
 
 ---
 
@@ -720,7 +722,7 @@ La suppression doit dépendre de la dernière location active, et non de la prem
 
 ### Tableau de bord administrateur
 
-Le tableau de bord doit afficher :
+Le socle du tableau de bord administrateur existe, mais il doit être regroupé dans un Centre d’administration clairement accessible et cohérent. Ce Centre doit afficher :
 
 - le nombre de demandes en attente ;
 - les contenus arrivant prochainement à expiration ;
@@ -732,6 +734,56 @@ Le tableau de bord doit afficher :
 - les utilisateurs ayant atteint leur quota.
 
 Aucune action courante ne doit nécessiter une ligne de commande.
+
+### Fiche film centrale
+
+La fiche film est un élément central de l’expérience utilisateur. Elle ne doit pas être présentée comme un panneau latéral étroit.
+
+Elle doit s’ouvrir dans une vue centrée, large ou plein écran selon le contexte, avec :
+
+- l’affiche, le titre, l’année et les informations principales ;
+- le synopsis, les genres, le réalisateur, le casting et les métadonnées TMDB ;
+- la progression, le statut personnel, la note et l’avis de l’utilisateur connecté ;
+- les actions Lire, Reprendre, Favori, À voir et Demander ;
+- l’état de la location ou de la demande lorsqu’il s’applique.
+
+Le retour vers la bibliothèque doit préserver les filtres, le tri et la position de défilement. La fiche doit proposer des états explicites de chargement, d’erreur et de données manquantes. La version mobile devient une vue plein écran.
+
+### Centre d’administration
+
+L’administration est séparée de la bibliothèque et visible uniquement pour les administrateurs. Elle est organisée en sections centralisées :
+
+- Vue d’ensemble ;
+- Activité serveur ;
+- Demandes et locations ;
+- Conservation définitive ;
+- Utilisateurs et droits ;
+- Stockage et quotas ;
+- Services Jellyfin, Seerr, Radarr et Sonarr ;
+- Paramètres.
+
+Les sauvegardes seront rattachées ultérieurement à la maintenance et restent hors priorité jusqu’à la réception du disque dédié.
+
+### Mode « Choisir un film »
+
+Backstage doit proposer un mode de découverte personnalisé, indépendant de la disponibilité Jellyfin.
+
+Le moteur utilise les données propres à chaque utilisateur :
+
+- films commencés, terminés, abandonnés et revus ;
+- temps et pourcentage de visionnage ;
+- notes personnelles ;
+- favoris et liste « À voir » ;
+- films ignorés ou refusés ;
+- réactions « Plus comme ça » et « Moins comme ça ».
+
+Les métadonnées TMDB servent à analyser les genres, mots-clés, années, durées, réalisateurs et acteurs appréciés. Les préférences durables doivent être séparées des préférences de session.
+
+Le parcours pose des questions adaptatives, généralement 5 à 7 et jamais plus de 10. Les questions peuvent comparer deux affiches ou proposer des choix comme « plus léger », « plus intense », « récent », « classique », « valeur sûre », « découverte » ou « surprise ».
+
+Le moteur exclut les films déjà vus, donne un poids principal aux affinités personnelles, un faible bonus aux films présents dans « À voir » ou les favoris, puis ajoute la qualité TMDB, la nouveauté et la diversité. Il choisit parmi les meilleurs candidats avec un hasard contrôlé et explique sa recommandation.
+
+L’interface doit rester moderne et cinématographique : affiches centrées, progression discrète, transitions fluides, boutons sobres et aucune gamification kitsch.
 
 ---
 
@@ -1181,6 +1233,49 @@ Objectif : fiabiliser le système sur le long terme.
 
 ---
 
+## Phase 14 — Expérience centrale et recommandations personnalisées
+
+Objectif : rendre Backstage plus clair à utiliser au quotidien et proposer un choix de film réellement personnalisé.
+
+### Navigation et fiche film
+
+- [ ] Définir la navigation principale entre bibliothèque, listes personnelles, choix de film et administration.
+- [ ] Remplacer le panneau latéral par une fiche film centrée, large ou plein écran.
+- [ ] Conserver les filtres, le tri et la position de la bibliothèque au retour.
+- [ ] Regrouper les informations et actions principales dans une hiérarchie claire.
+- [ ] Prévoir les états de chargement, d’erreur et de données manquantes.
+- [ ] Adapter la fiche film aux écrans mobiles.
+- [ ] Réutiliser la structure pour les fiches séries et leurs épisodes.
+
+### Centre d’administration
+
+- [ ] Créer un espace Administration visible uniquement pour les administrateurs.
+- [ ] Ajouter une vue d’ensemble avec indicateurs et actions rapides.
+- [ ] Regrouper l’activité serveur, les téléchargements, les erreurs et l’état des services.
+- [ ] Regrouper les demandes, locations, conservations, utilisateurs, quotas et paramètres.
+- [ ] Éviter toute action courante nécessitant la ligne de commande.
+
+### Profil de goût et mode interactif
+
+- [ ] Stocker les signaux de visionnage par utilisateur : démarrage, progression, abandon, fin et revisionnage.
+- [ ] Exploiter les notes, favoris, listes « À voir », refus et réactions aux recommandations.
+- [ ] Enrichir les profils avec les genres, mots-clés, années, durées, réalisateurs et acteurs TMDB.
+- [ ] Séparer les préférences durables des préférences de session.
+- [ ] Générer une liste de candidats TMDB sans filtrer sur la disponibilité Jellyfin.
+- [ ] Exclure les films déjà vus.
+- [ ] Calculer un score d’affinité individuel avec un faible bonus pour « À voir » et les favoris.
+- [ ] Ajouter diversité, nouveauté et hasard contrôlé.
+- [ ] Poser 5 à 10 questions adaptatives maximum.
+- [ ] Ajouter les réponses « Plus comme ça », « Moins comme ça », « Surprise » et les comparaisons d’affiches.
+- [ ] Afficher une recommandation principale, des alternatives et une explication.
+- [ ] Concevoir une interface moderne, sobre et cinématographique, sans gamification kitsch.
+
+Critère de réussite :
+
+> Un utilisateur ouvre une fiche film centrale sans perdre son contexte, un administrateur pilote tous les aspects courants depuis un espace unique et chaque utilisateur obtient des recommandations différentes à partir de son comportement, de ses notes et de ses échanges avec le moteur.
+
+---
+
 # 18. Priorités pour une première version utilisable
 
 La première version réellement utile ne doit pas chercher à tout faire.
@@ -1199,14 +1294,16 @@ La première version réellement utile ne doit pas chercher à tout faire.
 10. validation administrateur en un clic ;
 11. nettoyage automatique sécurisé ;
 12. tableau de bord administrateur minimal ;
-13. sauvegarde de la base de données.
+13. fiche film centrale et expérience de navigation cohérente ;
+14. mode « Choisir un film » personnalisé, sans dépendre de la disponibilité Jellyfin ;
+15. sauvegarde de la base de données, lorsque le disque dédié sera disponible.
 
 ## Hors MVP
 
 À reporter après stabilisation :
 
 - séries temporaires ;
-- recommandations avancées ;
+- recommandations avancées par IA ou apprentissage automatique ; le mode personnalisé par règles et TMDB reste dans le périmètre prioritaire ;
 - application mobile native ;
 - notifications complexes ;
 - profils invités ;
