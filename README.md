@@ -117,3 +117,4 @@ frontend/
     ai.py              → reco IA (restyle léger)
 scripts/                → scripts de debug manuels
 ```
+Les utilisateurs peuvent changer leur mot de passe ou demander un lien de récupération par e-mail. La récupération nécessite la configuration Gmail SMTP décrite dans la procédure d’authentification.

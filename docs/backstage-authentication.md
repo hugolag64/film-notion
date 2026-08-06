@@ -53,3 +53,27 @@ Les tables `users` et `auth_sessions` sont ajoutées automatiquement. Elles ne m
 Si un appareil mémorisé pose problème, ouvrir le site dans une fenêtre privée ou supprimer les cookies du site, puis se reconnecter. La révocation depuis un autre appareil invalide immédiatement la session concernée.
 
 Ne pas supprimer `/srv/data/backstage/backstage.db` pour résoudre un problème de connexion : cette base contient aussi le catalogue média.
+## Gestion des mots de passe
+
+Chaque utilisateur peut modifier son mot de passe depuis **Compte → Changer mon mot de passe**. Les autres appareils sont alors déconnectés.
+
+Depuis l’écran de connexion, **Mot de passe oublié ?** envoie un lien à l’adresse e-mail enregistrée pour le compte. Le lien est valable une heure et ne peut être utilisé qu’une seule fois.
+
+Un administrateur peut aussi définir directement le mot de passe d’un utilisateur depuis la liste **Utilisateurs**. Les mots de passe existants ne sont jamais lisibles.
+
+### Configuration Gmail dans Portainer
+
+Active la validation en deux étapes sur le compte Gmail d’envoi, puis crée un **mot de passe d’application Google**. Il ne faut pas utiliser le mot de passe Gmail principal.
+
+Dans la stack `backstage`, ajoute ces variables d’environnement :
+
+```env
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=adresse-gmail-d-envoi@gmail.com
+SMTP_PASSWORD=mot-de-passe-d-application-google
+SMTP_FROM=adresse-gmail-d-envoi@gmail.com
+BACKSTAGE_PUBLIC_URL=https://backstage.home.arpa
+```
+
+`SMTP_PASSWORD` reste uniquement dans Portainer. Après le déploiement, teste avec **Mot de passe oublié ?** sur un compte non administrateur.
