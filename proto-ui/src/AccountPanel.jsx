@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { createUser, deleteUser, fetchDevices, fetchUsers, revokeDevice, revokeOtherDevices, updateUser } from './api';
+import { changePassword, createUser, deleteUser, fetchDevices, fetchUsers, revokeDevice, revokeOtherDevices, updateUser } from './api';
 import { useAuth } from './auth-context';
 
 export default function AccountPanel({isDarkMode, onClose}) {
@@ -8,7 +8,10 @@ export default function AccountPanel({isDarkMode, onClose}) {
     const [users, setUsers] = useState([]);
     const [displayName, setDisplayName] = useState(user.display_name);
     const [newUser, setNewUser] = useState({display_name: '', email: '', password: ''});
+    const [passwordForm, setPasswordForm] = useState({current_password: '', new_password: '', password_confirmation: ''});
+    const [adminPasswords, setAdminPasswords] = useState({});
     const [error, setError] = useState('');
+    const [notice, setNotice] = useState('');
     const [savingName, setSavingName] = useState(false);
 
     const refresh = useCallback(async () => {
@@ -48,6 +51,20 @@ export default function AccountPanel({isDarkMode, onClose}) {
         }
     };
 
+    const handlePasswordChange = async (event) => {
+        event.preventDefault();
+        try {
+            setError('');
+            setNotice('');
+            await changePassword(passwordForm);
+            setPasswordForm({current_password: '', new_password: '', password_confirmation: ''});
+            setNotice('Mot de passe modifié. Les autres appareils ont été déconnectés.');
+            await refresh();
+        } catch (requestError) {
+            setError(requestError.message);
+        }
+    };
+
     const handleUserUpdate = async (target, fields) => {
         try {
             await updateUser(target.id, fields);
@@ -61,6 +78,24 @@ export default function AccountPanel({isDarkMode, onClose}) {
         if (!window.confirm(`Supprimer définitivement le compte ${target.display_name} ?`)) return;
         try {
             await deleteUser(target.id);
+            await refresh();
+        } catch (requestError) {
+            setError(requestError.message);
+        }
+    };
+
+    const handleAdminPassword = async (target) => {
+        const password = adminPasswords[target.id] || '';
+        if (password.length < 8) {
+            setError('Le mot de passe doit contenir au moins 8 caractères.');
+            return;
+        }
+        try {
+            setError('');
+            setNotice('');
+            await updateUser(target.id, {password});
+            setAdminPasswords((current) => ({...current, [target.id]: ''}));
+            setNotice(`Mot de passe de ${target.display_name} modifié.`);
             await refresh();
         } catch (requestError) {
             setError(requestError.message);
@@ -84,6 +119,7 @@ export default function AccountPanel({isDarkMode, onClose}) {
                 </div>
 
                 {error && <p className="mb-4 rounded-lg bg-rose-500/10 p-3 text-sm text-rose-500" role="alert">{error}</p>}
+                {notice && <p className="mb-4 rounded-lg bg-emerald-500/10 p-3 text-sm text-emerald-500" role="status">{notice}</p>}
 
                 <form className="mb-8 flex flex-wrap items-end gap-2" onSubmit={handleNameSave}>
                     <label className="grid min-w-56 flex-1 gap-1 text-sm">
@@ -93,6 +129,14 @@ export default function AccountPanel({isDarkMode, onClose}) {
                     <button className="rounded bg-[#635bff] px-3 py-2 text-sm font-semibold text-white" type="submit" disabled={savingName}>
                         {savingName ? 'Enregistrement…' : 'Enregistrer'}
                     </button>
+                </form>
+
+                <form className="mb-8 grid gap-2 sm:grid-cols-3" onSubmit={handlePasswordChange}>
+                    <h3 className="sm:col-span-3 font-semibold">Changer mon mot de passe</h3>
+                    <input required type="password" autoComplete="current-password" placeholder="Mot de passe actuel" value={passwordForm.current_password} onChange={(event) => setPasswordForm({...passwordForm, current_password: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
+                    <input required minLength="8" type="password" autoComplete="new-password" placeholder="Nouveau mot de passe (8 min.)" value={passwordForm.new_password} onChange={(event) => setPasswordForm({...passwordForm, new_password: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
+                    <input required minLength="8" type="password" autoComplete="new-password" placeholder="Confirmer le nouveau mot de passe" value={passwordForm.password_confirmation} onChange={(event) => setPasswordForm({...passwordForm, password_confirmation: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
+                    <button className="rounded bg-[#635bff] px-3 py-2 text-sm font-semibold text-white sm:col-span-3" type="submit">Modifier mon mot de passe</button>
                 </form>
 
                 <div className="mb-8">
@@ -133,6 +177,16 @@ export default function AccountPanel({isDarkMode, onClose}) {
                                         <p className={`text-xs ${target.is_active ? 'text-emerald-500' : 'text-rose-500'}`}>{target.is_active ? 'Actif' : 'Désactivé'}</p>
                                     </div>
                                     <div className="flex items-center gap-2">
+                                        <input
+                                            type="password"
+                                            minLength="8"
+                                            placeholder="Nouveau mot de passe"
+                                            value={adminPasswords[target.id] || ''}
+                                            onChange={(event) => setAdminPasswords((current) => ({...current, [target.id]: event.target.value}))}
+                                            className="w-36 rounded border bg-transparent px-2 py-1 text-xs"
+                                            aria-label={`Nouveau mot de passe de ${target.email}`}
+                                        />
+                                        <button type="button" className="text-xs text-[#635bff]" onClick={() => handleAdminPassword(target)}>Définir</button>
                                         <select value={target.role} onChange={(event) => handleUserUpdate(target, {role: event.target.value})} className="rounded border bg-transparent px-2 py-1 text-xs">
                                             <option value="user">Utilisateur</option>
                                             <option value="admin">Administrateur</option>

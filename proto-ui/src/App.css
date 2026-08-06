@@ -274,3 +274,15 @@
   color: #a53d32;
   font-size: 14px;
 }
+
+.auth-link,
+.auth-link-button {
+  color: #3f6f9f;
+  font: inherit;
+  font-size: 14px;
+  text-align: center;
+  text-decoration: none;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}

@@ -37,9 +37,16 @@ if os.path.exists(DIST_DIR):
     if os.path.exists(assets_dir):
         app.mount("/assets", StaticFiles(directory=assets_dir), name="react_assets")
 
+    def serve_react_index():
+        return FileResponse(os.path.join(DIST_DIR, "index.html"))
+
     @ui.page("/")
     def serve_index():
-        return FileResponse(os.path.join(DIST_DIR, "index.html"))
+        return serve_react_index()
+
+    @ui.page("/reset-password")
+    def serve_reset_password():
+        return serve_react_index()
 else:
     raise RuntimeError("Le frontend React compilé (proto-ui/dist) est requis.")
 

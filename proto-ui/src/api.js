@@ -44,6 +44,20 @@ export async function login(payload) {
     return (await authRequest('/login', {method: 'POST', body: JSON.stringify(payload)})).user;
 }
 
+export async function changePassword(payload) {
+    return authRequest('/change-password', {method: 'POST', body: JSON.stringify(payload)});
+}
+
+export async function requestPasswordReset(email) {
+    return authRequest('/forgot-password', {
+        method: 'POST', body: JSON.stringify({email}),
+    });
+}
+
+export async function resetPassword(payload) {
+    return authRequest('/reset-password', {method: 'POST', body: JSON.stringify(payload)});
+}
+
 export async function logout() {
     await authRequest('/logout', {method: 'POST'});
 }
