@@ -42,6 +42,23 @@ const StarIcon = ({ fillRatio = 0, size = 20, isDarkMode = false }) => {
 // Fallback initial data if API is offline
 const INITIAL_MOVIES = [];
 
+const getMediaAction = (mediaType, availability) => {
+    if (availability?.jellyfin_id) {
+        return { label: 'Lire', canPlay: true, disabled: false };
+    }
+    if (availability?.state === 'downloading') {
+        return { label: 'Téléchargement en cours', canPlay: false, disabled: true };
+    }
+    if (['requested', 'searching'].includes(availability?.state)) {
+        return { label: 'Demande en cours', canPlay: false, disabled: true };
+    }
+    return {
+        label: mediaType === 'Série' ? 'Demander cette série' : 'Demander ce film',
+        canPlay: false,
+        disabled: false,
+    };
+};
+
 export default function BackstagePrototype() {
     const {user} = useAuth();
     const [movies, setMovies] = useState(INITIAL_MOVIES);
@@ -113,6 +130,7 @@ export default function BackstagePrototype() {
     };
 
     const selectedMedia = selectedMovie || selectedSeries;
+    const mediaAction = getMediaAction(selectedMedia?.type, mediaAvailability?.availability);
 
     const closePlayer = () => {
         setPlayerMedia(null);
@@ -1181,7 +1199,13 @@ export default function BackstagePrototype() {
                                 <div className={`rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
                                     <div className="flex items-center justify-between gap-3"><p className="text-[10px] font-mono uppercase tracking-widest opacity-60">Synopsis</p><button onClick={refreshSelectedSeries} disabled={seriesRefreshing} className="rounded-lg bg-[#635bff] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{seriesRefreshing ? 'Actualisation…' : 'Actualiser TMDB'}</button></div>
                                     <p className="mt-3 text-sm leading-6 opacity-80">{selectedSeries.synopsis || 'Aucun synopsis disponible.'}</p>
-                                    <button onClick={openAcquisition} className="mt-3 rounded-lg bg-[#635bff] px-3 py-1.5 text-xs font-semibold text-white">Demander via Seerr</button>
+                                    <button
+                                        onClick={mediaAction.disabled ? undefined : mediaAction.canPlay ? openPlayer : openAcquisition}
+                                        disabled={mediaAction.disabled}
+                                        className="mt-3 rounded-lg bg-[#635bff] px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        {mediaAction.label}
+                                    </button>
                                 </div>
                                 <div className={`rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
                                     <p className="text-[10px] font-mono uppercase tracking-widest opacity-60">Informations</p>
@@ -1466,13 +1490,14 @@ export default function BackstagePrototype() {
                                     </div>
                                 </div>
                                 <button
-                                    onClick={mediaAvailability?.availability?.jellyfin_id ? openPlayer : openAcquisition}
-                                    className={mediaAvailability?.availability?.jellyfin_id
+                                    onClick={mediaAction.disabled ? undefined : mediaAction.canPlay ? openPlayer : openAcquisition}
+                                    disabled={mediaAction.disabled}
+                                    className={mediaAction.canPlay
                                         ? 'bg-emerald-500 hover:bg-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-300 text-white text-sm font-bold px-5 py-3 rounded-xl transition-all shadow-lg shadow-emerald-950/40 cursor-pointer flex items-center gap-2 whitespace-nowrap'
-                                        : 'bg-[#635bff] hover:bg-[#5048e5] focus-visible:ring-2 focus-visible:ring-[#a9a3ff] text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all shadow-md cursor-pointer flex items-center gap-2 whitespace-nowrap'}
+                                        : 'bg-[#635bff] hover:bg-[#5048e5] focus-visible:ring-2 focus-visible:ring-[#a9a3ff] text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all shadow-md cursor-pointer flex items-center gap-2 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-60'}
                                 >
-                                    <span aria-hidden="true" className={mediaAvailability?.availability?.jellyfin_id ? 'text-base leading-none' : ''}>{mediaAvailability?.availability?.jellyfin_id ? '▶' : '+'}</span>
-                                    <span>{mediaAvailability?.availability?.jellyfin_id ? 'Lire' : 'Demander via Seerr'}</span>
+                                    <span aria-hidden="true" className={mediaAction.canPlay ? 'text-base leading-none' : ''}>{mediaAction.canPlay ? '▶' : '+'}</span>
+                                    <span>{mediaAction.label}</span>
                                 </button>
                             </div>
 

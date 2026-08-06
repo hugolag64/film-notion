@@ -10,4 +10,15 @@ def test_resume_section_is_not_rendered_in_catalogue_but_detail_keeps_playback_a
     detail = source[source.index('{selectedMovie && ('):]
 
     assert "Reprendre la lecture" not in catalogue
-    assert "Lire" in detail
+    assert "mediaAction.label" in detail
+    assert "label: 'Lire'" in source
+
+
+def test_media_action_labels_are_user_facing_and_cover_pending_states():
+    source = UI_SOURCE.read_text(encoding="utf-8")
+
+    assert "Demander via Seerr" not in source
+    assert "Demander ce film" in source
+    assert "Demander cette série" in source
+    assert "Demande en cours" in source
+    assert "Téléchargement en cours" in source
