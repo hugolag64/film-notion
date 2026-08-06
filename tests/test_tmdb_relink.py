@@ -4,7 +4,7 @@ import csv
 
 from backend.core.models import Media
 from backend.core.store import MediaStore
-from backend.core.tmdb_relink import select_confident_match
+from backend.core.tmdb_relink import build_relink_updates, select_confident_match
 from backend.scripts.relink_tmdb import relink_missing_tmdb_ids
 
 
@@ -37,6 +37,24 @@ def test_accepts_accent_and_punctuation_differences_for_one_result():
     candidates = [{"id": 123, "title": "L Auberge Espagnole", "release_date": "2002-05-17"}]
 
     assert select_confident_match(media, candidates) == candidates[0]
+
+
+def test_relink_does_not_turn_tmdb_score_into_personal_rating():
+    media = _media(rating=None)
+
+    updates = build_relink_updates(
+        media,
+        {
+            "title": "Dune",
+            "vote_average": 9.1,
+            "genres": [],
+            "credits": {"cast": [], "crew": []},
+        },
+        FakeTMDB(),
+        123,
+    )
+
+    assert updates["rating"] is None
 
 
 class FakeTMDB:

@@ -51,6 +51,7 @@ def build_relink_updates(media: Media, details: Dict[str, Any], tmdb: Any, tmdb_
         "director": tmdb.get_director(details) or media.director,
         "synopsis": (details.get("overview") or media.synopsis or "")[:2000],
         "categories": tmdb.get_genres(details) or media.categories,
+        "rating": media.rating,
         "tmdb_ok": True,
         "tmdb_id": tmdb_id,
         "release_date": details.get("release_date") or details.get("first_air_date") or media.release_date,

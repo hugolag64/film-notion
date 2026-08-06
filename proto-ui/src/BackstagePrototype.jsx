@@ -433,22 +433,7 @@ export default function BackstagePrototype() {
             const updated = await relinkTMDB(mediaId, tmdbId);
             await loadRealMedias();
             if (selectedMovie && selectedMovie.id === mediaId) {
-                let castList = [];
-                if (Array.isArray(updated.cast) && updated.cast.length > 0) castList = updated.cast;
-                else if (typeof updated.cast === 'string' && updated.cast.trim()) {
-                    try { castList = JSON.parse(updated.cast); } catch { castList = [updated.cast]; }
-                }
-                setSelectedMovie(prev => ({
-                    ...prev,
-                    title: updated.title || prev.title,
-                    poster: updated.cover_url || prev.poster,
-                    backdrop: updated.backdrop_url || prev.backdrop,
-                    director: updated.director || prev.director,
-                    year: updated.release_date ? new Date(updated.release_date).getFullYear() : prev.year,
-                    synopsis: updated.synopsis || prev.synopsis,
-                    cast: castList.length > 0 ? castList : prev.cast,
-                    genre: (updated.categories && updated.categories.length > 0) ? updated.categories : prev.genre
-                }));
+                replaceCanonicalMedia(updated);
             }
             setShowRelinkModal(false);
         } catch (err) {
