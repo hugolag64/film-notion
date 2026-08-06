@@ -3,10 +3,10 @@ import asyncio
 import json
 import sqlite3
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from backend.core.models import Media, Rental
+from backend.core.models import Media, Notification, Rental
 from backend.core.media_server import Availability
 from backend.core.playback import PlaybackProgress
 
@@ -98,11 +98,40 @@ class MediaStore:
                     first_played_at TEXT,
                     expires_at TEXT,
                     keep_requested_at TEXT,
+                    storage_policy TEXT NOT NULL DEFAULT 'temporary',
+                    keep_decision TEXT,
+                    decided_by TEXT,
+                    decided_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE CASCADE
                 )
                 """
+            )
+            rental_columns = {row[1] for row in conn.execute("PRAGMA table_info(media_rentals)").fetchall()}
+            if "storage_policy" not in rental_columns:
+                conn.execute("ALTER TABLE media_rentals ADD COLUMN storage_policy TEXT NOT NULL DEFAULT 'temporary'")
+            if "keep_decision" not in rental_columns:
+                conn.execute("ALTER TABLE media_rentals ADD COLUMN keep_decision TEXT")
+            if "decided_by" not in rental_columns:
+                conn.execute("ALTER TABLE media_rentals ADD COLUMN decided_by TEXT")
+            if "decided_at" not in rental_columns:
+                conn.execute("ALTER TABLE media_rentals ADD COLUMN decided_at TEXT")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS notifications (
+                    id TEXT PRIMARY KEY,
+                    backstage_user_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    read_at TEXT,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_notifications_user_created "
+                "ON notifications(backstage_user_id, created_at DESC)"
             )
             active_states = ", ".join(f"'{state}'" for state in _ACTIVE_RENTAL_STATES)
             conn.execute(
@@ -183,11 +212,19 @@ class MediaStore:
         data = dict(row)
         for field in (
             "requested_at", "available_at", "first_played_at", "expires_at",
-            "keep_requested_at", "created_at", "updated_at",
+            "keep_requested_at", "decided_at", "created_at", "updated_at",
         ):
             if data.get(field):
                 data[field] = datetime.fromisoformat(data[field])
         return Rental(**data)
+
+    @staticmethod
+    def _row_to_notification(row: sqlite3.Row) -> Notification:
+        data = dict(row)
+        for field in ("read_at", "created_at"):
+            if data.get(field):
+                data[field] = datetime.fromisoformat(data[field])
+        return Notification(**data)
 
     @staticmethod
     def _encode(field: str, value: Any) -> Any:
@@ -427,7 +464,7 @@ class MediaStore:
         values = rental.model_dump()
         for field in (
             "requested_at", "available_at", "first_played_at", "expires_at",
-            "keep_requested_at", "created_at", "updated_at",
+            "keep_requested_at", "decided_at", "created_at", "updated_at",
         ):
             if values[field] is not None:
                 values[field] = values[field].isoformat()
@@ -476,7 +513,8 @@ class MediaStore:
 
     def _update_rental_sync(self, rental_id: str, updates: Dict[str, Any]) -> Optional[Rental]:
         allowed = {
-            "status", "available_at", "first_played_at", "expires_at", "keep_requested_at", "updated_at",
+            "status", "available_at", "first_played_at", "expires_at", "keep_requested_at",
+            "storage_policy", "keep_decision", "decided_by", "decided_at", "updated_at",
         }
         values = {key: value for key, value in updates.items() if key in allowed}
         values["updated_at"] = values.get("updated_at") or datetime.now(timezone.utc)
@@ -491,6 +529,96 @@ class MediaStore:
                     (*values.values(), rental_id),
                 )
         return self._get_rental_sync(rental_id)
+
+    def _list_keep_requested_rentals_sync(self) -> List[Dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT media_rentals.*, media.title AS media_title "
+                "FROM media_rentals JOIN media ON media.id = media_rentals.media_id "
+                "WHERE media_rentals.status = 'keep_requested' ORDER BY media_rentals.updated_at DESC"
+            ).fetchall()
+        items = []
+        for row in rows:
+            items.append({
+                "media_title": row["media_title"],
+                "rental": self._row_to_rental(row).model_dump(mode="json"),
+            })
+        return items
+
+    def _decide_rental_sync(self, rental_id: str, decision: str, admin_id: str, decided_at: datetime) -> Optional[Rental]:
+        if decision not in {"accepted", "refused"}:
+            raise ValueError("invalid rental decision")
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute("SELECT status FROM media_rentals WHERE id = ?", (rental_id,)).fetchone()
+            if not row:
+                return None
+            if row[0] != "keep_requested":
+                raise ValueError("rental is not awaiting a conservation decision")
+            if decision == "accepted":
+                conn.execute(
+                    "UPDATE media_rentals SET status = 'kept', storage_policy = 'permanent', "
+                    "keep_decision = 'accepted', expires_at = NULL, keep_requested_at = NULL, "
+                    "decided_by = ?, decided_at = ?, updated_at = ? WHERE id = ?",
+                    (admin_id, decided_at.isoformat(), decided_at.isoformat(), rental_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE media_rentals SET status = 'available', storage_policy = 'temporary', "
+                    "keep_decision = 'refused', keep_requested_at = NULL, decided_by = ?, "
+                    "decided_at = ?, updated_at = ? WHERE id = ?",
+                    (admin_id, decided_at.isoformat(), decided_at.isoformat(), rental_id),
+                )
+        return self._get_rental_sync(rental_id)
+
+    def _extend_rental_sync(self, rental_id: str, now: datetime) -> Optional[Rental]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT status, expires_at FROM media_rentals WHERE id = ?", (rental_id,)).fetchone()
+            if not row:
+                return None
+            if row["status"] not in {"available", "keep_requested"}:
+                raise ValueError("rental cannot be extended")
+            current_expiry = datetime.fromisoformat(row["expires_at"]) if row["expires_at"] else now
+            expiry = max(current_expiry, now) + timedelta(days=7)
+            conn.execute(
+                "UPDATE media_rentals SET expires_at = ?, updated_at = ? WHERE id = ?",
+                (expiry.isoformat(), now.isoformat(), rental_id),
+            )
+        return self._get_rental_sync(rental_id)
+
+    def _create_notification_sync(self, notification: Notification) -> Notification:
+        values = notification.model_dump()
+        for field in ("read_at", "created_at"):
+            if values[field] is not None:
+                values[field] = values[field].isoformat()
+        columns = list(values)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                f"INSERT INTO notifications ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+                [values[column] for column in columns],
+            )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM notifications WHERE id = ?", (notification.id,)).fetchone()
+        return self._row_to_notification(row)
+
+    def _list_notifications_sync(self, user_id: str) -> List[Notification]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM notifications WHERE backstage_user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            ).fetchall()
+        return [self._row_to_notification(row) for row in rows]
+
+    def _mark_notification_read_sync(self, notification_id: str, user_id: str, read_at: datetime) -> bool:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "UPDATE notifications SET read_at = ? WHERE id = ? AND backstage_user_id = ?",
+                (read_at.isoformat(), notification_id, user_id),
+            )
+        return cursor.rowcount > 0
 
     def _mark_rentals_available_sync(self, media_id: str, available_at: datetime, expires_at: datetime) -> int:
         active_states = ("requested", "downloading", "available")
@@ -710,6 +838,26 @@ class MediaStore:
 
     async def update_rental(self, rental_id: str, updates: Dict[str, Any]) -> Optional[Rental]:
         return await asyncio.to_thread(self._update_rental_sync, rental_id, updates)
+
+    async def list_keep_requested_rentals(self) -> List[Dict[str, Any]]:
+        return await asyncio.to_thread(self._list_keep_requested_rentals_sync)
+
+    async def decide_rental(
+        self, rental_id: str, decision: str, admin_id: str, decided_at: datetime,
+    ) -> Optional[Rental]:
+        return await asyncio.to_thread(self._decide_rental_sync, rental_id, decision, admin_id, decided_at)
+
+    async def extend_rental(self, rental_id: str, now: datetime) -> Optional[Rental]:
+        return await asyncio.to_thread(self._extend_rental_sync, rental_id, now)
+
+    async def create_notification(self, notification: Notification) -> Notification:
+        return await asyncio.to_thread(self._create_notification_sync, notification)
+
+    async def list_notifications(self, user_id: str) -> List[Notification]:
+        return await asyncio.to_thread(self._list_notifications_sync, user_id)
+
+    async def mark_notification_read(self, notification_id: str, user_id: str, read_at: datetime) -> bool:
+        return await asyncio.to_thread(self._mark_notification_read_sync, notification_id, user_id, read_at)
 
     async def mark_rentals_available(self, media_id: str, available_at: datetime, expires_at: datetime) -> int:
         return await asyncio.to_thread(self._mark_rentals_available_sync, media_id, available_at, expires_at)

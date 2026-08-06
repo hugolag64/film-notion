@@ -49,5 +49,18 @@ class Rental(BaseModel):
     first_played_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
     keep_requested_at: Optional[datetime] = None
+    storage_policy: Literal["temporary", "permanent"] = "temporary"
+    keep_decision: Optional[Literal["accepted", "refused"]] = None
+    decided_by: Optional[str] = None
+    decided_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+
+
+class Notification(BaseModel):
+    id: str
+    backstage_user_id: str
+    kind: str
+    message: str
+    read_at: Optional[datetime] = None
+    created_at: datetime

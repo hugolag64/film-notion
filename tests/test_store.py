@@ -3,7 +3,7 @@ from datetime import date, datetime, timezone
 
 from backend.core.store import MediaStore
 from backend.core.media_server import Availability
-from backend.core.models import Rental
+from backend.core.models import Notification, Rental
 
 
 def _store(tmp_path) -> MediaStore:
@@ -179,3 +179,48 @@ def test_rental_updates_expiry_and_keep_state(tmp_path):
     assert updated.status == "keep_requested"
     assert updated.keep_requested_at == now
     assert asyncio.run(store.count_active_rentals("hugo")) == 1
+
+
+def test_rental_decisions_protect_or_extend_and_notifications_are_scoped(tmp_path):
+    store = _store(tmp_path)
+    media = asyncio.run(store.create({"title": "Dune", "type": "Film"}))
+    now = datetime.now(timezone.utc)
+    rental = Rental(
+        id="rental-1", media_id=media.id, backstage_user_id="hugo", status="keep_requested",
+        requested_at=now, expires_at=now, keep_requested_at=now, created_at=now, updated_at=now,
+    )
+    asyncio.run(store.create_rental(rental))
+
+    kept = asyncio.run(store.decide_rental("rental-1", "accepted", "admin-id", now))
+    assert kept.status == "kept"
+    assert kept.storage_policy == "permanent"
+    assert kept.expires_at is None
+    assert kept.decided_by == "admin-id"
+
+    notification = asyncio.run(store.create_notification(Notification(
+        id="notification-1", backstage_user_id="hugo", kind="retention_accepted",
+        message="Film conservé définitivement", created_at=now,
+    )))
+    assert notification.id == "notification-1"
+    assert len(asyncio.run(store.list_notifications("hugo"))) == 1
+    assert asyncio.run(store.list_notifications("other")) == []
+    assert asyncio.run(store.mark_notification_read("notification-1", "hugo", now)) is True
+    assert asyncio.run(store.list_notifications("hugo"))[0].read_at == now
+
+
+def test_rental_refusal_and_extension_keep_the_file_temporary(tmp_path):
+    store = _store(tmp_path)
+    media = asyncio.run(store.create({"title": "Arrival", "type": "Film"}))
+    now = datetime.now(timezone.utc)
+    rental = Rental(
+        id="rental-2", media_id=media.id, backstage_user_id="hugo", status="keep_requested",
+        requested_at=now, expires_at=now, keep_requested_at=now, created_at=now, updated_at=now,
+    )
+    asyncio.run(store.create_rental(rental))
+
+    refused = asyncio.run(store.decide_rental("rental-2", "refused", "admin-id", now))
+    assert refused.status == "available"
+    assert refused.storage_policy == "temporary"
+    assert refused.keep_requested_at is None
+    extended = asyncio.run(store.extend_rental("rental-2", now))
+    assert extended.expires_at > now
