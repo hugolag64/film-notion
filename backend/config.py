@@ -7,6 +7,11 @@ class Config:
     TMDB_API_KEY = os.getenv("TMDB_API_KEY")
     DB_PATH = os.getenv("DB_PATH", "backstage.db")
     PORT = int(os.getenv("PORT", "8090"))
+    RECOMMENDATION_DAILY_LIMIT = int(os.getenv("RECOMMENDATION_DAILY_LIMIT", "2") or "2")
+    RECOMMENDATION_TIMEZONE = os.getenv("RECOMMENDATION_TIMEZONE", "Europe/Paris")
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+    GEMINI_MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "256") or "256")
 
     RADARR_URL = os.getenv("RADARR_URL", "http://127.0.0.1:7878")
     RADARR_API_KEY = os.getenv("RADARR_API_KEY")
