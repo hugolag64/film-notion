@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Hls from 'hls.js';
 import AccountPanel from './AccountPanel';
+import AdminCenter from './components/AdminCenter';
 import { useAuth } from './auth-context';
 import { fetchMedias, updateMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncMediaServer, importMediaServerLibrary, syncPlayback } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
@@ -70,6 +71,7 @@ export default function BackstagePrototype() {
     const [, setError] = useState(null);
     const [activeFilter, setActiveFilter] = useState('all'); // 'all' | 'watched' | 'watchlist' | 'favorite'
     const [selectedMovie, setSelectedMovie] = useState(null);
+    const libraryScrollTop = useRef(0);
     const [selectedSeries, setSelectedSeries] = useState(null);
     const [seriesEpisodes, setSeriesEpisodes] = useState([]);
     const [seriesProgress, setSeriesProgress] = useState(null);
@@ -109,6 +111,7 @@ export default function BackstagePrototype() {
     const hlsRef = useRef(null);
     const [isDarkMode, setIsDarkMode] = useState(false); // Theme toggle state
     const [showAccountPanel, setShowAccountPanel] = useState(false);
+    const [showAdminCenter, setShowAdminCenter] = useState(false);
 
     // TMDB Relink Modal State
     const [showRelinkModal, setShowRelinkModal] = useState(false);
@@ -136,6 +139,30 @@ export default function BackstagePrototype() {
     const selectedMedia = selectedMovie || selectedSeries;
     const mediaAction = getMediaAction(selectedMedia?.type, mediaAvailability?.availability);
     const selectedRental = selectedMedia?.id ? rentalsByMedia[selectedMedia.id] : null;
+
+    const openMovie = (movie) => {
+        libraryScrollTop.current = window.scrollY;
+        setSelectedMovie(movie);
+    };
+
+    const closeMovie = () => {
+        setSelectedMovie(null);
+        window.requestAnimationFrame(() => window.scrollTo(0, libraryScrollTop.current));
+    };
+
+    useEffect(() => {
+        if (!selectedMovie) return undefined;
+        const handleEscape = (event) => {
+            if (event.key === 'Escape') closeMovie();
+        };
+        const previousOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        window.addEventListener('keydown', handleEscape);
+        return () => {
+            document.body.style.overflow = previousOverflow;
+            window.removeEventListener('keydown', handleEscape);
+        };
+    }, [selectedMovie]);
 
     const loadRentals = () => fetchRentals().then((result) => {
         setRentalsByMedia(Object.fromEntries((result.rentals || []).map((rental) => [rental.media_id, rental])));
@@ -959,6 +986,9 @@ export default function BackstagePrototype() {
                         <button onClick={() => setShowAddDialog(true)} className="bg-[#635bff] hover:bg-[#5048e5] text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all shadow-md cursor-pointer">
                             {collection === 'Séries' ? '+ Ajouter une série' : '+ Ajouter un film'}
                         </button>
+                        {user?.role === 'admin' && <button onClick={() => setShowAdminCenter(true)} className="rounded-lg border border-[#635bff]/40 px-3 py-2 text-xs font-semibold text-[#635bff]" title="Ouvrir l’administration">
+                            Administration
+                        </button>}
                         <button onClick={() => setShowAccountPanel(true)} className="rounded-lg border px-3 py-2 text-xs font-semibold" title="Ouvrir le compte">
                             {user?.display_name || 'Compte'}
                         </button>
@@ -967,6 +997,7 @@ export default function BackstagePrototype() {
             </header>
 
             {showAccountPanel && <AccountPanel isDarkMode={isDarkMode} onClose={() => setShowAccountPanel(false)} />}
+            {showAdminCenter && user?.role === 'admin' && <AdminCenter isDarkMode={isDarkMode} onClose={() => setShowAdminCenter(false)} />}
 
             {/* Main App Layout with Dynamic Floating Sidebar */}
             <div className="flex-1 max-w-[1536px] w-full mx-auto flex p-6 gap-8">
@@ -1100,7 +1131,7 @@ export default function BackstagePrototype() {
                         {filteredMovies.map((movie) => (
                             <div
                                 key={movie.id}
-                                onClick={() => movie.type === 'Série' ? openSeries(movie) : setSelectedMovie(movie)}
+                                onClick={() => movie.type === 'Série' ? openSeries(movie) : openMovie(movie)}
                                 className={`group relative flex flex-col rounded-xl overflow-hidden border transition-all duration-300 cursor-pointer transform hover:-translate-y-1.5 ${isDarkMode
                                     ? 'bg-[#0a0a0a] border-white/10 hover:border-[#635bff]/60 shadow-xl'
                                     : 'bg-white border-[#e3e8ee] hover:border-[#635bff] hover:shadow-xl shadow-sm'
@@ -1287,14 +1318,14 @@ export default function BackstagePrototype() {
             )}
 
 
-            {/* Stripe-style Dense Detail Drawer */}
+            {/* Centered cinematic film detail */}
             {selectedMovie && (
                 <div
-                    className="fixed inset-0 z-50 flex justify-end bg-black/80 backdrop-blur-md animate-fade-in-smooth cursor-pointer"
-                    onClick={() => setSelectedMovie(null)}
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 backdrop-blur-md animate-fade-in-smooth cursor-pointer sm:p-6"
+                    onClick={closeMovie}
                 >
                     <div
-                        className={`w-full max-w-xl h-full shadow-2xl overflow-y-auto flex flex-col border-l animate-slide-left-smooth cursor-default ${isDarkMode
+                        className={`flex h-[min(94vh,980px)] w-full max-w-5xl flex-col overflow-y-auto rounded-2xl border shadow-2xl animate-fade-in-smooth cursor-default ${isDarkMode
                             ? 'bg-[#0a0a0a] text-white border-white/10'
                             : 'bg-[#f6f9fc] text-[#0a2540] border-[#e3e8ee]'
                             }`}
@@ -1345,7 +1376,7 @@ export default function BackstagePrototype() {
 
                             {/* Close Button */}
                             <button
-                                onClick={() => setSelectedMovie(null)}
+                                onClick={closeMovie}
                                 className="absolute top-4 right-4 w-9 h-9 rounded-full bg-black/60 hover:bg-black/90 text-white flex items-center justify-center text-sm transition-all border border-white/20 backdrop-blur-md cursor-pointer z-10"
                                 title="Fermer la fiche (ou cliquer à côté)"
                             >
