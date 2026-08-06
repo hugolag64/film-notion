@@ -314,6 +314,10 @@ async def _recommendation_pool(
     except (ValueError, httpx.HTTPError):
         return []
     state_by_media = {state.media_id: state for state in states}
+    shown_tmdb_ids = {
+        int(value) for value in session_preferences.get("shown_tmdb_ids", [])
+        if str(value).isdigit()
+    }
     seen_tmdb_ids = {
         media.tmdb_id
         for media in medias
@@ -325,6 +329,7 @@ async def _recommendation_pool(
             or any(progress.media_id == media.id and (progress.played or progress.percent >= 95) for progress in playback)
         )
     }
+    seen_tmdb_ids.update(shown_tmdb_ids)
     watchlisted_tmdb_ids = {
         media.tmdb_id
         for media in medias
@@ -356,6 +361,19 @@ def _question_from_candidates(candidates: list[RecommendationCandidate]) -> dict
         "prompt": "Tu préfères lequel ?",
         "options": [_serialize_recommendation(item) for item in options],
     }
+
+
+async def _remember_question_options(
+    session: RecommendationSession,
+    question: dict[str, Any],
+    store: MediaStore,
+) -> None:
+    shown_ids = list(session.session_preferences.get("shown_tmdb_ids", []))
+    shown_ids.extend(str(option["tmdb_id"]) for option in question["options"])
+    session.session_preferences["shown_tmdb_ids"] = list(dict.fromkeys(shown_ids))[-20:]
+    await store.update_recommendation_session(session.id, {
+        "session_preferences": session.session_preferences,
+    })
 
 
 @router.post("/recommendations/events")
@@ -392,6 +410,7 @@ async def start_recommendation_session(
     question = _question_from_candidates(candidates)
     if question is None:
         return {"session": session.model_dump(mode="json"), "state": "empty", "question": None, "result": None}
+    await _remember_question_options(session, question, store)
     for option in question["options"]:
         await store.record_recommendation_event(RecommendationEvent(
             id=str(uuid.uuid4()), backstage_user_id=current.user["id"],
@@ -432,6 +451,7 @@ async def answer_recommendation(
         "question_count": question_count,
         "session_preferences": preferences,
     })
+    session.session_preferences = preferences
     await store.record_recommendation_event(RecommendationEvent(
         id=str(uuid.uuid4()), backstage_user_id=current.user["id"],
         session_id=session_id, media_id=payload.media_id,
@@ -452,6 +472,8 @@ async def answer_recommendation(
         ))
         return {"session_id": session_id, "state": "result", "question": None, "result": _serialize_recommendation(result)}
     question = _question_from_candidates(candidates)
+    if question:
+        await _remember_question_options(session, question, store)
     return {"session_id": session_id, "state": "question" if question else "empty", "question": question, "result": None}
 
 

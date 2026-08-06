@@ -1,6 +1,8 @@
 import asyncio
 from datetime import datetime, timezone
 
+from backend import api
+from backend.auth_api import AuthContext
 from backend.core.models import RecommendationEvent, RecommendationSession
 from backend.core.store import MediaStore
 
@@ -40,3 +42,29 @@ def test_recommendation_session_round_trip(tmp_path):
 
     assert updated.question_count == 2
     assert updated.session_preferences == {"mood": "light"}
+
+
+def test_recommendation_session_does_not_repeat_shown_movies(tmp_path, monkeypatch):
+    class FakeTMDB:
+        async def discover_movies(self, **kwargs):
+            return [
+                {"tmdb_id": tmdb_id, "title": f"Film {tmdb_id}", "vote_average": 7 + tmdb_id / 10}
+                for tmdb_id in range(1, 7)
+            ]
+
+    store = make_store(tmp_path)
+    current = AuthContext(user={"id": "hugo", "role": "user"}, session_id="session", token="token")
+    monkeypatch.setattr(api, "TMDBClient", FakeTMDB)
+
+    first = asyncio.run(api.start_recommendation_session(current, store))
+    first_ids = {option["tmdb_id"] for option in first["question"]["options"]}
+
+    second = asyncio.run(api.answer_recommendation(
+        first["session"]["id"],
+        api.RecommendationAnswerRequest(answer="light"),
+        current,
+        store,
+    ))
+    second_ids = {option["tmdb_id"] for option in second["question"]["options"]}
+
+    assert first_ids.isdisjoint(second_ids)
