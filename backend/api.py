@@ -26,8 +26,8 @@ from backend.core.jellyfin import JellyfinClient
 from backend.core.media_server import MediaServerService
 from backend.core.backup import create_backup, get_backup_health, get_backup_status, verify_backup
 from backend.core.recommendations import (
-    RecommendationCandidate, build_taste_profile, choose_from_top,
-    score_candidate,
+    RecommendationCandidate, build_adaptive_question, build_taste_profile, choose_from_top,
+    score_candidate, score_recommendation_candidate,
 )
 from backend.auth_api import AuthContext, get_auth_store, get_current_user, require_admin
 from backend.core.auth import AuthStore
@@ -330,6 +330,10 @@ async def _recommendation_pool(
         )
     }
     seen_tmdb_ids.update(shown_tmdb_ids)
+    hard_reject_media_ids = {event.media_id for event in events if event.event_type == "hard_reject" and event.media_id}
+    hard_reject_tmdb_ids = {
+        media.tmdb_id for media in medias if media.id in hard_reject_media_ids and media.tmdb_id
+    }
     watchlisted_tmdb_ids = {
         media.tmdb_id
         for media in medias
@@ -338,9 +342,10 @@ async def _recommendation_pool(
         )
     }
     return [
-        score_candidate(
-            candidate, profile, session_preferences, seen_tmdb_ids,
-            watchlisted_tmdb_ids, now,
+        score_recommendation_candidate(
+            candidate, profile, session_preferences,
+            {"seen_tmdb_ids": seen_tmdb_ids, "watchlisted_tmdb_ids": watchlisted_tmdb_ids,
+             "hard_reject_tmdb_ids": hard_reject_tmdb_ids}, now,
         )
         for candidate in candidates
     ]
@@ -361,6 +366,14 @@ def _question_from_candidates(candidates: list[RecommendationCandidate]) -> dict
         "prompt": "Tu préfères lequel ?",
         "options": [_serialize_recommendation(item) for item in options],
     }
+
+
+def _adaptive_question_from_candidates(
+    candidates: list[RecommendationCandidate],
+    session_preferences: dict[str, Any],
+) -> dict[str, Any] | None:
+    profile = build_taste_profile([], [], [], [], datetime.now(timezone.utc))
+    return build_adaptive_question(candidates, profile, session_preferences)
 
 
 async def _remember_question_options(
@@ -407,7 +420,7 @@ async def start_recommendation_session(
     )
     await store.create_recommendation_session(session)
     candidates = await _recommendation_pool(current, store, session.session_preferences)
-    question = _question_from_candidates(candidates)
+    question = _adaptive_question_from_candidates(candidates, session.session_preferences)
     if question is None:
         return {"session": session.model_dump(mode="json"), "state": "empty", "question": None, "result": None}
     await _remember_question_options(session, question, store)
@@ -432,7 +445,7 @@ async def answer_recommendation(
         raise HTTPException(status_code=404, detail="Session de recommandation introuvable")
     if session.status != "active":
         raise HTTPException(status_code=409, detail="Cette session est déjà terminée")
-    if session.question_count >= 10:
+    if session.question_count >= 5:
         raise HTTPException(status_code=422, detail="Le nombre maximal de questions est atteint")
     preferences = dict(session.session_preferences)
     if payload.answer in {"light", "intense"}:
@@ -452,10 +465,14 @@ async def answer_recommendation(
         "session_preferences": preferences,
     })
     session.session_preferences = preferences
+    feedback_event_type = {
+        "skipped": "skipped", "not_now": "not_now", "less_like_this": "less_like_this",
+        "already_seen": "already_seen",
+    }.get(payload.answer, "question_answered")
     await store.record_recommendation_event(RecommendationEvent(
         id=str(uuid.uuid4()), backstage_user_id=current.user["id"],
         session_id=session_id, media_id=payload.media_id,
-        event_type="question_answered", value=payload.answer,
+        event_type=feedback_event_type, value=payload.answer,
         created_at=datetime.now(timezone.utc),
     ))
     candidates = await _recommendation_pool(current, store, preferences)
@@ -471,7 +488,7 @@ async def answer_recommendation(
             created_at=datetime.now(timezone.utc),
         ))
         return {"session_id": session_id, "state": "result", "question": None, "result": _serialize_recommendation(result)}
-    question = _question_from_candidates(candidates)
+    question = _adaptive_question_from_candidates(candidates, preferences)
     if question:
         await _remember_question_options(session, question, store)
     return {"session_id": session_id, "state": "question" if question else "empty", "question": question, "result": None}
