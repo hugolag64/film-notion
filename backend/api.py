@@ -15,9 +15,14 @@ from backend.core.tmdb_relink import build_relink_updates
 from backend.core.arr import RadarrClient, SonarrClient
 from backend.core.jellyfin import JellyfinClient
 from backend.core.media_server import MediaServerService
+from backend.auth_api import get_current_user, require_admin
 from urllib.parse import quote, parse_qsl, urlencode, urlsplit
 
-router = APIRouter(prefix="/api", tags=["medias"])
+router = APIRouter(
+    prefix="/api",
+    tags=["medias"],
+    dependencies=[Depends(get_current_user)],
+)
 health_router = APIRouter(tags=["health"])
 
 
@@ -457,7 +462,7 @@ async def get_playback_resource(
     })
 
 
-@router.post("/medias/{media_id}/acquisition")
+@router.post("/medias/{media_id}/acquisition", dependencies=[Depends(require_admin)])
 async def request_acquisition(
     media_id: str,
     payload: AcquisitionRequest,
@@ -491,14 +496,14 @@ async def media_server_options(
     return await client.list_options()
 
 
-@router.post("/media-server/sync")
+@router.post("/media-server/sync", dependencies=[Depends(require_admin)])
 async def sync_media_server(service: MediaServerService = Depends(get_media_server_service)):
     if not Config.media_server_enabled():
         raise HTTPException(status_code=503, detail="Service non configuré")
     return await service.sync_all()
 
 
-@router.post("/media-server/import")
+@router.post("/media-server/import", dependencies=[Depends(require_admin)])
 async def import_media_server_library(service: MediaServerService = Depends(get_media_server_service)):
     if not Config.media_server_enabled():
         raise HTTPException(status_code=503, detail="Service non configuré")
