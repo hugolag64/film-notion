@@ -7,6 +7,14 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+SUPPORTED_QUESTION_AXES = ("movie_compare", "mood", "genre", "era")
+
+
+class GeminiQuestionPlan(BaseModel):
+    axes: list[str] = Field(default_factory=list)
+    usage: dict[str, int] = Field(default_factory=dict)
+
+
 class GeminiSelection(BaseModel):
     tmdb_id: int
     confidence: float = Field(ge=0, le=1)
@@ -116,6 +124,24 @@ class GeminiRecommendationGateway:
             question_axes=[str(item) for item in (parsed.get("question_axes") or [])[:3]],
             usage=usage,
         )
+
+    def plan_questions(self, profile: dict, recent_axes: list[str]) -> GeminiQuestionPlan | None:
+        if not self.enabled:
+            return None
+        parsed, usage = self._request(
+            "Choisis un parcours de 2 a 5 questions parmi les axes autorises. Evite les axes recents et retourne uniquement du JSON.",
+            {
+                "profile": profile,
+                "recent_axes": recent_axes[-8:],
+                "allowed_axes": list(SUPPORTED_QUESTION_AXES),
+            },
+        )
+        raw_axes = parsed.get("axes") or parsed.get("question_axes") or []
+        axes = list(dict.fromkeys(
+            str(axis) for axis in raw_axes
+            if str(axis) in SUPPORTED_QUESTION_AXES
+        ))[:5]
+        return GeminiQuestionPlan(axes=axes, usage=usage)
 
     def select_final(
         self,

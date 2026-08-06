@@ -2,7 +2,7 @@ import asyncio
 
 from backend import api
 from backend.auth_api import AuthContext
-from backend.core.gemini_recommendations import GeminiSelection, GeminiShortlist
+from backend.core.gemini_recommendations import GeminiQuestionPlan, GeminiSelection
 from backend.core.recommendations import RecommendationCandidate
 from backend.core.store import MediaStore
 
@@ -41,10 +41,12 @@ def test_full_session_uses_local_fallback_and_never_repeats(tmp_path, monkeypatc
     session_id = response["session"]["id"]
     shown = set()
     for _ in range(5):
-        shown.update(option["tmdb_id"] for option in response["question"]["options"])
+        shown.update(option["tmdb_id"] for option in response["question"]["options"] if "tmdb_id" in option)
         response = asyncio.run(api.answer_recommendation(
             session_id, api.RecommendationAnswerRequest(answer="light"), current, store,
         ))
+        if response["state"] == "result":
+            break
 
     assert response["state"] == "result"
     assert response["result"]["tmdb_id"] not in shown
@@ -58,18 +60,30 @@ def test_two_pass_usage_is_user_and_session_scoped(tmp_path, monkeypatch):
 
     class FakeGateway:
         enabled = True
+        final_answers = []
 
-        def select_shortlist(self, profile, candidates):
-            return GeminiShortlist(tmdb_ids=[item["tmdb_id"] for item in candidates], usage={"input_tokens": 10, "output_tokens": 3})
+        def plan_questions(self, profile, recent_axes):
+            return GeminiQuestionPlan(
+                axes=["movie_compare", "mood", "genre", "era"],
+                usage={"input_tokens": 10, "output_tokens": 3},
+            )
 
         def select_final(self, profile, answers, candidates):
+            self.final_answers = answers
             return GeminiSelection(tmdb_id=candidates[0]["tmdb_id"], confidence=.9, reason="fit", usage={"input_tokens": 12, "output_tokens": 4})
 
-    monkeypatch.setattr(api, "_gemini_gateway", lambda: FakeGateway())
+    gateway = FakeGateway()
+    monkeypatch.setattr(api, "_gemini_gateway", lambda: gateway)
     response = asyncio.run(api.start_recommendation_session(current, store))
-    response = asyncio.run(api.answer_recommendation(
-        response["session"]["id"], api.RecommendationAnswerRequest(answer="surprise"), current, store,
-    ))
+    session_id = response["session"]["id"]
+    assert response["question"]["axis"] == "movie_compare"
+    for answer in ("picked", "light", "genre:Comédie", "era:classic"):
+        value = "1" if answer == "picked" else None
+        response = asyncio.run(api.answer_recommendation(
+            session_id, api.RecommendationAnswerRequest(answer=answer, value=value), current, store,
+        ))
+    assert response["state"] == "result"
+    assert [item["answer"] for item in gateway.final_answers] == ["picked", "light", "genre:Comédie", "era:classic"]
     usage = asyncio.run(store.get_recommendation_usage(response["session_id"]))
     assert len(usage) == 2
     assert sum(row["input_tokens"] for row in usage) == 22

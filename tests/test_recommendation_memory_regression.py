@@ -33,10 +33,11 @@ def test_new_session_does_not_repeat_recent_question_movies(tmp_path, monkeypatc
         current,
         store,
     ))
-    next_ids = {option["tmdb_id"] for option in next_question["question"]["options"]}
+    next_ids = {option["tmdb_id"] for option in next_question["question"]["options"] if "tmdb_id" in option}
     assert first_ids.isdisjoint(next_ids)
 
     second = asyncio.run(api.start_recommendation_session(current, store))
-    second_ids = {option["tmdb_id"] for option in second["question"]["options"]}
+    second_ids = {option["tmdb_id"] for option in second["question"]["options"] if "tmdb_id" in option}
     assert first_ids.isdisjoint(second_ids)
     assert next_ids.isdisjoint(second_ids)
+    assert second["question"]["axis"] != "movie_compare"

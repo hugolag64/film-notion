@@ -27,10 +27,10 @@ from backend.core.jellyfin import JellyfinClient
 from backend.core.media_server import MediaServerService
 from backend.core.backup import create_backup, get_backup_health, get_backup_status, verify_backup
 from backend.core.recommendations import (
-    RecommendationCandidate, build_adaptive_question, build_taste_profile, choose_from_top,
-    score_candidate, score_recommendation_candidate,
+    RecommendationCandidate, TasteProfile, build_local_question, build_taste_profile,
+    choose_from_top, score_candidate, score_recommendation_candidate,
 )
-from backend.core.gemini_recommendations import GeminiRecommendationGateway
+from backend.core.gemini_recommendations import GeminiRecommendationGateway, SUPPORTED_QUESTION_AXES
 from backend.auth_api import AuthContext, get_auth_store, get_current_user, require_admin
 from backend.core.auth import AuthStore
 from urllib.parse import quote, parse_qsl, urlencode, urlsplit
@@ -111,8 +111,8 @@ def _gemini_gateway() -> GeminiRecommendationGateway:
 
 def _gemini_cost_estimate(usage: dict[str, int]) -> float:
     return round(
-        usage.get("input_tokens", 0) * 0.0000005
-        + usage.get("output_tokens", 0) * 0.000003,
+        usage.get("input_tokens", 0) * 0.0000003
+        + usage.get("output_tokens", 0) * 0.0000025,
         8,
     )
 
@@ -148,6 +148,53 @@ async def _record_gemini_failure(
         "error": type(error).__name__,
         "created_at": datetime.now(timezone.utc),
     })
+
+
+async def _recommendation_profile(
+    current: AuthContext,
+    store: MediaStore,
+) -> tuple[TasteProfile, list[RecommendationEvent]]:
+    medias = await store.fetch_all()
+    states = await store.list_user_media_states(current.user["id"])
+    events = await store.list_recommendation_events(current.user["id"])
+    playback = await store.list_resume_progress(current.user["id"]) + await store.list_recently_completed(current.user["id"])
+    return build_taste_profile(medias, states, playback, events, datetime.now(timezone.utc)), events
+
+
+def _recent_question_axes(events: list[RecommendationEvent]) -> list[str]:
+    return [
+        str(event.value).removeprefix("axis:")
+        for event in events
+        if event.event_type == "question_answered"
+        and str(event.value or "").startswith("axis:")
+        and str(event.value).removeprefix("axis:") in SUPPORTED_QUESTION_AXES
+    ]
+
+
+def _fallback_question_plan(recent_axes: list[str]) -> list[str]:
+    recent = set(recent_axes[-len(SUPPORTED_QUESTION_AXES):])
+    fresh = [axis for axis in SUPPORTED_QUESTION_AXES if axis not in recent]
+    return (fresh + [axis for axis in SUPPORTED_QUESTION_AXES if axis not in fresh])[:5]
+
+
+def _planned_question(
+    session: RecommendationSession,
+    candidates: list[RecommendationCandidate],
+    profile: TasteProfile,
+    start_index: int,
+) -> dict[str, Any] | None:
+    plan = [str(axis) for axis in session.session_preferences.get("question_plan", [])]
+    max_questions = min(5, len(plan))
+    for index in range(start_index, max_questions):
+        question = build_local_question(plan[index], candidates, profile, session.session_preferences)
+        if question is None:
+            continue
+        question["question_index"] = index
+        question["max_questions"] = max_questions
+        session.session_preferences["question_index"] = index
+        session.session_preferences["current_question_axis"] = plan[index]
+        return question
+    return None
 
 
 class UpdateMediaRequest(BaseModel):
@@ -547,31 +594,25 @@ async def start_recommendation_session(
         backstage_user_id=current.user["id"],
         created_at=datetime.now(timezone.utc),
     )
-    candidates = await _recommendation_pool(current, store, session.session_preferences)
+    profile, events = await _recommendation_profile(current, store)
     gateway = _gemini_gateway()
-    if gateway.enabled and candidates:
+    question_plan: list[str] = []
+    recent_axes = _recent_question_axes(events)
+    if gateway.enabled:
         try:
-            shortlist = gateway.select_shortlist(
-                {"session_preferences": session.session_preferences},
-                [item.model_dump(mode="json") for item in candidates if item.score >= 0],
-            )
-            if shortlist:
-                allowed_ids = set(shortlist.tmdb_ids)
-                shortlisted = [
-                    item for item in candidates
-                    if item.score >= 0 and item.tmdb_id in allowed_ids
-                ]
-                # Gemini may return stale/rejected IDs. Keep the local pool when
-                # its shortlist would make the next question too small.
-                if len(shortlisted) >= 2:
-                    candidates = shortlisted
-                session.session_preferences["gemini_shortlist_used"] = True
-                if shortlist.usage:
-                    await _record_gemini_usage(store, current, session.id, shortlist.usage)
+            plan = gateway.plan_questions(profile.model_dump(mode="json"), recent_axes)
+            question_plan = plan.axes if plan else []
+            if plan and plan.usage:
+                await _record_gemini_usage(store, current, session.id, plan.usage)
         except Exception as error:
-            # Local scoring remains the authoritative fallback.
             await _record_gemini_failure(store, current, session.id, error)
-    question = _adaptive_question_from_candidates(candidates, session.session_preferences)
+    session.session_preferences.update({
+        "question_plan": question_plan or _fallback_question_plan(recent_axes),
+        "answers": [],
+        "question_index": 0,
+    })
+    candidates = await _recommendation_pool(current, store, session.session_preferences)
+    question = _planned_question(session, candidates, profile, 0)
     if question is None:
         return {"session": session.model_dump(mode="json"), "state": "empty", "question": None, "result": None, "quota": quota}
     if quota["unlimited"]:
@@ -606,6 +647,8 @@ async def answer_recommendation(
     if session.question_count >= 5:
         raise HTTPException(status_code=422, detail="Le nombre maximal de questions est atteint")
     preferences = dict(session.session_preferences)
+    current_axis = str(preferences.get("current_question_axis") or "")
+    current_index = int(preferences.get("question_index", session.question_count))
     if payload.answer in {"light", "intense"}:
         preferences["mood"] = payload.answer
     if payload.answer.startswith("genre:"):
@@ -617,6 +660,14 @@ async def answer_recommendation(
         except ValueError:
             pass
         preferences["preferred_tmdb_ids"] = preferred[-10:]
+    answers = list(preferences.get("answers", []))
+    answers.append({
+        "axis": current_axis,
+        "answer": payload.answer,
+        "value": payload.value,
+    })
+    preferences["answers"] = answers
+    preferences["question_index"] = current_index + 1
     question_count = session.question_count + 1
     if not await store.advance_recommendation_session(session_id, session.question_count, preferences):
         raise HTTPException(status_code=409, detail="Cette réponse a déjà été traitée")
@@ -631,15 +682,24 @@ async def answer_recommendation(
         event_type=feedback_event_type, value=payload.value or payload.answer,
         created_at=datetime.now(timezone.utc),
     ))
+    if current_axis:
+        await store.record_recommendation_event(RecommendationEvent(
+            id=str(uuid.uuid4()), backstage_user_id=current.user["id"],
+            session_id=session_id, event_type="question_answered", value=f"axis:{current_axis}",
+            created_at=datetime.now(timezone.utc),
+        ))
     candidates = await _recommendation_pool(current, store, preferences)
-    if payload.answer == "surprise" or question_count >= 5:
+    session.session_preferences = preferences
+    profile, _ = await _recommendation_profile(current, store)
+    question = None if payload.answer == "surprise" else _planned_question(session, candidates, profile, current_index + 1)
+    if question is None:
         result = None
         gateway = _gemini_gateway()
         if gateway.enabled and candidates:
             try:
                 selection = gateway.select_final(
-                    {"session_preferences": preferences},
-                    [{"answer": payload.answer, "value": payload.value}],
+                    {"taste_profile": profile.model_dump(mode="json"), "session_preferences": preferences},
+                    answers,
                     [item.model_dump(mode="json") for item in candidates if item.score >= 0],
                 )
                 if selection:
@@ -659,10 +719,8 @@ async def answer_recommendation(
             created_at=datetime.now(timezone.utc),
         ))
         return {"session_id": session_id, "state": "result", "question": None, "result": _serialize_recommendation(result)}
-    question = _adaptive_question_from_candidates(candidates, preferences)
-    if question:
-        await _remember_question_options(session, question, store)
-    return {"session_id": session_id, "state": "question" if question else "empty", "question": question, "result": None}
+    await _remember_question_options(session, question, store)
+    return {"session_id": session_id, "state": "question", "question": question, "result": None}
 
 
 @router.post("/recommendations/sessions/{session_id}/finish")

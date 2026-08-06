@@ -244,6 +244,73 @@ def build_adaptive_question(
     }
 
 
+def build_local_question(
+    axis: str,
+    candidates: list[RecommendationCandidate],
+    profile: TasteProfile,
+    session_preferences: dict[str, Any],
+) -> dict[str, Any] | None:
+    eligible = [item for item in candidates if item.score >= 0]
+    if axis == "movie_compare":
+        ordered = sorted(eligible, key=lambda item: item.score, reverse=True)
+        if not ordered:
+            return None
+        first = ordered[0]
+        second = next(
+            (item for item in ordered[1:] if not set(first.genre_ids).intersection(item.genre_ids)),
+            ordered[1] if len(ordered) > 1 else None,
+        )
+        options = [first] + ([second] if second else [])
+        return {
+            "type": "compare" if len(options) == 2 else "single",
+            "axis": axis,
+            "prompt": "Tu préfères lequel ?" if len(options) == 2 else "Cette piste te tente ?",
+            "options": [item.model_dump(mode="json") for item in options],
+        }
+    if axis == "mood":
+        return {
+            "type": "choice",
+            "axis": axis,
+            "prompt": "Quelle ambiance tu cherches ?",
+            "options": [
+                {"answer": "light", "label": "Quelque chose de léger", "description": "Comédie, aventure ou feel-good"},
+                {"answer": "intense", "label": "Quelque chose d'intense", "description": "Tension, émotion ou atmosphère forte"},
+                {"answer": "surprise", "label": "Surprends-moi", "description": "Je te laisse choisir"},
+            ],
+        }
+    if axis == "genre":
+        genre_names: list[str] = []
+        for item in eligible:
+            for genre_id in item.genre_ids:
+                genre = TMDB_GENRE_NAMES.get(genre_id)
+                if genre and genre not in genre_names:
+                    genre_names.append(genre)
+        options = genre_names[:4]
+        if len(options) < 2:
+            return None
+        return {
+            "type": "choice",
+            "axis": axis,
+            "prompt": "Vers quel univers tu veux aller ?",
+            "options": [
+                {"answer": f"genre:{genre}", "label": genre, "description": "Voir des films de cet univers"}
+                for genre in options
+            ],
+        }
+    if axis == "era":
+        return {
+            "type": "choice",
+            "axis": axis,
+            "prompt": "Quelle période te fait envie ?",
+            "options": [
+                {"answer": "era:recent", "label": "Récent", "description": "Les sorties des dernières années"},
+                {"answer": "era:classic", "label": "Classique", "description": "Un film qui a déjà marqué son époque"},
+                {"answer": "era:surprise", "label": "Sans préférence", "description": "Laisse parler la recommandation"},
+            ],
+        }
+    return None
+
+
 def score_candidate(
     candidate: dict[str, Any],
     profile: TasteProfile,

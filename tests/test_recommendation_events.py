@@ -65,6 +65,6 @@ def test_recommendation_session_does_not_repeat_shown_movies(tmp_path, monkeypat
         current,
         store,
     ))
-    second_ids = {option["tmdb_id"] for option in second["question"]["options"]}
+    second_ids = {option["tmdb_id"] for option in second["question"]["options"] if "tmdb_id" in option}
 
     assert first_ids.isdisjoint(second_ids)
