@@ -40,6 +40,8 @@ def test_find_by_tmdb_filters_item_type():
 def test_find_by_tmdb_requests_provider_ids_from_jellyfin():
     async def handler(request):
         assert request.url.params.get("Fields") == "ProviderIds"
+        assert request.url.params.get("Limit") == "1000"
+        assert request.url.params.get("StartIndex") == "0"
         return httpx.Response(200, json={"Items": [
             {"Id": "interstellar", "Type": "Movie", "ProviderIds": {"Tmdb": "157336"}},
         ]})

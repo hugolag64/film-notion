@@ -22,3 +22,5 @@ def test_media_action_labels_are_user_facing_and_cover_pending_states():
     assert "Demander cette série" in source
     assert "Demande en cours" in source
     assert "Téléchargement en cours" in source
+    assert "Indexation Jellyfin en cours" in source
+    assert "mediaAction.canPlay ? '▶' : '+'" not in source

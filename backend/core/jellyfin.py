@@ -107,18 +107,31 @@ class JellyfinClient:
 
     async def find_by_tmdb(self, tmdb_id: int, media_type: str) -> Optional[dict[str, Any]]:
         item_type = "Series" if media_type == "Série" else "Movie"
-        kwargs = {"headers": {"X-Emby-Token": self.api_key}, "params": {
-            "IncludeItemTypes": item_type,
-            "Recursive": "true",
-            "Fields": "ProviderIds",
-        }}
         client = self.client or http.get_client()
+        limit = 1000
+        start_index = 0
         try:
-            response = await client.get(f"{self.base_url}/Items", timeout=10.0, **kwargs)
-            response.raise_for_status()
-            for item in response.json().get("Items", []):
-                if item.get("Type") == item_type and str(item.get("ProviderIds", {}).get("Tmdb")) == str(tmdb_id):
-                    return item
+            while True:
+                response = await client.get(
+                    f"{self.base_url}/Items",
+                    headers={"X-Emby-Token": self.api_key},
+                    params={
+                        "IncludeItemTypes": item_type,
+                        "Recursive": "true",
+                        "Fields": "ProviderIds",
+                        "Limit": limit,
+                        "StartIndex": start_index,
+                    },
+                    timeout=10.0,
+                )
+                response.raise_for_status()
+                items = response.json().get("Items", [])
+                for item in items:
+                    if item.get("Type") == item_type and str(item.get("ProviderIds", {}).get("Tmdb")) == str(tmdb_id):
+                        return item
+                if len(items) < limit:
+                    break
+                start_index += len(items)
         except (httpx.HTTPError, ValueError):
             return None
         return None

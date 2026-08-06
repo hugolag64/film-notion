@@ -49,6 +49,9 @@ const getMediaAction = (mediaType, availability) => {
     if (availability?.state === 'downloading') {
         return { label: 'Téléchargement en cours', canPlay: false, disabled: true };
     }
+    if (availability?.state === 'imported') {
+        return { label: 'Indexation Jellyfin en cours', canPlay: false, disabled: true };
+    }
     if (['requested', 'searching'].includes(availability?.state)) {
         return { label: 'Demande en cours', canPlay: false, disabled: true };
     }
@@ -1496,7 +1499,7 @@ export default function BackstagePrototype() {
                                         ? 'bg-emerald-500 hover:bg-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-300 text-white text-sm font-bold px-5 py-3 rounded-xl transition-all shadow-lg shadow-emerald-950/40 cursor-pointer flex items-center gap-2 whitespace-nowrap'
                                         : 'bg-[#635bff] hover:bg-[#5048e5] focus-visible:ring-2 focus-visible:ring-[#a9a3ff] text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all shadow-md cursor-pointer flex items-center gap-2 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-60'}
                                 >
-                                    <span aria-hidden="true" className={mediaAction.canPlay ? 'text-base leading-none' : ''}>{mediaAction.canPlay ? '▶' : '+'}</span>
+                                    {mediaAction.canPlay && <span aria-hidden="true" className="text-base leading-none">▶</span>}
                                     <span>{mediaAction.label}</span>
                                 </button>
                             </div>
