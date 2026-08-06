@@ -1,3 +1,4 @@
+import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from urllib.parse import parse_qs, urlparse
@@ -8,6 +9,22 @@ from backend.auth_api import auth_router
 from backend.config import Config
 from backend.core.auth import AuthStore
 from backend.core.store import MediaStore
+
+
+class FakeJellyfinClient:
+    users = [
+        {"id": "jf-hugo", "name": "Hugo", "is_admin": True},
+        {"id": "jf-ophelie", "name": "Ophélie", "is_admin": False},
+    ]
+    error = None
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def list_users(self):
+        if self.error:
+            raise self.error
+        return self.users
 
 
 def _client(tmp_path, monkeypatch):
@@ -97,6 +114,112 @@ def test_regular_user_cannot_list_users(tmp_path, monkeypatch):
     })
 
     assert client.get("/api/auth/users").status_code == 403
+
+
+def test_admin_can_list_and_link_jellyfin_accounts(tmp_path, monkeypatch):
+    monkeypatch.setattr(auth_module, "JellyfinClient", FakeJellyfinClient)
+    monkeypatch.setattr(Config, "JELLYFIN_API_KEY", "secret")
+    FakeJellyfinClient.error = None
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    created = client.post("/api/auth/users", json={
+        "display_name": "Ophélie",
+        "email": "ophelie@example.com",
+        "password": "12345678",
+    })
+    user_id = created.json()["user"]["id"]
+
+    listed = client.get("/api/auth/jellyfin-users")
+    assert listed.status_code == 200
+    assert listed.json() == {"users": FakeJellyfinClient.users}
+
+    linked = client.put(
+        f"/api/auth/users/{user_id}/jellyfin",
+        json={"jellyfin_user_id": "jf-ophelie"},
+    )
+    assert linked.status_code == 200
+    assert linked.json()["user"]["jellyfin_user_id"] == "jf-ophelie"
+    assert client.get("/api/auth/me").json()["user"]["jellyfin_user_id"] is None
+    assert next(
+        user for user in client.get("/api/auth/users").json()["users"]
+        if user["id"] == user_id
+    )["jellyfin_user_id"] == "jf-ophelie"
+
+
+def test_jellyfin_link_rejects_invalid_ids_duplicates_and_allows_unlinking(tmp_path, monkeypatch):
+    monkeypatch.setattr(auth_module, "JellyfinClient", FakeJellyfinClient)
+    monkeypatch.setattr(Config, "JELLYFIN_API_KEY", "secret")
+    FakeJellyfinClient.error = None
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    first = client.post("/api/auth/users", json={
+        "display_name": "Hugo 2", "email": "hugo2@example.com", "password": "12345678",
+    }).json()["user"]["id"]
+    second = client.post("/api/auth/users", json={
+        "display_name": "Ophélie", "email": "ophelie@example.com", "password": "12345678",
+    }).json()["user"]["id"]
+
+    assert client.put(
+        f"/api/auth/users/{first}/jellyfin", json={"jellyfin_user_id": "missing"}
+    ).status_code == 422
+    assert client.put(
+        f"/api/auth/users/missing/jellyfin", json={"jellyfin_user_id": "jf-hugo"}
+    ).status_code == 404
+    assert client.put(
+        f"/api/auth/users/{first}/jellyfin", json={"jellyfin_user_id": "jf-hugo"}
+    ).status_code == 200
+    assert client.put(
+        f"/api/auth/users/{second}/jellyfin", json={"jellyfin_user_id": "jf-hugo"}
+    ).status_code == 409
+    assert client.put(
+        f"/api/auth/users/{first}/jellyfin", json={"jellyfin_user_id": None}
+    ).status_code == 200
+
+
+def test_regular_user_cannot_read_or_modify_jellyfin_links(tmp_path, monkeypatch):
+    monkeypatch.setattr(auth_module, "JellyfinClient", FakeJellyfinClient)
+    monkeypatch.setattr(Config, "JELLYFIN_API_KEY", "secret")
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    created = client.post("/api/auth/users", json={
+        "display_name": "Paul", "email": "paul@example.com", "password": "12345678",
+    })
+    user_id = created.json()["user"]["id"]
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={
+        "email": "paul@example.com", "password": "12345678", "remember_device": False,
+    })
+
+    assert client.get("/api/auth/jellyfin-users").status_code == 403
+    assert client.put(
+        f"/api/auth/users/{user_id}/jellyfin", json={"jellyfin_user_id": "jf-ophelie"}
+    ).status_code == 403
+
+
+def test_jellyfin_errors_do_not_erase_existing_links(tmp_path, monkeypatch):
+    monkeypatch.setattr(auth_module, "JellyfinClient", FakeJellyfinClient)
+    monkeypatch.setattr(Config, "JELLYFIN_API_KEY", "secret")
+    FakeJellyfinClient.error = None
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    created = client.post("/api/auth/users", json={
+        "display_name": "Ophélie", "email": "ophelie@example.com", "password": "12345678",
+    })
+    user_id = created.json()["user"]["id"]
+    assert client.put(
+        f"/api/auth/users/{user_id}/jellyfin", json={"jellyfin_user_id": "jf-ophelie"}
+    ).status_code == 200
+
+    FakeJellyfinClient.error = httpx.HTTPError("Jellyfin unavailable")
+    assert client.get("/api/auth/jellyfin-users").status_code == 503
+    assert client.put(
+        f"/api/auth/users/{user_id}/jellyfin", json={"jellyfin_user_id": "jf-hugo"}
+    ).status_code == 503
+    stored = next(
+        user for user in client.get("/api/auth/users").json()["users"]
+        if user["id"] == user_id
+    )
+    assert stored["jellyfin_user_id"] == "jf-ophelie"
 
 
 def test_media_catalog_requires_authentication(tmp_path, monkeypatch):

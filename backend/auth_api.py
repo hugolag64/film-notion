@@ -3,6 +3,7 @@
 import logging
 import os
 from dataclasses import dataclass
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from urllib.parse import quote
@@ -10,6 +11,7 @@ from urllib.parse import quote
 from backend.config import Config
 from backend.core.auth import AuthStore, AuthUser
 from backend.core.email import EmailSender
+from backend.core.jellyfin import JellyfinClient
 
 
 SESSION_COOKIE = "backstage_session"
@@ -67,8 +69,22 @@ class UpdateUserRequest(BaseModel):
     password: str | None = Field(default=None, min_length=8)
 
 
+class JellyfinLinkRequest(BaseModel):
+    jellyfin_user_id: str | None = None
+
+
 def get_auth_store() -> AuthStore:
     return AuthStore(Config.DB_PATH)
+
+
+def get_jellyfin_client() -> JellyfinClient | None:
+    if not Config.jellyfin_enabled():
+        return None
+    return JellyfinClient(
+        Config.JELLYFIN_URL,
+        Config.JELLYFIN_API_KEY,
+        server_id=Config.JELLYFIN_SERVER_ID,
+    )
 
 
 def _cookie_secure() -> bool:
@@ -113,7 +129,12 @@ def _handle_store_error(error: ValueError) -> HTTPException:
     message = str(error)
     if message == "user not found":
         return HTTPException(status_code=404, detail=message)
-    if message in {"administrator already exists", "email already exists", "last administrator cannot be removed"}:
+    if message in {
+        "administrator already exists",
+        "email already exists",
+        "last administrator cannot be removed",
+        "jellyfin user already linked",
+    }:
         return HTTPException(status_code=409, detail=message)
     return HTTPException(status_code=422, detail=message)
 
@@ -226,6 +247,23 @@ async def current_user(user: AuthContext = Depends(get_current_user)):
     return {"user": user.user}
 
 
+async def _fetch_jellyfin_users(client: JellyfinClient | None) -> list[dict]:
+    if client is None:
+        raise HTTPException(status_code=503, detail="Jellyfin n'est pas configuré")
+    try:
+        return await client.list_users()
+    except (httpx.HTTPError, ValueError) as error:
+        logger.warning("Jellyfin users unavailable: %s", error)
+        raise HTTPException(status_code=503, detail="Jellyfin est indisponible") from error
+
+
+@auth_router.get("/jellyfin-users")
+async def list_jellyfin_users(
+    _: AuthContext = Depends(require_admin),
+):
+    return {"users": await _fetch_jellyfin_users(get_jellyfin_client())}
+
+
 @auth_router.get("/devices")
 async def devices(user: AuthContext = Depends(get_current_user), store: AuthStore = Depends(get_auth_store)):
     return {"devices": store.list_sessions(user.user["id"], user.session_id)}
@@ -253,6 +291,25 @@ async def list_users(
     _: AuthContext = Depends(require_admin), store: AuthStore = Depends(get_auth_store)
 ):
     return {"users": store.list_users()}
+
+
+@auth_router.put("/users/{user_id}/jellyfin")
+async def link_jellyfin_user(
+    user_id: str,
+    payload: JellyfinLinkRequest,
+    _: AuthContext = Depends(require_admin),
+    store: AuthStore = Depends(get_auth_store),
+):
+    jellyfin_user_id = payload.jellyfin_user_id.strip() if payload.jellyfin_user_id else None
+    if jellyfin_user_id is not None:
+        jellyfin_users = await _fetch_jellyfin_users(get_jellyfin_client())
+        if not any(item["id"] == jellyfin_user_id for item in jellyfin_users):
+            raise HTTPException(status_code=422, detail="Compte Jellyfin introuvable")
+    try:
+        user = store.set_jellyfin_user_id(user_id, jellyfin_user_id)
+    except ValueError as error:
+        raise _handle_store_error(error) from error
+    return {"user": user}
 
 
 @auth_router.post("/users")
