@@ -98,6 +98,23 @@ class AuthStore:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions(expires_at)"
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    token_hash TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    used_at TEXT,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_expiry "
+                "ON password_reset_tokens(user_id, expires_at)"
+            )
 
     @staticmethod
     def _now() -> datetime:
@@ -266,6 +283,128 @@ class AuthStore:
                 (self._now().isoformat(), user_id, current_session_id),
             )
             return cursor.rowcount
+
+    @staticmethod
+    def _validate_new_password(password: str) -> None:
+        if len(password) < 8:
+            raise ValueError("password must be at least 8 characters")
+
+    def change_password(
+        self, user_id: str, current_password: str, new_password: str,
+        current_session_id: str,
+    ) -> None:
+        self._validate_new_password(new_password)
+        with sqlite3.connect(self.db_path) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT password_hash FROM users WHERE id = ? AND is_active = 1",
+                (user_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError("user not found")
+            if not verify_password(current_password, row["password_hash"]):
+                raise ValueError("invalid current password")
+            now = self._now().isoformat()
+            connection.execute(
+                "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+                (hash_password(new_password), now, user_id),
+            )
+            connection.execute(
+                """
+                UPDATE auth_sessions SET revoked_at = ?
+                WHERE user_id = ? AND id != ? AND revoked_at IS NULL
+                """,
+                (now, user_id, current_session_id),
+            )
+
+    def set_password(self, user_id: str, new_password: str) -> None:
+        self._validate_new_password(new_password)
+        with sqlite3.connect(self.db_path) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("BEGIN IMMEDIATE")
+            if not connection.execute(
+                "SELECT 1 FROM users WHERE id = ?", (user_id,)
+            ).fetchone():
+                raise ValueError("user not found")
+            now = self._now().isoformat()
+            connection.execute(
+                "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+                (hash_password(new_password), now, user_id),
+            )
+            connection.execute(
+                "UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+                (now, user_id),
+            )
+
+    def _cleanup_password_reset_tokens(
+        self, connection: sqlite3.Connection, now: datetime,
+    ) -> None:
+        connection.execute(
+            "DELETE FROM password_reset_tokens WHERE used_at IS NOT NULL OR expires_at <= ?",
+            (now.isoformat(),),
+        )
+
+    def create_password_reset_token(self, email: str) -> tuple[str, str] | None:
+        now = self._now()
+        with sqlite3.connect(self.db_path) as connection:
+            connection.row_factory = sqlite3.Row
+            self._cleanup_password_reset_tokens(connection, now)
+            row = connection.execute(
+                "SELECT id FROM users WHERE email = ? AND is_active = 1",
+                (self._normalize_email(email),),
+            ).fetchone()
+            if not row:
+                return None
+            token = secrets.token_urlsafe(32)
+            connection.execute(
+                """
+                INSERT INTO password_reset_tokens
+                (id, user_id, token_hash, created_at, expires_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()), row["id"], self._token_hash(token),
+                    now.isoformat(), (now + timedelta(hours=1)).isoformat(),
+                ),
+            )
+            return token, row["id"]
+
+    def reset_password(self, token: str, new_password: str) -> str:
+        self._validate_new_password(new_password)
+        now = self._now()
+        with sqlite3.connect(self.db_path) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("BEGIN IMMEDIATE")
+            self._cleanup_password_reset_tokens(connection, now)
+            row = connection.execute(
+                """
+                SELECT password_reset_tokens.id AS token_id, password_reset_tokens.user_id
+                FROM password_reset_tokens
+                JOIN users ON users.id = password_reset_tokens.user_id
+                WHERE password_reset_tokens.token_hash = ?
+                  AND password_reset_tokens.used_at IS NULL
+                  AND password_reset_tokens.expires_at > ?
+                  AND users.is_active = 1
+                """,
+                (self._token_hash(token), now.isoformat()),
+            ).fetchone()
+            if not row:
+                raise ValueError("invalid or expired reset token")
+            now_text = now.isoformat()
+            connection.execute(
+                "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+                (hash_password(new_password), now_text, row["user_id"]),
+            )
+            connection.execute(
+                "UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+                (now_text, row["user_id"]),
+            )
+            connection.execute(
+                "UPDATE password_reset_tokens SET used_at = ? WHERE id = ?",
+                (now_text, row["token_id"]),
+            )
+            return row["user_id"]
 
     def list_users(self) -> list[AuthUser]:
         with sqlite3.connect(self.db_path) as connection:

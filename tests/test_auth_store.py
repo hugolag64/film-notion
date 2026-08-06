@@ -28,7 +28,7 @@ def test_auth_schema_is_added_without_changing_media(tmp_path):
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
-    assert {"users", "auth_sessions"} <= tables
+    assert {"users", "auth_sessions", "password_reset_tokens"} <= tables
 
 
 def test_password_hashes_use_unique_salts_and_verify_only_the_original():
@@ -101,3 +101,105 @@ def test_deleting_a_user_removes_the_account_and_sessions(tmp_path):
     assert store.delete_user(user["id"])
     assert store.user_from_token(token) is None
     assert all(item["id"] != user["id"] for item in store.list_users())
+
+
+def test_change_password_keeps_current_session_and_revokes_other_sessions(tmp_path):
+    db = tmp_path / "backstage.db"
+    store = AuthStore(str(db))
+    store.init_schema()
+    store.create_admin("Hugo", "hugo@example.com", "Correct Horse Battery Staple")
+    user = store.create_user("Paul", "paul@example.com", "old-password")
+    _, current_token, _ = store.authenticate("paul@example.com", "old-password", False, "Laptop")
+    _, other_token, _ = store.authenticate("paul@example.com", "old-password", True, "Phone")
+    current_session_id = store.user_from_token(current_token)[1]
+
+    store.change_password(user["id"], "old-password", "new-password", current_session_id)
+
+    assert store.user_from_token(current_token)[0] == user
+    assert store.user_from_token(other_token) is None
+    with pytest.raises(ValueError, match="invalid credentials"):
+        store.authenticate("paul@example.com", "old-password", False, "Browser")
+    assert store.authenticate("paul@example.com", "new-password", False, "Browser")[0] == user
+
+
+def test_change_password_rejects_an_incorrect_current_password(tmp_path):
+    db = tmp_path / "backstage.db"
+    store = AuthStore(str(db))
+    store.init_schema()
+    store.create_admin("Hugo", "hugo@example.com", "Correct Horse Battery Staple")
+    user = store.create_user("Paul", "paul@example.com", "old-password")
+    _, token, _ = store.authenticate("paul@example.com", "old-password", False, "Laptop")
+    session_id = store.user_from_token(token)[1]
+
+    with pytest.raises(ValueError, match="invalid current password"):
+        store.change_password(user["id"], "wrong-password", "new-password", session_id)
+
+
+def test_reset_token_changes_password_once_and_revokes_all_sessions(tmp_path):
+    db = tmp_path / "backstage.db"
+    store = AuthStore(str(db))
+    store.init_schema()
+    store.create_admin("Hugo", "hugo@example.com", "Correct Horse Battery Staple")
+    user = store.create_user("Paul", "paul@example.com", "old-password")
+    _, first_token, _ = store.authenticate("paul@example.com", "old-password", False, "Laptop")
+    _, second_token, _ = store.authenticate("paul@example.com", "old-password", True, "Phone")
+    reset_token, user_id = store.create_password_reset_token("PAUL@example.com")
+
+    assert user_id == user["id"]
+    assert store.reset_password(reset_token, "new-password") == user["id"]
+    assert store.user_from_token(first_token) is None
+    assert store.user_from_token(second_token) is None
+    assert store.authenticate("paul@example.com", "new-password", False, "Browser")[0] == user
+    with pytest.raises(ValueError, match="invalid or expired reset token"):
+        store.reset_password(reset_token, "another-password")
+
+
+def test_reset_token_is_not_created_for_unknown_or_inactive_email(tmp_path):
+    db = tmp_path / "backstage.db"
+    store = AuthStore(str(db))
+    store.init_schema()
+    store.create_admin("Hugo", "hugo@example.com", "Correct Horse Battery Staple")
+    user = store.create_user("Paul", "paul@example.com", "old-password")
+
+    assert store.create_password_reset_token("missing@example.com") is None
+    store.update_user(user["id"], {"is_active": False})
+    assert store.create_password_reset_token("paul@example.com") is None
+
+
+def test_expired_reset_token_is_rejected(tmp_path):
+    db = tmp_path / "backstage.db"
+    store = AuthStore(str(db))
+    store.init_schema()
+    store.create_admin("Hugo", "hugo@example.com", "Correct Horse Battery Staple")
+    user = store.create_user("Paul", "paul@example.com", "old-password")
+    reset_token = "expired-token"
+    now = datetime.now(timezone.utc)
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            """
+            INSERT INTO password_reset_tokens
+            (id, user_id, token_hash, created_at, expires_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                "expired-id", user["id"], store._token_hash(reset_token),
+                now.isoformat(), (now.replace(year=now.year - 1)).isoformat(),
+            ),
+        )
+
+    with pytest.raises(ValueError, match="invalid or expired reset token"):
+        store.reset_password(reset_token, "new-password")
+
+
+def test_admin_set_password_revokes_all_sessions(tmp_path):
+    db = tmp_path / "backstage.db"
+    store = AuthStore(str(db))
+    store.init_schema()
+    store.create_admin("Hugo", "hugo@example.com", "Correct Horse Battery Staple")
+    user = store.create_user("Paul", "paul@example.com", "old-password")
+    _, token, _ = store.authenticate("paul@example.com", "old-password", True, "Laptop")
+
+    store.set_password(user["id"], "new-password")
+
+    assert store.user_from_token(token) is None
+    assert store.authenticate("paul@example.com", "new-password", False, "Browser")[0] == user
