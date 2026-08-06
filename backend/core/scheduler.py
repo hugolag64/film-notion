@@ -11,6 +11,7 @@ from backend.core.media_server import MediaServerService
 from backend.core.store import MediaStore
 from backend.core.auth import AuthStore
 from backend.core.models import Notification
+from backend.core.backup import create_backup, get_backup_status
 
 logger = logging.getLogger(__name__)
 _media_task: asyncio.Task | None = None
@@ -31,7 +32,8 @@ async def _media_loop():
             )
             if Config.media_server_enabled():
                 await service.sync_all()
-            await notify_automatic_events(service, service.store, AuthStore(Config.DB_PATH))
+            if Config.media_server_enabled() or Config.jellyfin_enabled():
+                await notify_automatic_events(service, service.store, AuthStore(Config.DB_PATH))
             if service.jellyfin:
                 for user in AuthStore(Config.DB_PATH).list_users():
                     if not user["is_active"] or not user.get("jellyfin_user_id"):
@@ -40,8 +42,26 @@ async def _media_loop():
                         await service.sync_playback(user["id"], user["jellyfin_user_id"])
                     except Exception:
                         logger.exception("[playback-sync] Erreur pour %s", user["id"])
+            try:
+                await backup_if_due()
+            except Exception:
+                logger.exception("[backup] Erreur de sauvegarde")
         except Exception:
             logger.exception("[media-sync] Erreur de synchronisation")
+
+
+async def backup_if_due(*, now: datetime | None = None):
+    now = now or datetime.now(timezone.utc)
+    status = await asyncio.to_thread(get_backup_status, Config.BACKUP_DIR)
+    latest = status.get("latest")
+    if latest:
+        created_at = datetime.fromisoformat(latest["created_at"])
+        if now - created_at < timedelta(hours=Config.BACKUP_INTERVAL_HOURS):
+            return latest
+    return await asyncio.to_thread(
+        create_backup, Config.DB_PATH, Config.BACKUP_DIR,
+        retention_days=Config.BACKUP_RETENTION_DAYS, now=now,
+    )
 
 
 async def notify_automatic_events(service, store, auth_store, *, now: datetime | None = None):
@@ -92,7 +112,7 @@ async def notify_automatic_events(service, store, auth_store, *, now: datetime |
 
 def start_media_server_sync():
     global _media_task
-    if not (Config.media_server_enabled() or Config.jellyfin_enabled()) or Config.MEDIA_SYNC_INTERVAL_SEC <= 0:
+    if not (Config.media_server_enabled() or Config.jellyfin_enabled() or Config.BACKUP_INTERVAL_HOURS > 0) or Config.MEDIA_SYNC_INTERVAL_SEC <= 0:
         return
     if _media_task is None or _media_task.done():
         _media_task = asyncio.create_task(_media_loop())

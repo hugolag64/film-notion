@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { acceptKeepRequest, changePassword, createUser, deleteUser, extendRental, fetchAdminDashboard, fetchCleanupPreview, fetchDevices, fetchJellyfinUsers, fetchKeepRequests, fetchNotifications, fetchStorageStatus, fetchUsers, linkJellyfinUser, markNotificationRead, refuseKeepRequest, revokeDevice, revokeOtherDevices, updateUser } from './api';
+import { acceptKeepRequest, changePassword, createBackup, createUser, deleteUser, extendRental, fetchAdminDashboard, fetchBackupStatus, fetchCleanupPreview, fetchDevices, fetchJellyfinUsers, fetchKeepRequests, fetchNotifications, fetchStorageStatus, fetchUsers, linkJellyfinUser, markNotificationRead, refuseKeepRequest, revokeDevice, revokeOtherDevices, updateUser } from './api';
 import { useAuth } from './auth-context';
 
 export default function AccountPanel({isDarkMode, onClose}) {
@@ -19,6 +19,8 @@ export default function AccountPanel({isDarkMode, onClose}) {
     const [cleanupLoading, setCleanupLoading] = useState(false);
     const [storageStatus, setStorageStatus] = useState(null);
     const [adminDashboard, setAdminDashboard] = useState(null);
+    const [backupStatus, setBackupStatus] = useState(null);
+    const [backupLoading, setBackupLoading] = useState(false);
     const [error, setError] = useState('');
     const [notice, setNotice] = useState('');
     const [savingName, setSavingName] = useState(false);
@@ -40,6 +42,11 @@ export default function AccountPanel({isDarkMode, onClose}) {
                     setAdminDashboard(await fetchAdminDashboard());
                 } catch {
                     setAdminDashboard(null);
+                }
+                try {
+                    setBackupStatus(await fetchBackupStatus());
+                } catch {
+                    setBackupStatus(null);
                 }
             }
         } catch (requestError) {
@@ -185,6 +192,20 @@ export default function AccountPanel({isDarkMode, onClose}) {
         }
     };
 
+    const handleBackup = async () => {
+        try {
+            setBackupLoading(true);
+            setError('');
+            await createBackup();
+            setNotice('Sauvegarde créée et vérifiée.');
+            setBackupStatus(await fetchBackupStatus());
+        } catch (requestError) {
+            setError(requestError.message);
+        } finally {
+            setBackupLoading(false);
+        }
+    };
+
     const text = isDarkMode ? 'text-white' : 'text-[#0a2540]';
     const muted = isDarkMode ? 'text-white/60' : 'text-[#425466]';
     const panel = isDarkMode ? 'bg-[#111111] border-white/10' : 'bg-white border-[#e3e8ee]';
@@ -267,6 +288,17 @@ export default function AccountPanel({isDarkMode, onClose}) {
                                 {adminDashboard.expiring.map((item) => <div key={item.rental.id} className="rounded-lg border p-3 text-sm"><strong>{item.media_title}</strong><p className={muted}>{item.requester_name} · expire le {new Date(item.rental.expires_at).toLocaleDateString()}</p></div>)}
                             </div>}
                         </div>}
+                        <div className="mb-8">
+                            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                                <h3 className="font-semibold">Sauvegarde</h3>
+                                <button type="button" className="rounded border border-[#635bff] px-2 py-1 text-xs text-[#635bff]" onClick={handleBackup} disabled={backupLoading}>
+                                    {backupLoading ? 'Sauvegarde…' : 'Sauvegarder maintenant'}
+                                </button>
+                            </div>
+                            {backupStatus?.latest ? <p className={`rounded-lg border p-3 text-sm ${backupStatus.latest.integrity === 'ok' ? '' : 'border-rose-500 text-rose-500'}`}>
+                                Dernière sauvegarde : {new Date(backupStatus.latest.created_at).toLocaleString()} · {Math.round(backupStatus.latest.size_bytes / 1024)} Ko · {backupStatus.latest.integrity === 'ok' ? 'Intègre' : 'À vérifier'}
+                            </p> : <p className={`rounded-lg border p-3 text-sm ${muted}`}>Aucune sauvegarde détectée.</p>}
+                        </div>
                         <div className="mb-8">
                             <h3 className="mb-3 font-semibold">Espace de stockage</h3>
                             {storageStatus ? (

@@ -77,3 +77,12 @@ def test_notification_center_supports_automatic_events():
 
     assert "Notifications" in account
     assert "notification.message" in account
+
+
+def test_admin_backup_controls_are_visible():
+    account = ACCOUNT_SOURCE.read_text(encoding="utf-8")
+    api = API_SOURCE.read_text(encoding="utf-8")
+
+    assert "Sauvegarde" in account
+    assert "Sauvegarder maintenant" in account
+    assert "fetchBackupStatus" in api

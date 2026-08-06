@@ -1,5 +1,7 @@
 """FastAPI REST API for Backstage UI integration."""
 from datetime import datetime, timedelta, timezone
+import asyncio
+import sqlite3
 import uuid
 from typing import Any, Dict, List, Optional
 import httpx
@@ -18,6 +20,7 @@ from backend.core.arr import RadarrClient, SonarrClient, MediaServerError
 from backend.core.seerr import SeerrClient
 from backend.core.jellyfin import JellyfinClient
 from backend.core.media_server import MediaServerService
+from backend.core.backup import create_backup, get_backup_status
 from backend.auth_api import AuthContext, get_auth_store, get_current_user, require_admin
 from backend.core.auth import AuthStore
 from urllib.parse import quote, parse_qsl, urlencode, urlsplit
@@ -763,6 +766,22 @@ async def admin_dashboard(
             if user["role"] != "admin"
         ],
     }
+
+
+@router.get("/admin/system/backup")
+async def admin_backup_status(_: AuthContext = Depends(require_admin)):
+    return await asyncio.to_thread(get_backup_status, Config.BACKUP_DIR)
+
+
+@router.post("/admin/system/backup")
+async def admin_create_backup(_: AuthContext = Depends(require_admin)):
+    try:
+        return await asyncio.to_thread(
+            create_backup, Config.DB_PATH, Config.BACKUP_DIR,
+            retention_days=Config.BACKUP_RETENTION_DAYS,
+        )
+    except (OSError, sqlite3.Error, RuntimeError) as error:
+        raise HTTPException(status_code=503, detail=f"Sauvegarde impossible : {error}") from error
 
 
 def _serialize_playback_summary(summary: dict[str, Any]) -> dict[str, Any]:

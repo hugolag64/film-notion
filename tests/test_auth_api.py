@@ -602,6 +602,29 @@ def test_admin_dashboard_summarizes_rentals_downloads_and_errors(tmp_path, monke
     assert client.get("/api/admin/dashboard").status_code == 403
 
 
+def test_admin_can_create_and_inspect_backup(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    monkeypatch.setattr(Config, "BACKUP_DIR", str(tmp_path / "backups"))
+
+    created = client.post("/api/admin/system/backup")
+
+    assert created.status_code == 200
+    assert created.json()["integrity"] == "ok"
+    status = client.get("/api/admin/system/backup")
+    assert status.status_code == 200
+    assert status.json()["latest"]["integrity"] == "ok"
+
+    client.post("/api/auth/users", json={
+        "display_name": "Paul", "email": "paul@example.com", "password": "12345678",
+    })
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={
+        "email": "paul@example.com", "password": "12345678", "remember_device": False,
+    })
+    assert client.post("/api/admin/system/backup").status_code == 403
+
+
 def test_media_activity_is_admin_only(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     _setup(client)

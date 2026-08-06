@@ -201,6 +201,18 @@ export async function fetchAdminDashboard() {
     return response.json();
 }
 
+export async function fetchBackupStatus() {
+    const response = await fetch(`${API_BASE_URL}/admin/system/backup`);
+    if (!response.ok) throw new Error((await response.json()).detail || 'Sauvegarde indisponible');
+    return response.json();
+}
+
+export async function createBackup() {
+    const response = await fetch(`${API_BASE_URL}/admin/system/backup`, {method: 'POST'});
+    if (!response.ok) throw new Error((await response.json()).detail || 'Sauvegarde impossible');
+    return response.json();
+}
+
 async function rentalDecision(rentalId, action) {
     const response = await fetch(`${API_BASE_URL}/admin/rentals/${rentalId}/${action}`, {method: 'POST'});
     if (!response.ok) throw new Error((await response.json()).detail || 'Action impossible');
