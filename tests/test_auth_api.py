@@ -390,6 +390,74 @@ def test_acquisition_rejects_sixth_active_rental(tmp_path, monkeypatch):
     assert client.post(f"/api/medias/{media.id}/acquisition", json={}).status_code == 409
 
 
+def test_admin_can_accept_keep_request_and_notify_owner(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    paul = client.post("/api/auth/users", json={
+        "display_name": "Paul", "email": "paul@example.com", "password": "12345678",
+    }).json()["user"]
+    media = asyncio.run(MediaStore(Config.DB_PATH).create({
+        "id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631,
+    }))
+    now = datetime.now(timezone.utc)
+    rental = asyncio.run(MediaStore(Config.DB_PATH).create_rental(Rental(
+        id="keep-1", media_id=media.id, backstage_user_id=paul["id"], status="keep_requested",
+        requested_at=now, expires_at=now, keep_requested_at=now, created_at=now, updated_at=now,
+    )))
+
+    queue = client.get("/api/admin/rentals/keep-requests")
+    assert queue.status_code == 200
+    assert queue.json()["requests"][0]["media_title"] == "Dune"
+
+    accepted = client.post(f"/api/admin/rentals/{rental.id}/keep")
+    assert accepted.status_code == 200
+    assert accepted.json()["rental"]["status"] == "kept"
+    assert accepted.json()["rental"]["storage_policy"] == "permanent"
+    assert accepted.json()["rental"]["expires_at"] is None
+
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={
+        "email": "paul@example.com", "password": "12345678", "remember_device": False,
+    })
+    notifications = client.get("/api/notifications")
+    assert notifications.status_code == 200
+    assert notifications.json()["notifications"][0]["kind"] == "retention_accepted"
+    notification_id = notifications.json()["notifications"][0]["id"]
+    assert client.post(f"/api/notifications/{notification_id}/read").status_code == 200
+
+
+def test_non_admin_cannot_decide_and_admin_can_refuse_or_extend(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    paul = client.post("/api/auth/users", json={
+        "display_name": "Paul", "email": "paul@example.com", "password": "12345678",
+    }).json()["user"]
+    media = asyncio.run(MediaStore(Config.DB_PATH).create({"id": "arrival", "title": "Arrival", "type": "Film"}))
+    now = datetime.now(timezone.utc)
+    rental = asyncio.run(MediaStore(Config.DB_PATH).create_rental(Rental(
+        id="keep-2", media_id=media.id, backstage_user_id=paul["id"], status="keep_requested",
+        requested_at=now, expires_at=now, keep_requested_at=now, created_at=now, updated_at=now,
+    )))
+
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={
+        "email": "paul@example.com", "password": "12345678", "remember_device": False,
+    })
+    assert client.get("/api/admin/rentals/keep-requests").status_code == 403
+    assert client.post(f"/api/admin/rentals/{rental.id}/refuse").status_code == 403
+
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={
+        "email": "hugo@example.com", "password": "Correct Horse Battery Staple", "remember_device": False,
+    })
+    extended = client.post(f"/api/admin/rentals/{rental.id}/extend")
+    assert extended.status_code == 200
+    assert extended.json()["rental"]["expires_at"] is not None
+    refused = client.post(f"/api/admin/rentals/{rental.id}/refuse")
+    assert refused.status_code == 200
+    assert refused.json()["rental"]["status"] == "available"
+
+
 def test_media_activity_is_admin_only(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     _setup(client)

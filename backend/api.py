@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from backend.config import Config
 from backend.core.store import MediaStore
-from backend.core.models import Media, Rental
+from backend.core.models import Media, Notification, Rental
 
 from backend.core.tmdb import TMDBClient
 from backend.core.mapping import is_series
@@ -18,7 +18,8 @@ from backend.core.arr import RadarrClient, SonarrClient, MediaServerError
 from backend.core.seerr import SeerrClient
 from backend.core.jellyfin import JellyfinClient
 from backend.core.media_server import MediaServerService
-from backend.auth_api import AuthContext, get_current_user, require_admin
+from backend.auth_api import AuthContext, get_auth_store, get_current_user, require_admin
+from backend.core.auth import AuthStore
 from urllib.parse import quote, parse_qsl, urlencode, urlsplit
 
 router = APIRouter(
@@ -92,6 +93,10 @@ MAX_ACTIVE_RENTALS = 5
 
 def _serialize_rental(rental: Rental) -> dict[str, Any]:
     return rental.model_dump(mode="json")
+
+
+def _serialize_notification(notification: Notification) -> dict[str, Any]:
+    return notification.model_dump(mode="json")
 
 
 def get_media_server_service(store: MediaStore = Depends(get_store)) -> MediaServerService:
@@ -549,6 +554,107 @@ async def request_rental_keep(
             "keep_requested_at": datetime.now(timezone.utc),
         })
     return {"rental": _serialize_rental(rental)}
+
+
+@router.get("/admin/rentals/keep-requests")
+async def list_keep_requests(
+    _: AuthContext = Depends(require_admin),
+    store: MediaStore = Depends(get_store),
+    auth_store: AuthStore = Depends(get_auth_store),
+):
+    users = {user["id"]: user["display_name"] for user in auth_store.list_users()}
+    requests = []
+    for item in await store.list_keep_requested_rentals():
+        rental = item["rental"]
+        requests.append({
+            "media_title": item["media_title"],
+            "requester_name": users.get(rental["backstage_user_id"], "Compte supprimé"),
+            "rental": rental,
+        })
+    return {"requests": requests}
+
+
+async def _apply_rental_decision(
+    rental_id: str,
+    decision: str,
+    current: AuthContext,
+    store: MediaStore,
+):
+    now = datetime.now(timezone.utc)
+    try:
+        rental = await store.decide_rental(rental_id, decision, current.user["id"], now)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if not rental:
+        raise HTTPException(status_code=404, detail="Location non trouvée")
+    messages = {
+        "accepted": ("retention_accepted", "Votre film a été conservé définitivement."),
+        "refused": ("retention_refused", "La demande de conservation de votre film a été refusée."),
+    }
+    kind, message = messages[decision]
+    await store.create_notification(Notification(
+        id=str(uuid.uuid4()), backstage_user_id=rental.backstage_user_id,
+        kind=kind, message=message, created_at=now,
+    ))
+    return {"rental": _serialize_rental(rental)}
+
+
+@router.post("/admin/rentals/{rental_id}/keep")
+async def accept_keep_request(
+    rental_id: str,
+    current: AuthContext = Depends(require_admin),
+    store: MediaStore = Depends(get_store),
+):
+    return await _apply_rental_decision(rental_id, "accepted", current, store)
+
+
+@router.post("/admin/rentals/{rental_id}/refuse")
+async def refuse_keep_request(
+    rental_id: str,
+    current: AuthContext = Depends(require_admin),
+    store: MediaStore = Depends(get_store),
+):
+    return await _apply_rental_decision(rental_id, "refused", current, store)
+
+
+@router.post("/admin/rentals/{rental_id}/extend")
+async def extend_rental(
+    rental_id: str,
+    current: AuthContext = Depends(require_admin),
+    store: MediaStore = Depends(get_store),
+):
+    now = datetime.now(timezone.utc)
+    try:
+        rental = await store.extend_rental(rental_id, now)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if not rental:
+        raise HTTPException(status_code=404, detail="Location non trouvée")
+    await store.create_notification(Notification(
+        id=str(uuid.uuid4()), backstage_user_id=rental.backstage_user_id,
+        kind="retention_extended", message="Votre location a été prolongée de 7 jours.", created_at=now,
+    ))
+    return {"rental": _serialize_rental(rental)}
+
+
+@router.get("/notifications")
+async def list_notifications(
+    current: AuthContext = Depends(get_current_user),
+    store: MediaStore = Depends(get_store),
+):
+    notifications = await store.list_notifications(current.user["id"])
+    return {"notifications": [_serialize_notification(item) for item in notifications]}
+
+
+@router.post("/notifications/{notification_id}/read")
+async def mark_notification_read(
+    notification_id: str,
+    current: AuthContext = Depends(get_current_user),
+    store: MediaStore = Depends(get_store),
+):
+    if not await store.mark_notification_read(notification_id, current.user["id"], datetime.now(timezone.utc)):
+        raise HTTPException(status_code=404, detail="Notification non trouvée")
+    return {"ok": True}
 
 
 @router.get("/media-server/options")
