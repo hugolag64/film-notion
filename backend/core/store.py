@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from backend.core.models import Media
 from backend.core.media_server import Availability
+from backend.core.playback import PlaybackProgress
 
 _COLUMNS = [
     "id", "title", "original_title", "type", "status", "support", "rating", "release_date",
@@ -83,6 +84,31 @@ class MediaStore:
                     FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE CASCADE
                 )
                 """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS playback_progress (
+                    backstage_user_id TEXT NOT NULL,
+                    jellyfin_id TEXT NOT NULL,
+                    media_id TEXT,
+                    episode_id TEXT,
+                    title TEXT NOT NULL,
+                    series_title TEXT,
+                    season_number INTEGER,
+                    episode_number INTEGER,
+                    position_ticks INTEGER NOT NULL DEFAULT 0,
+                    runtime_ticks INTEGER NOT NULL DEFAULT 0,
+                    percent REAL NOT NULL DEFAULT 0,
+                    played INTEGER NOT NULL DEFAULT 0,
+                    last_played_at TEXT,
+                    synced_at TEXT NOT NULL,
+                    PRIMARY KEY (backstage_user_id, jellyfin_id)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_playback_user_resume "
+                "ON playback_progress(backstage_user_id, played, percent)"
             )
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_media_availability_arr "
@@ -379,6 +405,101 @@ class MediaStore:
             rows = conn.execute("SELECT * FROM media_availability ORDER BY last_synced_at DESC").fetchall()
         return [self._row_to_availability(row) for row in rows]
 
+    @staticmethod
+    def _row_to_playback(row: sqlite3.Row) -> PlaybackProgress:
+        data = dict(row)
+        for field in ("last_played_at", "synced_at"):
+            if data.get(field):
+                data[field] = datetime.fromisoformat(data[field])
+        data["played"] = bool(data["played"])
+        return PlaybackProgress(**data)
+
+    @staticmethod
+    def _playback_values(progress: PlaybackProgress) -> Dict[str, Any]:
+        values = progress.model_dump()
+        for field in ("last_played_at", "synced_at"):
+            if values[field] is not None:
+                values[field] = values[field].isoformat()
+        values["played"] = int(values["played"])
+        return values
+
+    def _upsert_playback_sync(self, progress: PlaybackProgress) -> PlaybackProgress:
+        values = self._playback_values(progress)
+        columns = list(values)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                f"INSERT INTO playback_progress ({', '.join(columns)}) VALUES "
+                f"({', '.join('?' for _ in columns)}) ON CONFLICT(backstage_user_id, jellyfin_id) DO UPDATE SET "
+                + ", ".join(f"{column} = excluded.{column}" for column in columns if column not in {"backstage_user_id", "jellyfin_id"}),
+                [values[column] for column in columns],
+            )
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM playback_progress WHERE backstage_user_id = ? AND jellyfin_id = ?",
+                (progress.backstage_user_id, progress.jellyfin_id),
+            ).fetchone()
+        return self._row_to_playback(row)
+
+    def _list_playback_sync(self, user_id: str, completed: bool) -> List[PlaybackProgress]:
+        clause = "(played = 1 OR percent >= 95)" if completed else "played = 0 AND percent < 95"
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                f"SELECT * FROM playback_progress WHERE backstage_user_id = ? AND {clause} "
+                "AND media_id IS NOT NULL ORDER BY COALESCE(last_played_at, synced_at) DESC",
+                (user_id,),
+            ).fetchall()
+        return [self._row_to_playback(row) for row in rows]
+
+    def _list_next_episodes_sync(self, user_id: str) -> List[Dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            series_rows = conn.execute(
+                "SELECT DISTINCT media_id FROM playback_progress "
+                "WHERE backstage_user_id = ? AND media_id IS NOT NULL AND series_title IS NOT NULL",
+                (user_id,),
+            ).fetchall()
+            output = []
+            for series_row in series_rows:
+                media_id = series_row["media_id"]
+                episodes = conn.execute(
+                    "SELECT id, season_number, episode_number, title FROM episode "
+                    "WHERE media_id = ? ORDER BY season_number, episode_number",
+                    (media_id,),
+                ).fetchall()
+                progress_rows = conn.execute(
+                    "SELECT * FROM playback_progress WHERE backstage_user_id = ? AND media_id = ?",
+                    (user_id, media_id),
+                ).fetchall()
+                progress = {
+                    (row["season_number"], row["episode_number"]): row
+                    for row in progress_rows
+                }
+                for episode in episodes:
+                    row = progress.get((episode["season_number"], episode["episode_number"]))
+                    complete = row and (row["played"] or row["percent"] >= 95)
+                    if complete:
+                        continue
+                    output.append({
+                        "media_id": media_id,
+                        "episode_id": episode["id"],
+                        "title": episode["title"],
+                        "season_number": episode["season_number"],
+                        "episode_number": episode["episode_number"],
+                        "percent": round(float(row["percent"]), 2) if row else 0,
+                        "jellyfin_id": row["jellyfin_id"] if row else None,
+                    })
+                    break
+        return output
+
+    def _last_playback_sync_sync(self, user_id: str) -> Optional[datetime]:
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT MAX(synced_at) FROM playback_progress WHERE backstage_user_id = ?",
+                (user_id,),
+            ).fetchone()
+        return datetime.fromisoformat(row[0]) if row and row[0] else None
+
     async def fetch_all(self) -> List[Media]:
         return await asyncio.to_thread(self._fetch_all_sync)
 
@@ -417,3 +538,18 @@ class MediaStore:
 
     async def list_availabilities(self) -> List[Availability]:
         return await asyncio.to_thread(self._list_availabilities_sync)
+
+    async def upsert_playback(self, progress: PlaybackProgress) -> PlaybackProgress:
+        return await asyncio.to_thread(self._upsert_playback_sync, progress)
+
+    async def list_resume_progress(self, user_id: str) -> List[PlaybackProgress]:
+        return await asyncio.to_thread(self._list_playback_sync, user_id, False)
+
+    async def list_recently_completed(self, user_id: str) -> List[PlaybackProgress]:
+        return await asyncio.to_thread(self._list_playback_sync, user_id, True)
+
+    async def list_next_episodes(self, user_id: str) -> List[Dict[str, Any]]:
+        return await asyncio.to_thread(self._list_next_episodes_sync, user_id)
+
+    async def last_playback_sync(self, user_id: str) -> Optional[datetime]:
+        return await asyncio.to_thread(self._last_playback_sync_sync, user_id)

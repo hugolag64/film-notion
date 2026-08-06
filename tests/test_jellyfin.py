@@ -133,3 +133,34 @@ def test_list_users_propagates_http_errors():
                 raise AssertionError("HTTP errors should propagate")
 
     asyncio.run(run())
+
+
+def test_user_playback_reads_resumable_and_latest_items_for_the_selected_user():
+    async def handler(request):
+        assert request.url.path.startswith("/Users/jf-ophelie/Items")
+        assert request.headers["X-Emby-Token"] == "secret"
+        if request.url.path.endswith("/Latest"):
+            return httpx.Response(200, json=[{
+                "Id": "jf-dune", "Name": "Dune", "Type": "Movie",
+                "RunTimeTicks": 100, "UserData": {"Played": False, "PlaybackPositionTicks": 50},
+                "ProviderIds": {"Tmdb": "438631"},
+            }])
+        return httpx.Response(200, json={"Items": [{
+            "Id": "jf-dune", "Name": "Dune", "Type": "Movie",
+            "RunTimeTicks": 100, "UserData": {"Played": False, "PlaybackPositionTicks": 50},
+            "ProviderIds": {"Tmdb": "438631"},
+        }]})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            client = JellyfinClient("http://127.0.0.1:8096", "secret", http_client)
+            items = await client.user_playback("jf-ophelie")
+        assert items == [{
+            "jellyfin_id": "jf-dune", "tmdb_id": 438631, "title": "Dune",
+            "item_type": "Movie", "series_title": None, "series_jellyfin_id": None,
+            "season_number": None, "episode_number": None,
+            "position_ticks": 50, "runtime_ticks": 100, "percent": 50.0,
+            "played": False, "last_played_at": None,
+        }]
+
+    asyncio.run(run())

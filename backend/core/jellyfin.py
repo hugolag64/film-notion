@@ -51,6 +51,60 @@ class JellyfinClient:
             })
         return users
 
+    @staticmethod
+    def _items_from_payload(payload: Any) -> list[dict[str, Any]]:
+        if isinstance(payload, list):
+            items = payload
+        elif isinstance(payload, dict) and isinstance(payload.get("Items"), list):
+            items = payload["Items"]
+        else:
+            raise ValueError("invalid Jellyfin playback response")
+        return [item for item in items if isinstance(item, dict) and item.get("Id")]
+
+    async def user_playback(self, user_id: str) -> list[dict[str, Any]]:
+        client = self.client or http.get_client()
+        fields = "ProviderIds,UserData,SeriesName,SeriesId,IndexNumber,ParentIndexNumber"
+        requests = (
+            (f"{self.base_url}/Users/{quote(user_id, safe='')}/Items", {
+                "Recursive": "true", "IsResumable": "true", "Fields": fields,
+            }),
+            (f"{self.base_url}/Users/{quote(user_id, safe='')}/Items/Latest", {
+                "Fields": fields, "Limit": "50",
+            }),
+        )
+        normalized: dict[str, dict[str, Any]] = {}
+        for url, params in requests:
+            response = await client.get(
+                url,
+                headers={"X-Emby-Token": self.api_key},
+                params=params,
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            items = self._items_from_payload(response.json())
+            for item in items:
+                user_data = item.get("UserData") or {}
+                runtime = int(item.get("RunTimeTicks") or 0)
+                position = int(user_data.get("PlaybackPositionTicks") or 0)
+                percent = round(position * 100 / runtime, 2) if runtime else 0
+                provider_ids = item.get("ProviderIds") or {}
+                normalized[str(item["Id"])] = {
+                    "jellyfin_id": str(item["Id"]),
+                    "tmdb_id": int(provider_ids["Tmdb"]) if str(provider_ids.get("Tmdb", "")).isdigit() else None,
+                    "title": str(item.get("Name") or item["Id"]),
+                    "item_type": item.get("Type"),
+                    "series_title": item.get("SeriesName"),
+                    "series_jellyfin_id": item.get("SeriesId"),
+                    "season_number": item.get("ParentIndexNumber"),
+                    "episode_number": item.get("IndexNumber"),
+                    "position_ticks": position,
+                    "runtime_ticks": runtime,
+                    "percent": percent,
+                    "played": bool(user_data.get("Played")),
+                    "last_played_at": user_data.get("LastPlayedDate"),
+                }
+        return list(normalized.values())
+
     async def find_by_tmdb(self, tmdb_id: int, media_type: str) -> Optional[dict[str, Any]]:
         item_type = "Series" if media_type == "Série" else "Movie"
         kwargs = {"headers": {"X-Emby-Token": self.api_key}, "params": {
