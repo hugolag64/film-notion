@@ -74,6 +74,23 @@ def test_imported_arr_item_becomes_available_when_jellyfin_matches(tmp_path):
     assert availability.jellyfin_id == "jelly-dune"
 
 
+def test_sync_reclaims_reused_arr_id_from_stale_media_link(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    stale = asyncio.run(store.create({"id": "old", "title": "Old", "type": "Film", "tmdb_id": 1}))
+    asyncio.run(store.upsert_availability(Availability(
+        media_id=stale.id, provider="radarr", arr_id=42, state="requested",
+    )))
+    media = asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    service = MediaServerService(store, radarr=FakeRadarr(), jellyfin=FakeJellyfin())
+
+    availability = asyncio.run(service.sync_media(media.id))
+
+    assert availability.state == "available"
+    assert availability.arr_id == 42
+    assert asyncio.run(store.get_availability(stale.id)).arr_id is None
+
+
 def test_add_film_creates_requested_availability(tmp_path):
     store = MediaStore(str(tmp_path / "test.db"))
     store.init_schema()

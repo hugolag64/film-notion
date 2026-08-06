@@ -104,6 +104,8 @@ class MediaServerService:
                 state=state, progress_percent=progress_percent, last_error=last_error,
                 last_synced_at=datetime.now(timezone.utc),
             )
+            if availability.arr_id is not None:
+                await self.store.clear_arr_id_conflict(provider, availability.arr_id, media.id)
             saved = await self.store.upsert_availability(availability)
             if remote.get("hasFile") and not media.support:
                 await self.store.update(media.id, {"support": "Serveur"})

@@ -566,6 +566,17 @@ class MediaStore:
     async def upsert_availability(self, availability: Availability) -> Availability:
         return await asyncio.to_thread(self._upsert_availability_sync, availability)
 
+    def _clear_arr_id_conflict_sync(self, provider: str, arr_id: int, media_id: str) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE media_availability SET arr_id = NULL, last_error = ? "
+                "WHERE provider = ? AND arr_id = ? AND media_id != ?",
+                ("Lien serveur réinitialisé après réattribution", provider, arr_id, media_id),
+            )
+
+    async def clear_arr_id_conflict(self, provider: str, arr_id: int, media_id: str) -> None:
+        await asyncio.to_thread(self._clear_arr_id_conflict_sync, provider, arr_id, media_id)
+
     async def list_availabilities(self) -> List[Availability]:
         return await asyncio.to_thread(self._list_availabilities_sync)
 
