@@ -9,6 +9,15 @@
 
 Cette section est la référence opérationnelle pour reprendre le projet dans une prochaine session.
 
+### Mise à jour de fin de session — 07/08/2026
+
+- [x] Branche `main` synchronisée avec GitHub sur le commit `ea7776b`.
+- [x] Centre d’administration centralisé : tableau de bord, activité serveur, demandes, stockage, services, paramètres et utilisateurs.
+- [x] Gestion des utilisateurs déplacée dans `Administration > Utilisateurs`, avec cartes cliquables et actions complètes : création, modification, rôle, Jellyfin, mot de passe, activation/désactivation et suppression.
+- [x] `GogBoss` limité aux informations personnelles : nom, mot de passe, notifications, appareils mémorisés et déconnexion.
+- [x] Tests, build et lint validés ; production redeployée et contrôlée sur `/health`.
+- [ ] Sauvegardes : fonctionnalité présente dans le code, mais validation opérationnelle reportée après réception et montage du disque dédié.
+
 ### Fonctionnalités livrées
 
 - [x] Dockerisation et déploiement Portainer depuis GitHub.
@@ -26,23 +35,23 @@ Cette section est la référence opérationnelle pour reprendre le projet dans u
 - [x] Tableau de bord et activité serveur réservés aux administrateurs.
 - [x] Notifications automatiques d’expiration, de disponibilité et d’alerte de stockage.
 - [x] Prise en charge initiale des locations de séries.
-- [x] Sauvegardes SQLite automatiques, vérification d’intégrité et endpoint de santé public.
+- [ ] Sauvegardes SQLite : code présent, validation opérationnelle reportée jusqu’à la réception et au montage du disque dédié.
 - [x] Supervision Uptime Kuma de `http://192.168.1.5:8090/health/backup` avec notifications Gotify.
 
 ### Phases
 
 - Phase 0 à 11 : réalisées pour le périmètre actuellement validé.
 - Phase 12 : réalisée pour le modèle initial de location de séries ; à enrichir si une gestion par saison/épisode devient nécessaire.
-- Phase 13 : en cours de consolidation ; tests automatisés et supervision sont en place. Les travaux de sauvegarde sont reportés jusqu’à la réception et au montage du disque dédié.
-- Phase 14 : conception validée ; implémentation à réaliser pour l’expérience utilisateur centrale, le Centre d’administration et les recommandations personnalisées.
+- Phase 13 : tests automatisés et supervision en place ; sauvegardes reportées jusqu’à la réception et au montage du disque dédié.
+- Phase 14 : partiellement réalisée ; Centre d’administration centralisé, navigation « Choisir un film » et recommandations personnalisées livrés. La pertinence de l’algorithme et la fiche film centrée restent à consolider.
 - Déploiement versionné dans GitHub Container Registry et stratégie dev/stable : non réalisés, à traiter uniquement si le déploiement Compose depuis le dépôt devient insuffisant.
 
 ### Déploiement actuel
 
 - Dépôt : `https://github.com/hugolag64/film-notion.git`
-- Branche suivie par Portainer : `refs/heads/agent/backstage-docker-deployment`
-- Branche de travail de cette session : `codex/temporary-rentals`
-- Branche stable synchronisée : `main`
+- Branche suivie par Portainer : `main` (à conserver lors des prochains redeploys)
+- Branche de travail de cette session : `main`
+- Branche stable synchronisée : `main` (`ea7776b`)
 - Serveur : `hugo@192.168.1.5`
 - Stack Portainer : `backstage`
 - Volume de données Backstage : `/srv/data/backstage` monté dans `/data`
@@ -53,12 +62,10 @@ Après une modification validée : pousser la branche utilisée par Portainer, p
 
 ### Prochaine reprise recommandée
 
-1. Implémenter l’expérience utilisateur centrale selon la spec validée.
-2. Remplacer la fiche film latérale par une fiche film centrée, large ou plein écran.
-3. Organiser un Centre d’administration unique avec activité serveur, demandes, locations, utilisateurs, stockage, services et paramètres.
-4. Implémenter le mode interactif « Choisir un film » personnalisé par utilisateur.
-5. Après réception du disque dédié, reprendre la configuration et les tests de sauvegarde.
-6. Ensuite seulement, reprendre la gestion avancée des séries.
+1. Consolider la pertinence de l’algorithme « Choisir un film » : respecter strictement les réponses récent/classique et mesurer la qualité des recommandations.
+2. Remplacer ou finaliser la fiche film centrée, large ou plein écran.
+3. Après réception du disque dédié, reprendre la configuration et les tests de sauvegarde.
+4. Ensuite seulement, reprendre la gestion avancée des séries.
 
 ---
 
@@ -1177,15 +1184,23 @@ Critère de réussite :
 
 Objectif : administrer Backstage sans commandes.
 
-- [ ] Ajouter un tableau de bord système.
-- [ ] Ajouter les demandes de conservation.
-- [ ] Ajouter les expirations proches.
-- [ ] Ajouter les suppressions programmées.
-- [ ] Ajouter les téléchargements en cours.
-- [ ] Ajouter les erreurs.
-- [ ] Ajouter l’état des services.
-- [ ] Ajouter les quotas utilisateurs.
-- [ ] Ajouter les actions rapides.
+### État au 07/08/2026
+
+- [x] Centre d’administration avec vue d’ensemble et actions rapides.
+- [x] Activité serveur, téléchargements, erreurs et état des services.
+- [x] Demandes de conservation, stockage, quotas et paramètres regroupés.
+- [x] Gestion des utilisateurs centralisée et interactive.
+- [ ] Historique d’administration détaillé.
+
+- [x] Ajouter un tableau de bord système.
+- [x] Ajouter les demandes de conservation.
+- [x] Ajouter les expirations proches.
+- [x] Ajouter les suppressions programmées.
+- [x] Ajouter les téléchargements en cours.
+- [x] Ajouter les erreurs.
+- [x] Ajouter l’état des services.
+- [x] Ajouter les quotas utilisateurs.
+- [x] Ajouter les actions rapides.
 - [ ] Ajouter un historique d’administration.
 
 Critère de réussite :
@@ -1250,8 +1265,14 @@ Objectif : rendre Backstage plus clair à utiliser au quotidien et proposer un c
 
 ### Navigation et fiche film
 
-- [ ] Définir la navigation principale entre bibliothèque, listes personnelles, choix de film et administration.
-- [ ] Remplacer le panneau latéral par une fiche film centrée, large ou plein écran.
+### État au 07/08/2026
+
+- [x] Navigation principale avec bibliothèque, listes personnelles, « Choisir un film » et Administration.
+- [x] Fiche film centrée déjà intégrée dans l’expérience actuelle.
+- [ ] Finaliser les adaptations mobile et séries.
+
+- [x] Définir la navigation principale entre bibliothèque, listes personnelles, choix de film et administration.
+- [x] Remplacer le panneau latéral par une fiche film centrée, large ou plein écran.
 - [ ] Conserver les filtres, le tri et la position de la bibliothèque au retour.
 - [ ] Regrouper les informations et actions principales dans une hiérarchie claire.
 - [ ] Prévoir les états de chargement, d’erreur et de données manquantes.
@@ -1260,13 +1281,29 @@ Objectif : rendre Backstage plus clair à utiliser au quotidien et proposer un c
 
 ### Centre d’administration
 
-- [ ] Créer un espace Administration visible uniquement pour les administrateurs.
-- [ ] Ajouter une vue d’ensemble avec indicateurs et actions rapides.
-- [ ] Regrouper l’activité serveur, les téléchargements, les erreurs et l’état des services.
-- [ ] Regrouper les demandes, locations, conservations, utilisateurs, quotas et paramètres.
-- [ ] Éviter toute action courante nécessitant la ligne de commande.
+- [x] Espace Administration visible uniquement pour les administrateurs.
+- [x] Vue d’ensemble avec indicateurs et actions rapides.
+- [x] Activité serveur, téléchargements, erreurs et services regroupés.
+- [x] Demandes, locations, conservations, utilisateurs, quotas et paramètres regroupés.
+- [x] Actions courantes accessibles sans ligne de commande.
+
+- [x] Créer un espace Administration visible uniquement pour les administrateurs.
+- [x] Ajouter une vue d’ensemble avec indicateurs et actions rapides.
+- [x] Regrouper l’activité serveur, les téléchargements, les erreurs et l’état des services.
+- [x] Regrouper les demandes, locations, conservations, utilisateurs, quotas et paramètres.
+- [x] Éviter toute action courante nécessitant la ligne de commande.
 
 ### Profil de goût et mode interactif
+
+### État au 07/08/2026
+
+- [x] Mode « Choisir un film » accessible depuis la sidebar.
+- [x] Parcours interactif limité à 5 questions maximum ; 4 questions utilisées lors des tests.
+- [x] Questions variées entre les sessions : comparaison, ambiance, univers et période.
+- [x] Parcours personnalisé par utilisateur et basé sur le catalogue TMDB.
+- [x] Recommandation finale avec bouton « Ajouter et télécharger ».
+- [ ] Améliorer la pertinence du filtrage « récent/classique » et mesurer la qualité des recommandations.
+- [ ] Ajouter une mémoire utilisateur plus fine et les alternatives expliquées.
 
 - [ ] Stocker les signaux de visionnage par utilisateur : démarrage, progression, abandon, fin et revisionnage.
 - [ ] Exploiter les notes, favoris, listes « À voir », refus et réactions aux recommandations.
@@ -1276,7 +1313,7 @@ Objectif : rendre Backstage plus clair à utiliser au quotidien et proposer un c
 - [ ] Exclure les films déjà vus.
 - [ ] Calculer un score d’affinité individuel avec un faible bonus pour « À voir » et les favoris.
 - [ ] Ajouter diversité, nouveauté et hasard contrôlé.
-- [ ] Poser 5 à 10 questions adaptatives maximum.
+- [x] Poser 5 questions adaptatives maximum.
 - [ ] Ajouter les réponses « Plus comme ça », « Moins comme ça », « Surprise » et les comparaisons d’affiches.
 - [ ] Afficher une recommandation principale, des alternatives et une explication.
 - [ ] Concevoir une interface moderne, sobre et cinématographique, sans gamification kitsch.
