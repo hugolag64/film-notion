@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from backend.config import Config
 from backend.core import http, scheduler
 from backend.core.store import MediaStore
+from backend.core.auth import AuthStore
 from backend.api import health_router, router as api_router
 
 logging.basicConfig(
@@ -52,6 +53,7 @@ else:
 
 # Crée la base locale si elle n'existe pas encore
 MediaStore(Config.DB_PATH).init_schema()
+AuthStore(Config.DB_PATH).init_schema()
 
 # Synchronisation auto périodique (si SYNC_INTERVAL_MIN > 0)
 app.on_startup(scheduler.start_media_server_sync)
