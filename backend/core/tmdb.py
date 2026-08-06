@@ -27,7 +27,11 @@ class TMDBClient:
             response = await http.request_with_retry("GET", url, params=params)
             response.raise_for_status()
             results = response.json().get("results", [])
-            return results[:5]
+            query_key = query.strip().casefold()
+            results.sort(key=lambda result: 0 if (
+                (result.get("title") or result.get("original_title") or "").strip().casefold() == query_key
+            ) else 1)
+            return results[:20]
         except Exception as e:
             logger.error("Erreur recherche film '%s': %s", query, e)
             return []
