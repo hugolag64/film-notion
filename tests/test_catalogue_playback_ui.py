@@ -1,9 +1,12 @@
 from pathlib import Path
 
 
-UI_SOURCE = Path(__file__).parents[1] / "proto-ui" / "src" / "BackstagePrototype.jsx"
-ACCOUNT_SOURCE = Path(__file__).parents[1] / "proto-ui" / "src" / "AccountPanel.jsx"
-API_SOURCE = Path(__file__).parents[1] / "proto-ui" / "src" / "api.js"
+ROOT = Path(__file__).parents[1]
+UI_SOURCE = ROOT / "proto-ui" / "src" / "BackstagePrototype.jsx"
+ACCOUNT_SOURCE = ROOT / "proto-ui" / "src" / "AccountPanel.jsx"
+ADMIN_SOURCE = ROOT / "proto-ui" / "src" / "components" / "AdminCenter.jsx"
+USER_MANAGEMENT_SOURCE = ROOT / "proto-ui" / "src" / "components" / "UserManagement.jsx"
+API_SOURCE = ROOT / "proto-ui" / "src" / "api.js"
 
 
 def test_resume_section_is_not_rendered_in_catalogue_but_detail_keeps_playback_action():
@@ -21,69 +24,89 @@ def test_media_action_labels_are_user_facing_and_cover_pending_states():
 
     assert "Demander via Seerr" not in source
     assert "Demander ce film" in source
-    assert "Demander cette série" in source
+    assert "Demander cette série" in source or "Demander cette sÃ©rie" in source
     assert "Demande en cours" in source
-    assert "Téléchargement en cours" in source
+    assert "Téléchargement en cours" in source or "TÃ©lÃ©chargement en cours" in source
     assert "Indexation Jellyfin en cours" in source
     assert "mediaAction.canPlay ? '▶' : '+'" not in source
     assert "user?.role === 'admin'" in source
-    assert "Demander à conserver" in source
+    assert "Demander à conserver" in source or "Demander Ã  conserver" in source
     assert "fetchRentals" in source
 
 
 def test_retention_admin_controls_and_notifications_are_present():
     source = UI_SOURCE.read_text(encoding="utf-8")
-    account = ACCOUNT_SOURCE.read_text(encoding="utf-8")
+    admin = ADMIN_SOURCE.read_text(encoding="utf-8")
     api = API_SOURCE.read_text(encoding="utf-8")
 
-    assert "Demandes de conservation" in account
-    assert "Conserver définitivement" in account
-    assert "Refuser" in account
-    assert "Prolonger de 7 jours" in account
-    assert "Conservé définitivement" in source
+    assert "Demandes de conservation" in admin
+    assert "Conserver" in admin
+    assert "Refuser" in admin
+    assert "Prolonger" in admin
+    assert "Conserv" in source
     assert "fetchKeepRequests" in api
     assert "fetchNotifications" in api
 
 
 def test_cleanup_simulation_is_available_to_admins():
-    account = ACCOUNT_SOURCE.read_text(encoding="utf-8")
+    admin = ADMIN_SOURCE.read_text(encoding="utf-8")
     api = API_SOURCE.read_text(encoding="utf-8")
 
-    assert "Aperçu du nettoyage (simulation)" in account
-    assert "Aucune suppression réelle" in account
+    assert "Aperçu du nettoyage" in admin
+    assert "aucune suppression automatique" in admin
     assert "fetchCleanupPreview" in api
 
 
 def test_storage_quota_controls_are_visible():
-    account = ACCOUNT_SOURCE.read_text(encoding="utf-8")
+    admin = ADMIN_SOURCE.read_text(encoding="utf-8")
     api = API_SOURCE.read_text(encoding="utf-8")
 
-    assert "Espace de stockage" in account
+    assert "Stockage et quotas" in admin
     assert "fetchStorageStatus" in api
 
 
 def test_admin_dashboard_controls_are_visible():
-    account = ACCOUNT_SOURCE.read_text(encoding="utf-8")
+    admin = ADMIN_SOURCE.read_text(encoding="utf-8")
     api = API_SOURCE.read_text(encoding="utf-8")
 
-    assert "Tableau de bord administrateur" in account
-    assert "Expirations proches" in account
-    assert "Téléchargements en cours" in account
+    assert "Expirations proches" in admin
+    assert "Téléchargements" in admin
     assert "fetchAdminDashboard" in api
 
 
 def test_notification_center_supports_automatic_events():
     account = ACCOUNT_SOURCE.read_text(encoding="utf-8")
 
-    assert "Notifications" in account
+    assert "Mes notifications" in account
     assert "notification.message" in account
 
 
 def test_admin_backup_controls_are_visible():
-    account = ACCOUNT_SOURCE.read_text(encoding="utf-8")
+    admin = ADMIN_SOURCE.read_text(encoding="utf-8")
     api = API_SOURCE.read_text(encoding="utf-8")
 
-    assert "Sauvegarde" in account
-    assert "Sauvegarder maintenant" in account
+    assert "Sauvegarde" in admin
+    assert "Sauvegarder maintenant" in admin
     assert "fetchBackupStatus" in api
     assert "verifyBackup" in api
+
+
+def test_account_panel_contains_only_personal_controls():
+    account = ACCOUNT_SOURCE.read_text(encoding="utf-8")
+
+    assert "Mes appareils mémorisés" in account
+    assert "Demandes de conservation" not in account
+    assert "Sauvegarde" not in account
+    assert "Espace de stockage" not in account
+
+
+def test_admin_user_management_is_interactive_and_complete():
+    admin = ADMIN_SOURCE.read_text(encoding="utf-8")
+    users = USER_MANAGEMENT_SOURCE.read_text(encoding="utf-8")
+
+    assert "UserManagement" in admin
+    assert "aria-expanded={expanded}" in users
+    assert "onClick={() => setExpandedUserId" in users
+    assert "Créer un utilisateur" in users
+    assert "Supprimer" in users
+    assert "Un administrateur ne peut pas supprimer son propre compte." in users

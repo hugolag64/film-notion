@@ -1,27 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
-import { acceptKeepRequest, changePassword, createBackup, createUser, deleteUser, extendRental, fetchAdminDashboard, fetchBackupStatus, fetchCleanupPreview, fetchDevices, fetchJellyfinUsers, fetchKeepRequests, fetchNotifications, fetchStorageStatus, fetchUsers, linkJellyfinUser, markNotificationRead, refuseKeepRequest, revokeDevice, revokeOtherDevices, updateUser, verifyBackup } from './api';
+import { changePassword, fetchDevices, fetchNotifications, markNotificationRead, revokeDevice, revokeOtherDevices, updateUser } from './api';
 import { useAuth } from './auth-context';
 
 export default function AccountPanel({isDarkMode, onClose}) {
     const {user, setUser, logout} = useAuth();
     const [devices, setDevices] = useState([]);
-    const [users, setUsers] = useState([]);
-    const [jellyfinUsers, setJellyfinUsers] = useState([]);
-    const [jellyfinLoading, setJellyfinLoading] = useState(false);
-    const [jellyfinSaving, setJellyfinSaving] = useState({});
-    const [displayName, setDisplayName] = useState(user.display_name);
-    const [newUser, setNewUser] = useState({display_name: '', email: '', password: ''});
-    const [passwordForm, setPasswordForm] = useState({current_password: '', new_password: '', password_confirmation: ''});
-    const [adminPasswords, setAdminPasswords] = useState({});
-    const [keepRequests, setKeepRequests] = useState([]);
     const [notifications, setNotifications] = useState([]);
-    const [cleanupPreview, setCleanupPreview] = useState(null);
-    const [cleanupLoading, setCleanupLoading] = useState(false);
-    const [storageStatus, setStorageStatus] = useState(null);
-    const [adminDashboard, setAdminDashboard] = useState(null);
-    const [backupStatus, setBackupStatus] = useState(null);
-    const [backupLoading, setBackupLoading] = useState(false);
-    const [backupVerifying, setBackupVerifying] = useState(false);
+    const [displayName, setDisplayName] = useState(user.display_name);
+    const [passwordForm, setPasswordForm] = useState({current_password: '', new_password: '', password_confirmation: ''});
     const [error, setError] = useState('');
     const [notice, setNotice] = useState('');
     const [savingName, setSavingName] = useState(false);
@@ -31,57 +17,14 @@ export default function AccountPanel({isDarkMode, onClose}) {
             setError('');
             setDevices(await fetchDevices());
             setNotifications(await fetchNotifications());
-            if (user.role === 'admin') {
-                setUsers(await fetchUsers());
-                setKeepRequests(await fetchKeepRequests());
-                try {
-                    setStorageStatus(await fetchStorageStatus());
-                } catch {
-                    setStorageStatus(null);
-                }
-                try {
-                    setAdminDashboard(await fetchAdminDashboard());
-                } catch {
-                    setAdminDashboard(null);
-                }
-                try {
-                    setBackupStatus(await fetchBackupStatus());
-                } catch {
-                    setBackupStatus(null);
-                }
-            }
         } catch (requestError) {
             setError(requestError.message);
         }
-    }, [user.role]);
-
-    const refreshJellyfinUsers = useCallback(async () => {
-        if (user.role !== 'admin') return;
-        try {
-            setJellyfinLoading(true);
-            setJellyfinUsers(await fetchJellyfinUsers());
-        } catch (requestError) {
-            setError(requestError.message);
-        } finally {
-            setJellyfinLoading(false);
-        }
-    }, [user.role]);
+    }, []);
 
     useEffect(() => {
         refresh();
-        refreshJellyfinUsers();
-    }, [refresh, refreshJellyfinUsers]);
-
-    const handleCreateUser = async (event) => {
-        event.preventDefault();
-        try {
-            await createUser(newUser);
-            setNewUser({display_name: '', email: '', password: ''});
-            await refresh();
-        } catch (requestError) {
-            setError(requestError.message);
-        }
-    };
+    }, [refresh]);
 
     const handleNameSave = async (event) => {
         event.preventDefault();
@@ -90,6 +33,7 @@ export default function AccountPanel({isDarkMode, onClose}) {
             setError('');
             const updatedUser = await updateUser(user.id, {display_name: displayName});
             setUser(updatedUser);
+            setNotice('Nom du compte mis à jour.');
         } catch (requestError) {
             setError(requestError.message);
         } finally {
@@ -111,115 +55,6 @@ export default function AccountPanel({isDarkMode, onClose}) {
         }
     };
 
-    const handleUserUpdate = async (target, fields) => {
-        try {
-            await updateUser(target.id, fields);
-            await refresh();
-        } catch (requestError) {
-            setError(requestError.message);
-        }
-    };
-
-    const handleJellyfinLink = async (target, jellyfinUserId) => {
-        const previousJellyfinUserId = target.jellyfin_user_id || null;
-        const nextJellyfinUserId = jellyfinUserId || null;
-        setJellyfinSaving((current) => ({...current, [target.id]: true}));
-        setUsers((current) => current.map((item) => item.id === target.id
-            ? {...item, jellyfin_user_id: nextJellyfinUserId}
-            : item));
-        try {
-            const updatedUser = await linkJellyfinUser(target.id, nextJellyfinUserId);
-            if (target.id === user.id) setUser(updatedUser);
-            setNotice(`Compte Jellyfin de ${target.display_name} mis à jour.`);
-            await refresh();
-        } catch (requestError) {
-            setUsers((current) => current.map((item) => item.id === target.id
-                ? {...item, jellyfin_user_id: previousJellyfinUserId}
-                : item));
-            setError(requestError.message);
-        } finally {
-            setJellyfinSaving((current) => ({...current, [target.id]: false}));
-        }
-    };
-
-    const handleUserDelete = async (target) => {
-        if (!window.confirm(`Supprimer définitivement le compte ${target.display_name} ?`)) return;
-        try {
-            await deleteUser(target.id);
-            await refresh();
-        } catch (requestError) {
-            setError(requestError.message);
-        }
-    };
-
-    const handleAdminPassword = async (target) => {
-        const password = adminPasswords[target.id] || '';
-        if (password.length < 8) {
-            setError('Le mot de passe doit contenir au moins 8 caractères.');
-            return;
-        }
-        try {
-            setError('');
-            setNotice('');
-            await updateUser(target.id, {password});
-            setAdminPasswords((current) => ({...current, [target.id]: ''}));
-            setNotice(`Mot de passe de ${target.display_name} modifié.`);
-            await refresh();
-        } catch (requestError) {
-            setError(requestError.message);
-        }
-    };
-
-    const handleRetentionAction = async (rentalId, action, noticeText) => {
-        try {
-            setError('');
-            await action(rentalId);
-            setNotice(noticeText);
-            await refresh();
-        } catch (requestError) {
-            setError(requestError.message);
-        }
-    };
-
-    const handleCleanupPreview = async () => {
-        try {
-            setCleanupLoading(true);
-            setError('');
-            setCleanupPreview(await fetchCleanupPreview());
-        } catch (requestError) {
-            setError(requestError.message);
-        } finally {
-            setCleanupLoading(false);
-        }
-    };
-
-    const handleBackup = async () => {
-        try {
-            setBackupLoading(true);
-            setError('');
-            await createBackup();
-            setNotice('Sauvegarde créée et vérifiée.');
-            setBackupStatus(await fetchBackupStatus());
-        } catch (requestError) {
-            setError(requestError.message);
-        } finally {
-            setBackupLoading(false);
-        }
-    };
-
-    const handleBackupVerify = async () => {
-        try {
-            setBackupVerifying(true);
-            setError('');
-            await verifyBackup();
-            setNotice('La dernière sauvegarde est lisible et intègre.');
-        } catch (requestError) {
-            setError(requestError.message);
-        } finally {
-            setBackupVerifying(false);
-        }
-    };
-
     const text = isDarkMode ? 'text-white' : 'text-[#0a2540]';
     const muted = isDarkMode ? 'text-white/60' : 'text-[#425466]';
     const panel = isDarkMode ? 'bg-[#111111] border-white/10' : 'bg-white border-[#e3e8ee]';
@@ -229,9 +64,9 @@ export default function AccountPanel({isDarkMode, onClose}) {
             <section className={`mx-auto max-h-full max-w-3xl overflow-y-auto rounded-2xl border p-6 shadow-2xl ${panel} ${text}`} onClick={(event) => event.stopPropagation()}>
                 <div className="mb-6 flex items-start justify-between gap-4">
                     <div>
-                        <p className="text-xs font-mono uppercase tracking-widest text-[#635bff]">Compte</p>
+                        <p className="text-xs font-mono uppercase tracking-widest text-[#635bff]">Mon compte</p>
                         <h2 className="mt-1 text-2xl font-semibold">{user.display_name}</h2>
-                        <p className={`text-sm ${muted}`}>{user.email} · {user.role}</p>
+                        <p className={`text-sm ${muted}`}>{user.email} · {user.role === 'admin' ? 'Administrateur' : 'Utilisateur'}</p>
                     </div>
                     <button className="rounded-lg border px-3 py-1.5 text-sm" onClick={onClose}>Fermer</button>
                 </div>
@@ -241,7 +76,7 @@ export default function AccountPanel({isDarkMode, onClose}) {
 
                 {notifications.length > 0 && (
                     <div className="mb-8">
-                        <h3 className="mb-3 font-semibold">Notifications</h3>
+                        <h3 className="mb-3 font-semibold">Mes notifications</h3>
                         <div className="space-y-2">
                             {notifications.map((notification) => (
                                 <button key={notification.id} type="button" onClick={async () => { if (!notification.read_at) { await markNotificationRead(notification.id); await refresh(); } }} className={`block w-full rounded-lg border p-3 text-left text-sm ${notification.read_at ? 'opacity-60' : 'border-[#635bff]'}`}>
@@ -258,9 +93,7 @@ export default function AccountPanel({isDarkMode, onClose}) {
                         Nom du compte
                         <input required value={displayName} onChange={(event) => setDisplayName(event.target.value)} className="rounded border bg-transparent px-2 py-2" />
                     </label>
-                    <button className="rounded bg-[#635bff] px-3 py-2 text-sm font-semibold text-white" type="submit" disabled={savingName}>
-                        {savingName ? 'Enregistrement…' : 'Enregistrer'}
-                    </button>
+                    <button className="rounded bg-[#635bff] px-3 py-2 text-sm font-semibold text-white" type="submit" disabled={savingName}>{savingName ? 'Enregistrement…' : 'Enregistrer'}</button>
                 </form>
 
                 <form className="mb-8 grid gap-2 sm:grid-cols-3" onSubmit={handlePasswordChange}>
@@ -273,8 +106,8 @@ export default function AccountPanel({isDarkMode, onClose}) {
 
                 <div className="mb-8">
                     <div className="mb-3 flex items-center justify-between">
-                        <h3 className="font-semibold">Appareils mémorisés</h3>
-                        <button className="text-xs text-[#635bff]" onClick={async () => { await revokeOtherDevices(); await refresh(); }}>Révoquer les autres</button>
+                        <h3 className="font-semibold">Mes appareils mémorisés</h3>
+                        <button type="button" className="text-xs text-[#635bff]" onClick={async () => { await revokeOtherDevices(); await refresh(); }}>Révoquer les autres</button>
                     </div>
                     <div className="space-y-2">
                         {devices.map((device) => (
@@ -283,163 +116,14 @@ export default function AccountPanel({isDarkMode, onClose}) {
                                     <p>{device.user_agent || 'Navigateur inconnu'} {device.current && <span className="text-xs text-[#635bff]">(actuel)</span>}</p>
                                     <p className={`text-xs ${muted}`}>Dernière activité : {new Date(device.last_seen_at).toLocaleString()}</p>
                                 </div>
-                                <button className="text-xs text-rose-500" onClick={async () => { await revokeDevice(device.id); await refresh(); }}>Révoquer</button>
+                                <button type="button" className="text-xs text-rose-500" onClick={async () => { await revokeDevice(device.id); await refresh(); }}>Révoquer</button>
                             </div>
                         ))}
+                        {devices.length === 0 && <p className={`rounded-lg border p-3 text-sm ${muted}`}>Aucun appareil mémorisé.</p>}
                     </div>
                 </div>
 
-                {user.role === 'admin' && (
-                    <div>
-                        {adminDashboard && <div className="mb-8">
-                            <h3 className="mb-3 font-semibold">Tableau de bord administrateur</h3>
-                            <div className="grid gap-2 sm:grid-cols-3">
-                                <div className="rounded-lg border p-3 text-sm"><strong>Expirations proches</strong><p className={muted}>{adminDashboard.expiring.length} location(s) dans les 3 jours</p></div>
-                                <div className="rounded-lg border p-3 text-sm"><strong>Téléchargements en cours</strong><p className={muted}>{adminDashboard.downloads.length} contenu(s)</p></div>
-                                <div className="rounded-lg border p-3 text-sm"><strong>Erreurs</strong><p className={muted}>{adminDashboard.errors.length} erreur(s)</p></div>
-                            </div>
-                            {adminDashboard.expiring.length > 0 && <div className="mt-3 space-y-2">
-                                {adminDashboard.expiring.map((item) => <div key={item.rental.id} className="rounded-lg border p-3 text-sm"><strong>{item.media_title}</strong><p className={muted}>{item.requester_name} · expire le {new Date(item.rental.expires_at).toLocaleDateString()}</p></div>)}
-                            </div>}
-                        </div>}
-                        <div className="mb-8">
-                            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                                <h3 className="font-semibold">Sauvegarde</h3>
-                                <button type="button" className="rounded border border-[#635bff] px-2 py-1 text-xs text-[#635bff]" onClick={handleBackup} disabled={backupLoading}>
-                                    {backupLoading ? 'Sauvegarde…' : 'Sauvegarder maintenant'}
-                                </button>
-                                <button type="button" className="rounded border px-2 py-1 text-xs" onClick={handleBackupVerify} disabled={backupVerifying || !backupStatus?.latest}>
-                                    {backupVerifying ? 'Vérification…' : 'Vérifier'}
-                                </button>
-                            </div>
-                            {backupStatus?.latest ? <p className={`rounded-lg border p-3 text-sm ${backupStatus.latest.integrity === 'ok' ? '' : 'border-rose-500 text-rose-500'}`}>
-                                Dernière sauvegarde : {new Date(backupStatus.latest.created_at).toLocaleString()} · {Math.round(backupStatus.latest.size_bytes / 1024)} Ko · {backupStatus.latest.integrity === 'ok' ? 'Intègre' : 'À vérifier'}
-                            </p> : <p className={`rounded-lg border p-3 text-sm ${muted}`}>Aucune sauvegarde détectée.</p>}
-                        </div>
-                        <div className="mb-8">
-                            <h3 className="mb-3 font-semibold">Espace de stockage</h3>
-                            {storageStatus ? (
-                                <div className={`rounded-lg border p-3 text-sm ${storageStatus.low_space || storageStatus.temporary_quota_reached ? 'border-amber-500' : ''}`}>
-                                    <p>
-                                        Libre : {storageStatus.min_free_gb === null ? 'inconnu' : `${storageStatus.min_free_gb} Go`}
-                                        {' '} / seuil {storageStatus.min_free_threshold_gb} Go
-                                    </p>
-                                    <p className={muted}>
-                                        Locations temporaires : {storageStatus.temporary_gb} Go / {storageStatus.temporary_max_gb} Go
-                                    </p>
-                                    {(storageStatus.low_space || storageStatus.temporary_quota_reached) && <p className="mt-1 text-amber-600">Les nouvelles locations sont bloquées jusqu'à libération d'espace.</p>}
-                                </div>
-                            ) : <p className={`rounded-lg border p-3 text-sm ${muted}`}>État du stockage indisponible.</p>}
-                        </div>
-                        <div className="mb-8">
-                            <h3 className="mb-3 font-semibold">Demandes de conservation</h3>
-                            <div className="space-y-2">
-                                {keepRequests.length === 0 && <p className={`rounded-lg border p-3 text-sm ${muted}`}>Aucune demande en attente.</p>}
-                                {keepRequests.map((item) => (
-                                    <div key={item.rental.id} className="rounded-lg border p-3 text-sm">
-                                        <div className="flex flex-wrap items-start justify-between gap-3">
-                                            <div>
-                                                <p className="font-semibold">{item.media_title}</p>
-                                                <p className={`text-xs ${muted}`}>{item.requester_name}</p>
-                                                <p className={`text-xs ${muted}`}>Expire le {item.rental.expires_at ? new Date(item.rental.expires_at).toLocaleDateString() : '—'}</p>
-                                            </div>
-                                            <div className="flex flex-wrap gap-2">
-                                                <button type="button" className="rounded bg-emerald-600 px-2 py-1 text-xs font-semibold text-white" onClick={() => handleRetentionAction(item.rental.id, acceptKeepRequest, 'Film conservé définitivement.')}>Conserver définitivement</button>
-                                                <button type="button" className="rounded border border-rose-500 px-2 py-1 text-xs text-rose-500" onClick={() => handleRetentionAction(item.rental.id, refuseKeepRequest, 'Demande refusée.')}>Refuser</button>
-                                                <button type="button" className="rounded border border-[#635bff] px-2 py-1 text-xs text-[#635bff]" onClick={() => handleRetentionAction(item.rental.id, extendRental, 'Location prolongée de 7 jours.')}>Prolonger de 7 jours</button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                        <div className="mb-8">
-                            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                                <h3 className="font-semibold">Aperçu du nettoyage (simulation)</h3>
-                                <button type="button" className="rounded border border-[#635bff] px-2 py-1 text-xs text-[#635bff]" onClick={handleCleanupPreview} disabled={cleanupLoading}>
-                                    {cleanupLoading ? 'Analyse…' : 'Analyser les expirations'}
-                                </button>
-                            </div>
-                            {cleanupPreview && <>
-                                <p className={`mb-3 rounded-lg border p-3 text-xs ${muted}`}>Aucune suppression réelle. {cleanupPreview.message}</p>
-                                <div className="space-y-2">
-                                    {cleanupPreview.items.length === 0 && <p className={`rounded-lg border p-3 text-sm ${muted}`}>Aucun contenu arrivé à expiration.</p>}
-                                    {cleanupPreview.items.map((item) => (
-                                        <div key={item.rental_id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3 text-sm">
-                                            <div><strong>{item.media_title}</strong><p className={`text-xs ${muted}`}>{item.expires_at ? `Expiré le ${new Date(item.expires_at).toLocaleDateString()}` : 'Sans expiration'}</p></div>
-                                            <span className={item.action === 'protected' ? 'text-emerald-600' : 'text-amber-600'}>{item.action === 'protected' ? `Protégé : ${item.reason}` : 'Serait supprimé'}</span>
-                                        </div>
-                                    ))}
-                                </div>
-                            </>}
-                        </div>
-                        <h3 className="mb-3 font-semibold">Utilisateurs</h3>
-                        <div className="mb-4 space-y-2">
-                            {users.map((target) => (
-                                <div key={target.id} className={`flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3 text-sm ${isDarkMode ? 'border-white/10' : 'border-[#e3e8ee]'}`}>
-                                    <div>
-                                        <div className="flex flex-wrap items-center gap-2">
-                                            <input
-                                                value={target.display_name}
-                                                onChange={(event) => setUsers((current) => current.map((item) => item.id === target.id ? {...item, display_name: event.target.value} : item))}
-                                                className="w-36 rounded border bg-transparent px-2 py-1 text-sm"
-                                                aria-label={`Nom de ${target.email}`}
-                                            />
-                                            <button className="text-xs text-[#635bff]" onClick={() => handleUserUpdate(target, {display_name: target.display_name})}>Enregistrer</button>
-                                        </div>
-                                        <p className={`text-xs ${muted}`}>{target.email}</p>
-                                        <p className={`text-xs ${target.is_active ? 'text-emerald-500' : 'text-rose-500'}`}>{target.is_active ? 'Actif' : 'Désactivé'}</p>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <select
-                                            value={target.jellyfin_user_id || ''}
-                                            onChange={(event) => handleJellyfinLink(target, event.target.value)}
-                                            disabled={jellyfinLoading || jellyfinSaving[target.id]}
-                                            className="max-w-48 rounded border bg-transparent px-2 py-1 text-xs"
-                                            aria-label={`Compte Jellyfin de ${target.email}`}
-                                        >
-                                            <option value="">Jellyfin : Non associé</option>
-                                            {jellyfinUsers.map((jellyfinUser) => {
-                                                const linkedToOther = users.some((item) => item.id !== target.id && item.jellyfin_user_id === jellyfinUser.id);
-                                                return (
-                                                    <option key={jellyfinUser.id} value={jellyfinUser.id} disabled={linkedToOther}>
-                                                        {jellyfinUser.name}{linkedToOther ? ' — déjà associé' : ''}
-                                                    </option>
-                                                );
-                                            })}
-                                        </select>
-                                        <input
-                                            type="password"
-                                            minLength="8"
-                                            placeholder="Nouveau mot de passe"
-                                            value={adminPasswords[target.id] || ''}
-                                            onChange={(event) => setAdminPasswords((current) => ({...current, [target.id]: event.target.value}))}
-                                            className="w-36 rounded border bg-transparent px-2 py-1 text-xs"
-                                            aria-label={`Nouveau mot de passe de ${target.email}`}
-                                        />
-                                        <button type="button" className="text-xs text-[#635bff]" onClick={() => handleAdminPassword(target)}>Définir</button>
-                                        <select value={target.role} onChange={(event) => handleUserUpdate(target, {role: event.target.value})} className="rounded border bg-transparent px-2 py-1 text-xs">
-                                            <option value="user">Utilisateur</option>
-                                            <option value="admin">Administrateur</option>
-                                        </select>
-                                        <button className="text-xs text-[#635bff]" onClick={() => handleUserUpdate(target, {is_active: !target.is_active})}>
-                                            {target.is_active ? 'Désactiver' : 'Activer'}
-                                        </button>
-                                        <button className="text-xs text-rose-500" onClick={() => handleUserDelete(target)}>Supprimer</button>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                        <form className="grid gap-2 sm:grid-cols-3" onSubmit={handleCreateUser}>
-                            <input required placeholder="Nom" value={newUser.display_name} onChange={(event) => setNewUser({...newUser, display_name: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
-                            <input required type="email" placeholder="Email" value={newUser.email} onChange={(event) => setNewUser({...newUser, email: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
-                            <input required minLength="8" type="password" placeholder="Mot de passe (8 caractères min.)" value={newUser.password} onChange={(event) => setNewUser({...newUser, password: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
-                            <button className="rounded bg-[#635bff] px-3 py-2 text-sm font-semibold text-white sm:col-span-3" type="submit">Créer un utilisateur</button>
-                        </form>
-                    </div>
-                )}
-
-                <button className="mt-8 rounded-lg border border-rose-500/40 px-3 py-2 text-sm text-rose-500" onClick={logout}>Se déconnecter</button>
+                <button type="button" className="rounded-lg border border-rose-500/40 px-3 py-2 text-sm text-rose-500" onClick={logout}>Se déconnecter</button>
             </section>
         </div>
     );
