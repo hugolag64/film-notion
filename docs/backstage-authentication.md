@@ -24,6 +24,16 @@ Depuis le menu du compte, il est possible de :
 - se déconnecter ;
 - pour un administrateur, créer, activer ou désactiver des utilisateurs et modifier leur rôle.
 
+## Liaison avec Jellyfin
+
+Avec une clé API Jellyfin configurée, un administrateur peut associer les comptes depuis **Compte → Utilisateurs** :
+
+1. ouvrir le sélecteur Jellyfin à droite du compte Backstage ;
+2. choisir le compte Jellyfin correspondant ;
+3. laisser **Jellyfin : Non associé** pour retirer la liaison.
+
+Un compte Jellyfin ne peut être associé qu’à un seul compte Backstage. Cette association ne crée, ne supprime et ne modifie aucun compte Jellyfin. Elle prépare la personnalisation future du suivi de lecture.
+
 ## Déploiement Portainer
 
 La stack doit utiliser la branche `agent/backstage-docker-deployment` et conserver le volume :
@@ -46,7 +56,7 @@ Pour publier une nouvelle version :
 4. attendre l’état `running` ;
 5. vérifier `http://192.168.1.5:8090/health`.
 
-Les tables `users` et `auth_sessions` sont ajoutées automatiquement. Elles ne modifient pas les tables `media`, `episode` et `media_availability`.
+Les tables `users` et `auth_sessions`, ainsi que la colonne de liaison Jellyfin, sont ajoutées automatiquement. Elles ne modifient pas les tables `media`, `episode` et `media_availability`.
 
 ## Récupération d’une session
 
