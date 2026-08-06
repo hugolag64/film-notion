@@ -183,6 +183,18 @@ export async function fetchMediaServerActivity() {
     return response.json();
 }
 
+export async function syncPlayback() {
+    const response = await fetch(`${API_BASE_URL}/playback/sync`, {method: 'POST'});
+    if (!response.ok) throw new Error((await response.json()).detail || 'Progression indisponible');
+    return response.json();
+}
+
+export async function fetchPlaybackSummary() {
+    const response = await fetch(`${API_BASE_URL}/playback/summary`);
+    if (!response.ok) throw new Error((await response.json()).detail || 'Progression indisponible');
+    return response.json();
+}
+
 /**
  * Search TMDB for movies by query.
  */

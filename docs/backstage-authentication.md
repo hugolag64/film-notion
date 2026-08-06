@@ -34,9 +34,15 @@ Avec une clé API Jellyfin configurée, un administrateur peut associer les comp
 
 Un compte Jellyfin ne peut être associé qu’à un seul compte Backstage. Cette association ne crée, ne supprime et ne modifie aucun compte Jellyfin. Elle prépare la personnalisation future du suivi de lecture.
 
+### Progression Jellyfin par utilisateur
+
+Après association, Backstage synchronise la progression du compte Jellyfin correspondant et affiche **Reprendre la lecture**, les **prochains épisodes** et les médias **récemment terminés**. Les données sont séparées par compte Backstage : la progression d’Hugo n’est jamais affichée à Ophélie.
+
+La synchronisation se lance à l’ouverture de l’application et peut être relancée avec **Actualiser**. Une indisponibilité temporaire de Jellyfin ne bloque pas le catalogue local.
+
 ## Déploiement Portainer
 
-La stack doit utiliser la branche `agent/backstage-docker-deployment` et conserver le volume :
+La stack doit utiliser la branche `main` et conserver le volume :
 
 ```text
 /srv/data/backstage:/data
