@@ -1,8 +1,9 @@
 import asyncio
-from datetime import date
+from datetime import date, datetime, timezone
 
 from backend.core.store import MediaStore
 from backend.core.media_server import Availability
+from backend.core.models import Rental
 
 
 def _store(tmp_path) -> MediaStore:
@@ -141,3 +142,40 @@ def test_upsert_and_fetch_availability(tmp_path):
 
     assert saved.arr_id == 42
     assert asyncio.run(store.get_availability(media.id)).state == "downloading"
+
+
+def test_rentals_are_scoped_and_count_active_items(tmp_path):
+    store = _store(tmp_path)
+    media = asyncio.run(store.create({"title": "Dune", "type": "Film"}))
+    now = datetime.now(timezone.utc)
+    rental = Rental(
+        id="rental-1", media_id=media.id, backstage_user_id="hugo",
+        requested_at=now, created_at=now, updated_at=now,
+    )
+
+    saved = asyncio.run(store.create_rental(rental))
+
+    assert saved.id == "rental-1"
+    assert [item.id for item in asyncio.run(store.list_user_rentals("hugo"))] == ["rental-1"]
+    assert asyncio.run(store.list_user_rentals("ophelie")) == []
+    assert asyncio.run(store.count_active_rentals("hugo")) == 1
+    assert asyncio.run(store.find_active_rental("hugo", media.id)).id == "rental-1"
+
+
+def test_rental_updates_expiry_and_keep_state(tmp_path):
+    store = _store(tmp_path)
+    media = asyncio.run(store.create({"title": "Dune", "type": "Film"}))
+    now = datetime.now(timezone.utc)
+    rental = Rental(
+        id="rental-1", media_id=media.id, backstage_user_id="hugo",
+        requested_at=now, created_at=now, updated_at=now,
+    )
+    asyncio.run(store.create_rental(rental))
+
+    updated = asyncio.run(store.update_rental("rental-1", {
+        "status": "keep_requested", "keep_requested_at": now, "expires_at": now,
+    }))
+
+    assert updated.status == "keep_requested"
+    assert updated.keep_requested_at == now
+    assert asyncio.run(store.count_active_rentals("hugo")) == 1

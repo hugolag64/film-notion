@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Literal, Optional
 from datetime import date, datetime
 
 
@@ -32,3 +32,22 @@ class Media(BaseModel):
     watched_in_cinema: bool = False
     watched_date: Optional[str] = None
     created_at: Optional[datetime] = None
+
+
+RentalStatus = Literal[
+    "requested", "downloading", "available", "keep_requested", "kept", "expired", "cancelled",
+]
+
+
+class Rental(BaseModel):
+    id: str
+    media_id: str
+    backstage_user_id: str
+    status: RentalStatus = "requested"
+    requested_at: datetime
+    available_at: Optional[datetime] = None
+    first_played_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    keep_requested_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime

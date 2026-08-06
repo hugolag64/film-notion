@@ -6,7 +6,7 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from backend.core.models import Media
+from backend.core.models import Media, Rental
 from backend.core.media_server import Availability
 from backend.core.playback import PlaybackProgress
 
@@ -17,6 +17,7 @@ _COLUMNS = [
 ]
 
 _LIST_FIELDS = {"categories", "tags", "cast"}
+_ACTIVE_RENTAL_STATES = ("requested", "downloading", "available", "keep_requested")
 
 
 class MediaStore:
@@ -87,6 +88,33 @@ class MediaStore:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS media_rentals (
+                    id TEXT PRIMARY KEY,
+                    media_id TEXT NOT NULL,
+                    backstage_user_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    requested_at TEXT NOT NULL,
+                    available_at TEXT,
+                    first_played_at TEXT,
+                    expires_at TEXT,
+                    keep_requested_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE CASCADE
+                )
+                """
+            )
+            active_states = ", ".join(f"'{state}'" for state in _ACTIVE_RENTAL_STATES)
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_active_media_rentals_user_media "
+                f"ON media_rentals(backstage_user_id, media_id) WHERE status IN ({active_states})"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_media_rentals_user_status "
+                "ON media_rentals(backstage_user_id, status)"
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS playback_progress (
                     backstage_user_id TEXT NOT NULL,
                     jellyfin_id TEXT NOT NULL,
@@ -149,6 +177,17 @@ class MediaStore:
         if data.get("created_at"):
             data["created_at"] = datetime.fromisoformat(data["created_at"])
         return Media(**data)
+
+    @staticmethod
+    def _row_to_rental(row: sqlite3.Row) -> Rental:
+        data = dict(row)
+        for field in (
+            "requested_at", "available_at", "first_played_at", "expires_at",
+            "keep_requested_at", "created_at", "updated_at",
+        ):
+            if data.get(field):
+                data[field] = datetime.fromisoformat(data[field])
+        return Rental(**data)
 
     @staticmethod
     def _encode(field: str, value: Any) -> Any:
@@ -384,6 +423,75 @@ class MediaStore:
             ).fetchone()
         return self._row_to_availability(row) if row else None
 
+    def _create_rental_sync(self, rental: Rental) -> Rental:
+        values = rental.model_dump()
+        for field in (
+            "requested_at", "available_at", "first_played_at", "expires_at",
+            "keep_requested_at", "created_at", "updated_at",
+        ):
+            if values[field] is not None:
+                values[field] = values[field].isoformat()
+        columns = list(values)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                f"INSERT INTO media_rentals ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+                [values[column] for column in columns],
+            )
+        return self._get_rental_sync(rental.id)
+
+    def _get_rental_sync(self, rental_id: str) -> Optional[Rental]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM media_rentals WHERE id = ?", (rental_id,)).fetchone()
+        return self._row_to_rental(row) if row else None
+
+    def _list_user_rentals_sync(self, user_id: str) -> List[Rental]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM media_rentals WHERE backstage_user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            ).fetchall()
+        return [self._row_to_rental(row) for row in rows]
+
+    def _count_active_rentals_sync(self, user_id: str) -> int:
+        placeholders = ", ".join("?" for _ in _ACTIVE_RENTAL_STATES)
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                f"SELECT COUNT(*) FROM media_rentals WHERE backstage_user_id = ? AND status IN ({placeholders})",
+                (user_id, *_ACTIVE_RENTAL_STATES),
+            ).fetchone()
+        return int(row[0])
+
+    def _find_active_rental_sync(self, user_id: str, media_id: str) -> Optional[Rental]:
+        placeholders = ", ".join("?" for _ in _ACTIVE_RENTAL_STATES)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                f"SELECT * FROM media_rentals WHERE backstage_user_id = ? AND media_id = ? "
+                f"AND status IN ({placeholders})",
+                (user_id, media_id, *_ACTIVE_RENTAL_STATES),
+            ).fetchone()
+        return self._row_to_rental(row) if row else None
+
+    def _update_rental_sync(self, rental_id: str, updates: Dict[str, Any]) -> Optional[Rental]:
+        allowed = {
+            "status", "available_at", "first_played_at", "expires_at", "keep_requested_at", "updated_at",
+        }
+        values = {key: value for key, value in updates.items() if key in allowed}
+        values["updated_at"] = values.get("updated_at") or datetime.now(timezone.utc)
+        for key, value in values.items():
+            if isinstance(value, datetime):
+                values[key] = value.isoformat()
+        if values:
+            assignments = ", ".join(f"{key} = ?" for key in values)
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    f"UPDATE media_rentals SET {assignments} WHERE id = ?",
+                    (*values.values(), rental_id),
+                )
+        return self._get_rental_sync(rental_id)
+
     def _upsert_availability_sync(self, availability: Availability) -> Availability:
         values = availability.model_dump()
         if values["last_synced_at"] is not None:
@@ -562,6 +670,24 @@ class MediaStore:
 
     async def get_availability(self, media_id: str) -> Optional[Availability]:
         return await asyncio.to_thread(self._get_availability_sync, media_id)
+
+    async def create_rental(self, rental: Rental) -> Rental:
+        return await asyncio.to_thread(self._create_rental_sync, rental)
+
+    async def get_rental(self, rental_id: str) -> Optional[Rental]:
+        return await asyncio.to_thread(self._get_rental_sync, rental_id)
+
+    async def list_user_rentals(self, user_id: str) -> List[Rental]:
+        return await asyncio.to_thread(self._list_user_rentals_sync, user_id)
+
+    async def count_active_rentals(self, user_id: str) -> int:
+        return await asyncio.to_thread(self._count_active_rentals_sync, user_id)
+
+    async def find_active_rental(self, user_id: str, media_id: str) -> Optional[Rental]:
+        return await asyncio.to_thread(self._find_active_rental_sync, user_id, media_id)
+
+    async def update_rental(self, rental_id: str, updates: Dict[str, Any]) -> Optional[Rental]:
+        return await asyncio.to_thread(self._update_rental_sync, rental_id, updates)
 
     async def upsert_availability(self, availability: Availability) -> Availability:
         return await asyncio.to_thread(self._upsert_availability_sync, availability)
