@@ -574,6 +574,18 @@ async def list_keep_requests(
     return {"requests": requests}
 
 
+@router.get("/admin/rentals/cleanup-preview")
+async def cleanup_preview(
+    _: AuthContext = Depends(require_admin),
+    store: MediaStore = Depends(get_store),
+):
+    return {
+        "simulation": True,
+        "items": await store.cleanup_preview(datetime.now(timezone.utc)),
+        "message": "Simulation uniquement : aucun fichier ne sera supprimé.",
+    }
+
+
 async def _apply_rental_decision(
     rental_id: str,
     decision: str,

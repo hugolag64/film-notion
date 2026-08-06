@@ -458,6 +458,32 @@ def test_non_admin_cannot_decide_and_admin_can_refuse_or_extend(tmp_path, monkey
     assert refused.json()["rental"]["status"] == "available"
 
 
+def test_cleanup_preview_is_admin_only_and_does_not_delete(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    media = asyncio.run(MediaStore(Config.DB_PATH).create({"id": "dune", "title": "Dune", "type": "Film"}))
+    expired = datetime.now(timezone.utc)
+    asyncio.run(MediaStore(Config.DB_PATH).create_rental(Rental(
+        id="cleanup-1", media_id=media.id, backstage_user_id="user-id", status="available",
+        requested_at=expired, expires_at=expired, created_at=expired, updated_at=expired,
+    )))
+
+    preview = client.get("/api/admin/rentals/cleanup-preview")
+    assert preview.status_code == 200
+    assert preview.json()["simulation"] is True
+    assert preview.json()["items"][0]["action"] == "would_delete"
+    assert asyncio.run(MediaStore(Config.DB_PATH).get_rental("cleanup-1")).status == "available"
+
+    client.post("/api/auth/users", json={
+        "display_name": "Paul", "email": "paul@example.com", "password": "12345678",
+    })
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={
+        "email": "paul@example.com", "password": "12345678", "remember_device": False,
+    })
+    assert client.get("/api/admin/rentals/cleanup-preview").status_code == 403
+
+
 def test_media_activity_is_admin_only(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     _setup(client)
