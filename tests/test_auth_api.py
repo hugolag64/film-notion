@@ -183,3 +183,22 @@ def test_admin_can_change_their_own_display_name(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert client.get("/api/auth/me").json()["user"]["display_name"] == "Hugo Maison"
+
+
+def test_admin_can_change_another_users_display_name(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    created = client.post("/api/auth/users", json={
+        "display_name": "Ophelie",
+        "email": "ophelie@example.com",
+        "password": "12345678",
+    })
+    user_id = created.json()["user"]["id"]
+
+    response = client.patch(
+        f"/api/auth/users/{user_id}",
+        json={"display_name": "Ophélie"},
+    )
+
+    assert response.status_code == 200
+    assert next(user for user in client.get("/api/auth/users").json()["users"] if user["id"] == user_id)["display_name"] == "Ophélie"

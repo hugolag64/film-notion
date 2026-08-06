@@ -120,7 +120,16 @@ export default function AccountPanel({isDarkMode, onClose}) {
                             {users.map((target) => (
                                 <div key={target.id} className={`flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3 text-sm ${isDarkMode ? 'border-white/10' : 'border-[#e3e8ee]'}`}>
                                     <div>
-                                        <p>{target.display_name} <span className={`text-xs ${muted}`}>{target.email}</span></p>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <input
+                                                value={target.display_name}
+                                                onChange={(event) => setUsers((current) => current.map((item) => item.id === target.id ? {...item, display_name: event.target.value} : item))}
+                                                className="w-36 rounded border bg-transparent px-2 py-1 text-sm"
+                                                aria-label={`Nom de ${target.email}`}
+                                            />
+                                            <button className="text-xs text-[#635bff]" onClick={() => handleUserUpdate(target, {display_name: target.display_name})}>Enregistrer</button>
+                                        </div>
+                                        <p className={`text-xs ${muted}`}>{target.email}</p>
                                         <p className={`text-xs ${target.is_active ? 'text-emerald-500' : 'text-rose-500'}`}>{target.is_active ? 'Actif' : 'Désactivé'}</p>
                                     </div>
                                     <div className="flex items-center gap-2">
