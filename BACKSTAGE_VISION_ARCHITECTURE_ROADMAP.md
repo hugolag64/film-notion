@@ -5,6 +5,61 @@
 
 ---
 
+## État de référence — clôture de session du 06/08/2026
+
+Cette section est la référence opérationnelle pour reprendre le projet dans une prochaine session.
+
+### Fonctionnalités livrées
+
+- [x] Dockerisation et déploiement Portainer depuis GitHub.
+- [x] Comptes, rôles administrateur/utilisateur, sessions, appareils mémorisés et changement de mot de passe.
+- [x] Réinitialisation du mot de passe par e-mail Gmail configuré par variables d’environnement.
+- [x] Catalogue commun, listes personnelles, favoris et historique de lecture.
+- [x] Liaison individuelle avec Jellyfin et synchronisation de la progression.
+- [x] Demandes de films et séries via Seerr, Radarr et Sonarr.
+- [x] Détection des contenus déjà disponibles et bouton de lecture dans la fiche du contenu.
+- [x] Locations temporaires : quota de 5 locations actives par utilisateur, expiration et suivi de lecture.
+- [x] Comptes administrateurs exclus du système de location : leurs demandes sont permanentes.
+- [x] Demandes de conservation définitive, validation/refus/prolongation par l’administrateur et notifications internes.
+- [x] Protection contre la suppression automatique des contenus permanents.
+- [x] Quotas de stockage, seuil d’espace libre et simulation de nettoyage.
+- [x] Tableau de bord et activité serveur réservés aux administrateurs.
+- [x] Notifications automatiques d’expiration, de disponibilité et d’alerte de stockage.
+- [x] Prise en charge initiale des locations de séries.
+- [x] Sauvegardes SQLite automatiques, vérification d’intégrité et endpoint de santé public.
+- [x] Supervision Uptime Kuma de `http://192.168.1.5:8090/health/backup` avec notifications Gotify.
+
+### Phases
+
+- Phase 0 à 11 : réalisées pour le périmètre actuellement validé.
+- Phase 12 : réalisée pour le modèle initial de location de séries ; à enrichir si une gestion par saison/épisode devient nécessaire.
+- Phase 13 : en cours de consolidation ; tests automatisés, sauvegardes et supervision sont en place. Il reste surtout le test de restauration réel et la documentation d’exploitation.
+- Déploiement versionné dans GitHub Container Registry et stratégie dev/stable : non réalisés, à traiter uniquement si le déploiement Compose depuis le dépôt devient insuffisant.
+
+### Déploiement actuel
+
+- Dépôt : `https://github.com/hugolag64/film-notion.git`
+- Branche suivie par Portainer : `refs/heads/agent/backstage-docker-deployment`
+- Branche de travail de cette session : `codex/temporary-rentals`
+- Branche stable synchronisée : `main`
+- Serveur : `hugo@192.168.1.5`
+- Stack Portainer : `backstage`
+- Volume de données Backstage : `/srv/data/backstage` monté dans `/data`
+- Base SQLite : `/srv/data/backstage/backstage.db`
+- Sauvegardes : `/srv/data/backstage/backups` si `BACKUP_DIR` conserve sa valeur par défaut dans le conteneur.
+
+Après une modification validée : pousser la branche utilisée par Portainer, puis ouvrir le stack `backstage` et cliquer sur **Pull and redeploy**. Les secrets et clés API restent uniquement dans l’environnement Portainer et ne doivent pas être ajoutés au dépôt.
+
+### Prochaine reprise recommandée
+
+1. Installer et monter le disque dur de sauvegarde, puis déplacer `BACKUP_DIR` vers ce disque.
+2. Lancer une sauvegarde manuelle depuis le compte administrateur et vérifier son intégrité.
+3. Faire un test de restauration sur une copie temporaire de SQLite, sans écraser la base active.
+4. Documenter le chemin de montage définitif et la procédure de récupération après panne.
+5. Ensuite seulement, reprendre les améliorations d’interface ou la gestion avancée des séries.
+
+---
+
 ## 1. Vision générale
 
 Backstage est une application personnelle de gestion de films et de séries permettant actuellement de :
@@ -1181,25 +1236,16 @@ La première version réellement utile ne doit pas chercher à tout faire.
 
 ---
 
-# 20. Informations à compléter lors du prochain audit
+# 20. Informations d’exploitation à conserver
 
-Lors de la prochaine étape, compléter cette note avec :
+- Framework : FastAPI avec interface React/Vite.
+- Base : SQLite persistante dans `/data/backstage.db`.
+- Santé applicative : `/health` ; santé de la dernière sauvegarde : `/health/backup`.
+- Données persistantes : monter `/srv/data/backstage` sur `/data`.
+- Services externes : Jellyfin, Seerr, Radarr, Sonarr et Gotify ; les URL et clés sont fournies par l’environnement du conteneur.
+- Supervision : Uptime Kuma contrôle l’endpoint `/health/backup` toutes les 5 minutes ; Gotify reçoit les alertes Uptime Kuma.
+- Vérifications disponibles dans l’interface administrateur : sauvegarde manuelle et vérification de la dernière sauvegarde.
+- Le disque dur de sauvegarde n’est pas encore installé : ne pas considérer le SSD comme stratégie de sauvegarde définitive.
+- Les fichiers `.env`, clés API, mots de passe SMTP/Gmail et identifiants ne doivent jamais être commités.
 
-- technologies exactes utilisées par Backstage ;
-- arborescence actuelle du dépôt ;
-- base de données actuelle ;
-- système d’authentification actuel ;
-- état de l’intégration Jellyfin ;
-- fonctionnalités déjà terminées ;
-- fonctionnalités partiellement terminées ;
-- fonctionnalités perdues ou non branchées ;
-- dette technique connue ;
-- ports utilisés ;
-- volumes Docker nécessaires ;
-- variables d’environnement ;
-- méthode actuelle de lancement ;
-- tests existants ;
-- captures de l’interface ;
-- feuille de route historique du projet.
-
-Ces informations permettront de transformer ce document de vision en plan d’implémentation précis, adapté au code déjà présent, sans recréer inutilement des fonctionnalités existantes.
+Avant toute nouvelle phase, relire la section « État de référence » ci-dessus et vérifier l’état Git, la branche suivie par Portainer et le volume `/data`.
