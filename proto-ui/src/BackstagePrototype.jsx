@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Hls from 'hls.js';
 import AccountPanel from './AccountPanel';
 import { useAuth } from './auth-context';
-import { fetchMedias, updateMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchMediaServerActivity, syncMediaServer, importMediaServerLibrary, syncPlayback, fetchPlaybackSummary } from './api';
+import { fetchMedias, updateMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchMediaServerActivity, syncMediaServer, importMediaServerLibrary, syncPlayback } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
 
@@ -88,9 +88,6 @@ export default function BackstagePrototype() {
     const hlsRef = useRef(null);
     const [isDarkMode, setIsDarkMode] = useState(false); // Theme toggle state
     const [showAccountPanel, setShowAccountPanel] = useState(false);
-    const [playbackSummary, setPlaybackSummary] = useState(null);
-    const [playbackError, setPlaybackError] = useState(null);
-    const [playbackLoading, setPlaybackLoading] = useState(false);
 
     // TMDB Relink Modal State
     const [showRelinkModal, setShowRelinkModal] = useState(false);
@@ -230,26 +227,12 @@ export default function BackstagePrototype() {
         }).catch(() => {});
     }, []);
 
-    const refreshPlayback = useCallback(async () => {
-        if (!user?.id) return;
-        setPlaybackLoading(true);
-        setPlaybackError(null);
-        try {
-            await syncPlayback();
-            setPlaybackSummary(await fetchPlaybackSummary());
-        } catch (error) {
-            console.error('Erreur synchronisation progression Jellyfin:', error);
-            setPlaybackError(error.message || 'Progression indisponible');
-        } finally {
-            setPlaybackLoading(false);
-        }
-    }, [user?.id]);
-
     useEffect(() => {
-        setPlaybackSummary(null);
-        setPlaybackError(null);
-        if (user?.id) refreshPlayback();
-    }, [user?.id, user?.jellyfin_user_id, refreshPlayback]);
+        if (!user?.id) return;
+        syncPlayback().catch((error) => {
+            console.error('Erreur synchronisation progression Jellyfin:', error);
+        });
+    }, [user?.id, user?.jellyfin_user_id]);
 
     const [toastNotification, setToastNotification] = useState(null);
 
@@ -859,19 +842,6 @@ export default function BackstagePrototype() {
         toggleEpisode(episode);
     };
 
-    const openPlaybackMedia = (item) => {
-        const media = movies.find((candidate) => candidate.id === item.media_id);
-        if (!media) return;
-        if (media.type === 'Série') openSeries(media);
-        else setSelectedMovie(media);
-    };
-
-    const resumeItems = playbackSummary?.resume || [];
-    const nextEpisodeItems = playbackSummary?.next_episodes || [];
-    const completedItems = playbackSummary?.recently_completed || [];
-    const hasPlayback = resumeItems.length > 0 || nextEpisodeItems.length > 0 || completedItems.length > 0;
-
-
     return (
         <div className={`min-h-screen font-sans antialiased selection:bg-[#635bff] selection:text-white flex flex-col transition-colors duration-300 ${isDarkMode ? 'bg-[#0a0a0a] text-white' : 'bg-[#f6f9fc] text-[#0a2540]'
             }`}>
@@ -1053,35 +1023,6 @@ export default function BackstagePrototype() {
 
                 {/* Main Content Area */}
                 <main key={collection} className="series-portal flex-1 min-w-0">
-                    {playbackSummary?.linked && hasPlayback && (
-                        <section className={`mb-8 rounded-2xl border p-5 ${isDarkMode ? 'border-white/10 bg-white/[0.03]' : 'border-[#e3e8ee] bg-white shadow-sm'}`}>
-                            <div className="flex items-center justify-between gap-3 mb-4">
-                                <div>
-                                    <span className="text-[10px] font-mono uppercase tracking-widest text-[#635bff] font-bold">JELLYFIN</span>
-                                    <h2 className={`text-xl font-serif font-bold ${isDarkMode ? 'text-white' : 'text-[#0a2540]'}`}>Reprendre la lecture</h2>
-                                </div>
-                                <button onClick={refreshPlayback} disabled={playbackLoading} className="rounded border px-3 py-1.5 text-xs text-[#635bff] disabled:opacity-50">
-                                    {playbackLoading ? 'Synchronisation…' : 'Actualiser'}
-                                </button>
-                            </div>
-                            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                                {resumeItems.slice(0, 6).map((item) => (
-                                    <button key={`resume-${item.jellyfin_id}`} onClick={() => openPlaybackMedia(item)} disabled={!movies.some((movie) => movie.id === item.media_id)} className={`text-left rounded-xl border p-3 transition-colors disabled:cursor-default ${isDarkMode ? 'border-white/10 hover:border-[#635bff]/60' : 'border-[#e3e8ee] hover:border-[#635bff]'}`}>
-                                        <div className="font-semibold text-sm truncate">{item.title}</div>
-                                        <div className="mt-2 h-1.5 rounded-full bg-slate-200/40 overflow-hidden"><div className="h-full rounded-full bg-[#635bff]" style={{width: `${Math.min(100, Math.max(0, item.percent || 0))}%`}} /></div>
-                                        <div className="mt-1 text-[11px] opacity-60">{Math.round(item.percent || 0)} %</div>
-                                    </button>
-                                ))}
-                            </div>
-                            {(nextEpisodeItems.length > 0 || completedItems.length > 0) && (
-                                <div className="grid gap-4 mt-5 md:grid-cols-2">
-                                    {nextEpisodeItems.length > 0 && <div><h3 className="text-xs font-bold uppercase tracking-wide mb-2 opacity-70">Prochains épisodes</h3><div className="space-y-1 text-sm">{nextEpisodeItems.slice(0, 4).map((item) => <button key={`next-${item.jellyfin_id}`} onClick={() => openPlaybackMedia(item)} className="block text-left hover:text-[#635bff]">{item.title} <span className="opacity-60">· S{item.season_number ?? '?'}E{item.episode_number ?? '?'}</span></button>)}</div></div>}
-                                    {completedItems.length > 0 && <div><h3 className="text-xs font-bold uppercase tracking-wide mb-2 opacity-70">Récemment terminés</h3><div className="space-y-1 text-sm">{completedItems.slice(0, 4).map((item) => <div key={`done-${item.jellyfin_id}`} className="truncate">{item.title}</div>)}</div></div>}
-                                </div>
-                            )}
-                        </section>
-                    )}
-                    {playbackError && <div className="mb-4 text-xs text-amber-600">Progression Jellyfin indisponible pour le moment.</div>}
                     {/* Header Section */}
                     <div className={`flex items-end justify-between mb-6 pb-4 border-b ${isDarkMode ? 'border-white/10' : 'border-[#e3e8ee]'
                         }`}>
