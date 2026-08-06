@@ -35,3 +35,15 @@ def test_user_media_state_tracks_watchlist_time(tmp_path):
 
     assert state.added_to_watchlist_at is not None
     assert state.last_interacted_at is not None
+
+
+def test_user_media_state_persists_watchlist_independently_from_status(tmp_path):
+    store = make_store(tmp_path)
+    asyncio.run(store.create({"id": "film", "title": "Film", "type": "Film"}))
+
+    state = asyncio.run(store.upsert_user_media_state(
+        "hugo", "film", {"status": "À regarder", "is_watchlist": True},
+    ))
+
+    assert state.status == "À regarder"
+    assert state.is_watchlist is True

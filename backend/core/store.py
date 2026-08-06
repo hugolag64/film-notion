@@ -172,6 +172,7 @@ class MediaStore:
                     rating TEXT,
                     review TEXT,
                     is_favorite INTEGER NOT NULL DEFAULT 0,
+                    is_watchlist INTEGER NOT NULL DEFAULT 0,
                     added_to_watchlist_at TEXT,
                     first_started_at TEXT,
                     last_interacted_at TEXT NOT NULL,
@@ -180,6 +181,13 @@ class MediaStore:
                 )
                 """
             )
+            user_media_state_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(user_media_state)").fetchall()
+            }
+            if "is_watchlist" not in user_media_state_columns:
+                conn.execute(
+                    "ALTER TABLE user_media_state ADD COLUMN is_watchlist INTEGER NOT NULL DEFAULT 0"
+                )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_user_media_state_user_status "
                 "ON user_media_state(backstage_user_id, status)"
@@ -310,6 +318,7 @@ class MediaStore:
             if data.get(field):
                 data[field] = datetime.fromisoformat(data[field])
         data["is_favorite"] = bool(data.get("is_favorite", 0))
+        data["is_watchlist"] = bool(data.get("is_watchlist", 0))
         return UserMediaState(**data)
 
     @staticmethod
@@ -415,7 +424,7 @@ class MediaStore:
         self, user_id: str, media_id: str, fields: Dict[str, Any],
     ) -> UserMediaState:
         allowed = {
-            "status", "rating", "review", "is_favorite",
+            "status", "rating", "review", "is_favorite", "is_watchlist",
             "added_to_watchlist_at", "first_started_at",
         }
         updates = {key: value for key, value in fields.items() if key in allowed}
@@ -427,6 +436,8 @@ class MediaStore:
             if key in {"added_to_watchlist_at", "first_started_at"} and value is not None:
                 encoded[key] = value.isoformat() if isinstance(value, datetime) else value
             elif key == "is_favorite":
+                encoded[key] = int(bool(value))
+            elif key == "is_watchlist":
                 encoded[key] = int(bool(value))
             else:
                 encoded[key] = value

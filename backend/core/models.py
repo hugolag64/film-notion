@@ -9,6 +9,7 @@ class Media(BaseModel):
     original_title: Optional[str] = None
     type: Optional[str] = None  # Film, Série, etc.
     status: Optional[str] = None  # Terminé, À voir, etc.
+    is_watchlist: bool = False  # projection personnalisée de l'utilisateur courant
     support: Optional[str] = None  # NAS, Netflix, etc.
     rating: Optional[str] = None
 
@@ -76,6 +77,7 @@ class UserMediaState(BaseModel):
     rating: Optional[str] = None
     review: Optional[str] = None
     is_favorite: bool = False
+    is_watchlist: bool = False
     added_to_watchlist_at: Optional[datetime] = None
     first_started_at: Optional[datetime] = None
     last_interacted_at: datetime

@@ -42,11 +42,27 @@ def test_personal_rating_marks_media_as_watched(tmp_path):
     current = AuthContext(user={"id": "hugo", "role": "user"}, session_id="session", token="token")
 
     result = asyncio.run(update_personal_media(
-        "dune", UpdatePersonalMediaRequest(rating="4"), current, store,
+        "dune", UpdatePersonalMediaRequest(rating="4", is_watchlist=True), current, store,
     ))
 
     assert result.rating == "4"
     assert result.status == "Terminé"
+    assert result.is_watchlist is False
+
+
+def test_personal_watchlist_is_returned_without_marking_media_watched(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film"}))
+    current = AuthContext(user={"id": "hugo", "role": "user"}, session_id="session", token="token")
+
+    result = asyncio.run(update_personal_media(
+        "dune", UpdatePersonalMediaRequest(is_watchlist=True), current, store,
+    ))
+
+    assert result.status is None
+    assert result.rating is None
+    assert result.is_watchlist is True
 from urllib.parse import parse_qs, urlsplit
 
 import backend.api as api

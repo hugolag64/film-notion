@@ -95,6 +95,7 @@ class UpdatePersonalMediaRequest(BaseModel):
     review: Optional[str] = None
     status: Optional[str] = None
     is_favorite: Optional[bool] = None
+    is_watchlist: Optional[bool] = None
 
 
 class RecommendationEventRequest(BaseModel):
@@ -230,7 +231,7 @@ async def _media_for_user(media: Media, current: AuthContext, store: MediaStore)
     state = await store.get_user_media_state(current.user["id"], media.id)
     if state is None and current.user["role"] == "admin":
         if media.rating and str(media.rating).strip():
-            return media.model_copy(update={"status": "Terminé"})
+            return media.model_copy(update={"status": "Terminé", "is_watchlist": False})
         return media
     tags = [tag for tag in media.tags if tag != "Favoris"]
     if state and state.is_favorite:
@@ -238,11 +239,13 @@ async def _media_for_user(media: Media, current: AuthContext, store: MediaStore)
     status = state.status if state else None
     if state and state.rating and str(state.rating).strip():
         status = "Terminé"
+    is_watchlist = bool(state and state.is_watchlist)
     updates = {
         "status": status,
         "rating": state.rating if state else None,
         "review": state.review if state else None,
         "tags": tags,
+        "is_watchlist": is_watchlist,
     }
     return media.model_copy(update=updates)
 
@@ -285,6 +288,7 @@ async def update_personal_media(
         fields["status"] = "À regarder"
     if fields.get("rating") is not None and str(fields["rating"]).strip():
         fields["status"] = "Terminé"
+        fields["is_watchlist"] = False
     elif fields.get("status") == "À regarder":
         fields["rating"] = None
     await store.upsert_user_media_state(current.user["id"], media_id, fields)
