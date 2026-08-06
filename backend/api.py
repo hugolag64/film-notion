@@ -18,6 +18,12 @@ from backend.core.media_server import MediaServerService
 from urllib.parse import quote, parse_qsl, urlencode, urlsplit
 
 router = APIRouter(prefix="/api", tags=["medias"])
+health_router = APIRouter(tags=["health"])
+
+
+@health_router.get("/health")
+async def health_check():
+    return {"status": "ok"}
 
 
 def _rewrite_hls_manifest(manifest: str, media_id: str) -> str:

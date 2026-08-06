@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from backend.config import Config
 from backend.core import http, scheduler
 from backend.core.store import MediaStore
-from backend.api import router as api_router
+from backend.api import health_router, router as api_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,7 +26,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Inclure les routes de l'API REST
+# Inclure les routes de santé et de l'API REST
+app.include_router(health_router)
 app.include_router(api_router)
 
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "Logo.png")

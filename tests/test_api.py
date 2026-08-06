@@ -1,6 +1,6 @@
 import asyncio
 
-from backend.api import UpdateMediaRequest, update_media
+from backend.api import UpdateMediaRequest, health_router, update_media
 from backend.core.models import Media
 
 
@@ -54,3 +54,9 @@ def test_hls_playback_routes_are_registered():
 
     assert "/api/medias/{media_id}/playback/manifest" in paths
     assert "/api/medias/{media_id}/playback/resource/{resource_path:path}" in paths
+
+
+def test_health_route_is_registered_without_media_dependencies():
+    routes = {route.path for route in health_router.routes}
+
+    assert "/health" in routes
