@@ -99,8 +99,8 @@ def test_add_film_uses_seerr_when_configured(tmp_path):
     assert availability.provider == "radarr"
     assert availability.arr_id is None
     assert seerr.calls == [{
-        "tmdb_id": 438631, "media_type": "Film", "quality_profile_id": 5,
-        "root_folder": "D:/Media/Films", "language_profile_id": None, "monitor": "all",
+        "tmdb_id": 438631, "media_type": "Film", "quality_profile_id": None,
+        "root_folder": None, "language_profile_id": None, "monitor": "all",
     }]
 
 

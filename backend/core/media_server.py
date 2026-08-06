@@ -48,8 +48,8 @@ class MediaServerService:
         if self.seerr:
             remote = await self.seerr.request_media(
                 tmdb_id=media.tmdb_id, media_type=media.type,
-                quality_profile_id=quality_profile_id, root_folder=root_folder,
-                language_profile_id=language_profile_id, monitor=monitor,
+                quality_profile_id=None, root_folder=None,
+                language_profile_id=None, monitor=monitor,
             )
         elif media.type == "Série":
             if not self.sonarr or quality_profile_id is None or not root_folder or language_profile_id is None:
