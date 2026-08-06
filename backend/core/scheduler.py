@@ -20,7 +20,10 @@ async def _media_loop():
                 MediaStore(Config.DB_PATH),
                 radarr=RadarrClient(Config.RADARR_URL, Config.RADARR_API_KEY) if Config.radarr_enabled() else None,
                 sonarr=SonarrClient(Config.SONARR_URL, Config.SONARR_API_KEY) if Config.sonarr_enabled() else None,
-                jellyfin=JellyfinClient(Config.JELLYFIN_URL, Config.JELLYFIN_API_KEY) if Config.jellyfin_enabled() else None,
+                jellyfin=JellyfinClient(
+                    Config.JELLYFIN_URL, Config.JELLYFIN_API_KEY,
+                    server_id=Config.JELLYFIN_SERVER_ID,
+                ) if Config.jellyfin_enabled() else None,
             )
             await service.sync_all()
         except Exception:

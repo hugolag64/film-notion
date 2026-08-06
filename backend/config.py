@@ -14,6 +14,7 @@ class Config:
     SONARR_API_KEY = os.getenv("SONARR_API_KEY")
     JELLYFIN_URL = os.getenv("JELLYFIN_URL", "http://127.0.0.1:8096")
     JELLYFIN_API_KEY = os.getenv("JELLYFIN_API_KEY")
+    JELLYFIN_SERVER_ID = os.getenv("JELLYFIN_SERVER_ID")
     MEDIA_SYNC_INTERVAL_SEC = int(os.getenv("MEDIA_SYNC_INTERVAL_SEC", "60") or "60")
     SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
     SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))

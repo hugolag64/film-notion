@@ -91,6 +91,7 @@ export default function BackstagePrototype() {
 
     // TMDB Relink Modal State
     const [showRelinkModal, setShowRelinkModal] = useState(false);
+    const [showNotesModal, setShowNotesModal] = useState(false);
     const [tmdbSearchQuery, setTmdbSearchQuery] = useState('');
     const [tmdbResults, setTmdbResults] = useState([]);
     const [tmdbLoading, setTmdbLoading] = useState(false);
@@ -226,6 +227,15 @@ export default function BackstagePrototype() {
         }).catch(() => {});
     }, []);
 
+    const [toastNotification, setToastNotification] = useState(null);
+
+    const showToast = (message, type = 'success') => {
+        setToastNotification({ message, type });
+        setTimeout(() => {
+            setToastNotification((prev) => (prev?.message === message ? null : prev));
+        }, 4000);
+    };
+
     const openAcquisition = async () => {
         try {
             setMediaServerError(null);
@@ -237,7 +247,11 @@ export default function BackstagePrototype() {
                 root_folder: options.root_folders?.[0]?.path || '', monitor: 'all',
             });
             setShowAcquisitionModal(true);
-        } catch (error) { setMediaServerError(error.message); }
+        } catch (error) {
+            const errorMsg = error.message || 'Impossible d\'ouvrir le formulaire d\'ajout au serveur.';
+            setMediaServerError(errorMsg);
+            showToast(`Erreur serveur : ${errorMsg}`, 'error');
+        }
     };
 
     const submitAcquisition = async () => {
@@ -249,7 +263,16 @@ export default function BackstagePrototype() {
             });
             setMediaAvailability({ availability: result.availability, playback_url: null });
             setShowAcquisitionModal(false);
-        } catch (error) { setMediaServerError(error.message); }
+            showToast(`"${selectedMedia?.title}" a bien été ajouté au serveur !`, 'success');
+            fetchMediaServerActivity().then((activity) => {
+                const items = activity.items || [];
+                setAvailabilityByMedia(Object.fromEntries(items.map(item => [item.media_id, item])));
+            }).catch(() => {});
+        } catch (error) {
+            const errorMsg = error.message || 'Erreur lors de l\'ajout au serveur.';
+            setMediaServerError(errorMsg);
+            showToast(`Échec de l'ajout au serveur : ${errorMsg}`, 'error');
+        }
     };
 
     const openMediaActivity = async () => {
@@ -808,6 +831,26 @@ export default function BackstagePrototype() {
     return (
         <div className={`min-h-screen font-sans antialiased selection:bg-[#635bff] selection:text-white flex flex-col transition-colors duration-300 ${isDarkMode ? 'bg-[#0a0a0a] text-white' : 'bg-[#f6f9fc] text-[#0a2540]'
             }`}>
+            {/* Toast Floating Notification Banner */}
+            {toastNotification && (
+                <div className={`fixed top-5 right-5 z-[100] max-w-md px-4 py-3 rounded-xl shadow-2xl border backdrop-blur-md flex items-center justify-between gap-3 animate-slide-left-smooth ${
+                    toastNotification.type === 'error'
+                        ? 'bg-rose-950/90 border-rose-500/50 text-rose-100'
+                        : 'bg-emerald-950/90 border-emerald-500/50 text-emerald-100'
+                }`}>
+                    <div className="flex items-center gap-2.5 text-xs font-semibold">
+                        <span className="text-base">{toastNotification.type === 'error' ? '❌' : '✅'}</span>
+                        <span>{toastNotification.message}</span>
+                    </div>
+                    <button
+                        onClick={() => setToastNotification(null)}
+                        className="text-white/60 hover:text-white text-xs p-1"
+                    >
+                        ✕
+                    </button>
+                </div>
+            )}
+
             {/* Top Header */}
             <header className={`border-b sticky top-0 z-40 backdrop-blur-xl transition-colors duration-300 ${isDarkMode ? 'border-white/10 bg-black/90' : 'border-[#e3e8ee] bg-white/90 shadow-sm'
                 }`}>
@@ -1589,22 +1632,37 @@ export default function BackstagePrototype() {
                                 </div>
                             </div>
 
-                            {/* User Notes Box */}
+                            {/* User Notes Box avec auto-resize et option Plein Écran */}
                             <div className={`p-4 rounded-xl border shadow-sm transition-colors duration-300 ${isDarkMode ? 'bg-[#0a0a0a] border-white/10' : 'bg-white border-[#e3e8ee]'
                                 }`}>
-                                <h3 className={`text-[10px] font-mono uppercase tracking-wider mb-2 font-bold ${isDarkMode ? 'text-white/50' : 'text-[#425466]'
-                                    }`}>
-                                    VOS NOTES PERSONNELLES
-                                </h3>
+                                <div className="flex items-center justify-between mb-2">
+                                    <h3 className={`text-[10px] font-mono uppercase tracking-wider font-bold ${isDarkMode ? 'text-white/50' : 'text-[#425466]'
+                                        }`}>
+                                        VOS NOTES PERSONNELLES
+                                    </h3>
+                                    <button
+                                        onClick={() => setShowNotesModal(true)}
+                                        className="text-[11px] font-mono text-[#635bff] hover:underline flex items-center gap-1 font-semibold cursor-pointer"
+                                        title="Agrandir en mode lecture / écriture plein écran"
+                                    >
+                                        <span>⤢ Plein écran</span>
+                                    </button>
+                                </div>
                                 <textarea
                                     rows={3}
                                     value={selectedMovie.userNotes}
                                     onChange={(e) => {
                                         const notes = e.target.value;
                                         handleNotesChange(selectedMovie.id, notes);
+                                        e.target.style.height = 'auto';
+                                        e.target.style.height = `${e.target.scrollHeight}px`;
+                                    }}
+                                    onFocus={(e) => {
+                                        e.target.style.height = 'auto';
+                                        e.target.style.height = `${e.target.scrollHeight}px`;
                                     }}
                                     placeholder="Ajoutez vos impressions..."
-                                    className={`w-full text-xs p-3 rounded-lg border focus:border-[#635bff] focus:ring-1 focus:ring-[#635bff] outline-none transition-all font-sans ${isDarkMode
+                                    className={`w-full text-xs p-3 rounded-lg border focus:border-[#635bff] focus:ring-1 focus:ring-[#635bff] outline-none transition-all font-sans resize-y min-h-[90px] ${isDarkMode
                                         ? 'border-white/15 bg-black text-white placeholder-white/30'
                                         : 'border-[#e3e8ee] bg-[#f6f9fc] text-[#0a2540] placeholder-[#425466]/40'
                                         }`}
@@ -1799,6 +1857,51 @@ export default function BackstagePrototype() {
                                     </div>
                                 ))
                             )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Fullscreen Notes Modal */}
+            {showNotesModal && selectedMovie && (
+                <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-fade-in">
+                    <div className={`w-full max-w-3xl h-[80vh] rounded-2xl border shadow-2xl overflow-hidden flex flex-col ${isDarkMode ? 'bg-[#0a0a0a] border-white/20 text-white' : 'bg-white border-[#e3e8ee] text-[#0a2540]'}`}>
+                        <div className="p-4 border-b border-white/10 flex items-center justify-between bg-black/30">
+                            <div>
+                                <h3 className="text-base font-bold font-serif flex items-center gap-2">
+                                    <span>📝 Notes Personnelles — {selectedMovie.title}</span>
+                                </h3>
+                                <p className="text-xs opacity-60 font-mono mt-0.5">Édition / Lecture confort en plein écran</p>
+                            </div>
+                            <button
+                                onClick={() => setShowNotesModal(false)}
+                                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-sm cursor-pointer"
+                            >
+                                ✕
+                            </button>
+                        </div>
+                        <div className="p-6 flex-1 flex flex-col">
+                            <textarea
+                                value={selectedMovie.userNotes}
+                                onChange={(e) => {
+                                    const notes = e.target.value;
+                                    handleNotesChange(selectedMovie.id, notes);
+                                }}
+                                placeholder="Écrivez vos notes longues, analyses et impressions ici..."
+                                className={`w-full flex-1 p-4 rounded-xl border text-sm font-sans leading-relaxed outline-none focus:border-[#635bff] focus:ring-1 focus:ring-[#635bff] resize-none ${isDarkMode
+                                    ? 'bg-black/50 border-white/15 text-white placeholder-white/30'
+                                    : 'bg-[#f6f9fc] border-[#e3e8ee] text-[#0a2540] placeholder-[#425466]/40'
+                                }`}
+                            />
+                        </div>
+                        <div className="p-4 border-t border-white/10 flex justify-between items-center bg-black/10">
+                            <span className="text-xs font-mono opacity-50">Sauvegarde automatique</span>
+                            <button
+                                onClick={() => setShowNotesModal(false)}
+                                className="bg-[#635bff] hover:bg-[#5048e5] text-white text-xs font-semibold px-5 py-2.5 rounded-xl cursor-pointer"
+                            >
+                                Terminer
+                            </button>
                         </div>
                     </div>
                 </div>
