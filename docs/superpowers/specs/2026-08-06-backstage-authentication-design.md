@@ -39,7 +39,7 @@ The setup screen must not be reachable after the first administrator has been cr
 
 ## Database schema
 
-`MediaStore.init_schema()` will create the following tables with `CREATE TABLE IF NOT EXISTS`; this is an additive migration and will not rewrite existing media rows.
+`AuthStore.init_schema()` will create the following tables with `CREATE TABLE IF NOT EXISTS`; `main.py` will call it alongside `MediaStore.init_schema()`. This is an additive migration and will not rewrite existing media rows.
 
 ```sql
 CREATE TABLE IF NOT EXISTS users (
@@ -87,6 +87,10 @@ The imported `backstage.db` remains valid because these tables are added only wh
 
 The initial device-management endpoint lists the current user’s sessions using safe metadata only: creation date, last activity, approximate device/user-agent label, expiration date, and whether the session is current. It supports revoking a selected session and revoking all other sessions.
 
+## User administration
+
+After setup, an administrator can create regular users from the Backstage account area. The first implementation accepts display name, email, and an initial password, and always creates the account with the `user` role. An administrator can rename, deactivate, reactivate, or promote/demote an account, but the last active administrator cannot be deactivated or demoted. Deactivating a user revokes all of that user’s sessions.
+
 ## API surface
 
 The authentication router will be included under the existing `/api` prefix:
@@ -99,6 +103,9 @@ The authentication router will be included under the existing `/api` prefix:
 - `GET /api/auth/devices` — returns the current user’s active sessions or `401`.
 - `DELETE /api/auth/devices/{session_id}` — revokes one session owned by the current user.
 - `POST /api/auth/devices/revoke-others` — revokes all current-user sessions except the current one.
+- `GET /api/auth/users` — returns the user list for administrators.
+- `POST /api/auth/users` — creates a regular user for administrators.
+- `PATCH /api/auth/users/{user_id}` — updates display name, role, or active state for administrators.
 
 Authentication dependencies will provide `get_current_user` and `require_admin`. Existing media and maintenance routes will be protected by `get_current_user` in this phase. Administrative-only routes will use `require_admin`; initially this applies to media-server import, synchronization, and acquisition actions that can modify external services. Read-only catalog and playback routes remain available to authenticated users.
 
@@ -115,6 +122,8 @@ The React app will perform the following bootstrap sequence:
 The login form includes the “Se souvenir de cet appareil” checkbox. A `401` from any API request will clear the in-memory user state and return the user to login. The existing media API functions will use `credentials: 'same-origin'` so the session cookie is sent on every request.
 
 The first implementation will use a minimal auth screen matching the current application style. Device management will be reachable from a small account/admin menu after login; it will not introduce a separate design system.
+
+The admin account area will include a compact user list with create, edit, activate/deactivate, and role controls. It will prevent the last active administrator from being removed or demoted and will show the resulting API error in the interface.
 
 ## Security and error handling
 
