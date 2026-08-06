@@ -63,5 +63,6 @@ class Notification(BaseModel):
     backstage_user_id: str
     kind: str
     message: str
+    dedupe_key: Optional[str] = None
     read_at: Optional[datetime] = None
     created_at: datetime

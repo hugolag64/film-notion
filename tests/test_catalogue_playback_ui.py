@@ -70,3 +70,10 @@ def test_admin_dashboard_controls_are_visible():
     assert "Expirations proches" in account
     assert "Téléchargements en cours" in account
     assert "fetchAdminDashboard" in api
+
+
+def test_notification_center_supports_automatic_events():
+    account = ACCOUNT_SOURCE.read_text(encoding="utf-8")
+
+    assert "Notifications" in account
+    assert "notification.message" in account

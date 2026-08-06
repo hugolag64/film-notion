@@ -282,3 +282,21 @@ def test_admin_rentals_include_media_titles(tmp_path):
 
     assert rentals[0]["media_title"] == "Dune"
     assert rentals[0]["rental"].id == "admin-rental"
+
+
+def test_notifications_with_same_dedupe_key_are_created_once(tmp_path):
+    store = _store(tmp_path)
+    now = datetime.now(timezone.utc)
+    first = Notification(
+        id="notification-1", backstage_user_id="hugo", kind="rental_expiring",
+        message="Dune expire bientôt", dedupe_key="rental_expiring:rental-1:2026-08-08",
+        created_at=now,
+    )
+    second = first.model_copy(update={"id": "notification-2", "created_at": now + timedelta(minutes=1)})
+
+    asyncio.run(store.create_notification(first))
+    asyncio.run(store.create_notification(second))
+
+    notifications = asyncio.run(store.list_notifications("hugo"))
+    assert len(notifications) == 1
+    assert notifications[0].id == "notification-1"

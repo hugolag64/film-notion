@@ -1,6 +1,8 @@
 """Optional periodic refresh for the local media-server integration."""
 import asyncio
 import logging
+import uuid
+from datetime import datetime, timedelta, timezone
 
 from backend.config import Config
 from backend.core.arr import RadarrClient, SonarrClient
@@ -8,6 +10,7 @@ from backend.core.jellyfin import JellyfinClient
 from backend.core.media_server import MediaServerService
 from backend.core.store import MediaStore
 from backend.core.auth import AuthStore
+from backend.core.models import Notification
 
 logger = logging.getLogger(__name__)
 _media_task: asyncio.Task | None = None
@@ -28,7 +31,8 @@ async def _media_loop():
             )
             if Config.media_server_enabled():
                 await service.sync_all()
-            if jellyfin:
+            await notify_automatic_events(service, service.store, AuthStore(Config.DB_PATH))
+            if service.jellyfin:
                 for user in AuthStore(Config.DB_PATH).list_users():
                     if not user["is_active"] or not user.get("jellyfin_user_id"):
                         continue
@@ -38,6 +42,51 @@ async def _media_loop():
                         logger.exception("[playback-sync] Erreur pour %s", user["id"])
         except Exception:
             logger.exception("[media-sync] Erreur de synchronisation")
+
+
+async def notify_automatic_events(service, store, auth_store, *, now: datetime | None = None):
+    """Create deduplicated internal notifications from the current server state."""
+    now = now or datetime.now(timezone.utc)
+    users = auth_store.list_users()
+    names = {user["id"]: user["display_name"] for user in users}
+    for item in await store.list_admin_rentals():
+        rental = item["rental"]
+        if rental.status not in {"available", "keep_requested"}:
+            continue
+        if rental.expires_at and rental.expires_at <= now + timedelta(days=2):
+            expiry_day = rental.expires_at.date().isoformat()
+            await store.create_notification(Notification(
+                id=str(uuid.uuid4()), backstage_user_id=rental.backstage_user_id,
+                kind="rental_expiring",
+                message=f"La location de {item['media_title']} expire le {rental.expires_at.astimezone().strftime('%d/%m/%Y')}.",
+                dedupe_key=f"rental_expiring:{rental.id}:{expiry_day}", created_at=now,
+            ))
+
+    for availability in await store.list_availabilities():
+        if availability.state != "available":
+            continue
+        for item in await store.list_admin_rentals():
+            rental = item["rental"]
+            if rental.media_id != availability.media_id or rental.status not in {"available", "keep_requested"}:
+                continue
+            sync_day = (availability.last_synced_at or now).date().isoformat()
+            await store.create_notification(Notification(
+                id=str(uuid.uuid4()), backstage_user_id=rental.backstage_user_id,
+                kind="media_available", message=f"{item['media_title']} est disponible sur Jellyfin.",
+                dedupe_key=f"media_available:{rental.id}:{sync_day}", created_at=now,
+            ))
+
+    storage = await service.storage_status()
+    if storage.get("low_space") or storage.get("temporary_quota_reached"):
+        reason = "espace disque faible" if storage.get("low_space") else "quota temporaire atteint"
+        for user in users:
+            if user["role"] != "admin":
+                continue
+            await store.create_notification(Notification(
+                id=str(uuid.uuid4()), backstage_user_id=user["id"], kind="storage_alert",
+                message=f"Alerte stockage : {reason}.",
+                dedupe_key=f"storage_alert:{now.date().isoformat()}:{reason}", created_at=now,
+            ))
 
 
 def start_media_server_sync():

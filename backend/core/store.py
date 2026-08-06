@@ -127,6 +127,7 @@ class MediaStore:
                     backstage_user_id TEXT NOT NULL,
                     kind TEXT NOT NULL,
                     message TEXT NOT NULL,
+                    dedupe_key TEXT,
                     read_at TEXT,
                     created_at TEXT NOT NULL
                 )
@@ -135,6 +136,13 @@ class MediaStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_notifications_user_created "
                 "ON notifications(backstage_user_id, created_at DESC)"
+            )
+            notification_columns = {row[1] for row in conn.execute("PRAGMA table_info(notifications)").fetchall()}
+            if "dedupe_key" not in notification_columns:
+                conn.execute("ALTER TABLE notifications ADD COLUMN dedupe_key TEXT")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_dedupe "
+                "ON notifications(dedupe_key) WHERE dedupe_key IS NOT NULL"
             )
             active_states = ", ".join(f"'{state}'" for state in _ACTIVE_RENTAL_STATES)
             conn.execute(
@@ -629,12 +637,15 @@ class MediaStore:
         columns = list(values)
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
-                f"INSERT INTO notifications ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+                f"INSERT OR IGNORE INTO notifications ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
                 [values[column] for column in columns],
             )
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
-            row = conn.execute("SELECT * FROM notifications WHERE id = ?", (notification.id,)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM notifications WHERE id = ? OR (? IS NOT NULL AND dedupe_key = ?)",
+                (notification.id, notification.dedupe_key, notification.dedupe_key),
+            ).fetchone()
         return self._row_to_notification(row)
 
     def _list_notifications_sync(self, user_id: str) -> List[Notification]:

@@ -5,7 +5,9 @@ from datetime import datetime, timedelta, timezone
 
 from backend.core.media_server import Availability, MediaServerService
 from backend.core.models import Rental
+from backend.core.models import Notification
 from backend.core.store import MediaStore
+from backend.core.scheduler import notify_automatic_events
 
 
 class FakeRadarr:
@@ -218,6 +220,41 @@ def test_storage_status_uses_data_disk_and_active_temporary_bytes(tmp_path):
     assert status["min_free_bytes"] == 40 * 1024**3
     assert status["temporary_bytes"] == 2 * 1024**3
     assert status["low_space"] is False
+
+
+def test_automatic_notifications_cover_expiration_availability_and_storage(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    media = asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film"}))
+    now = datetime.now(timezone.utc)
+    asyncio.run(store.create_rental(Rental(
+        id="rental", media_id=media.id, backstage_user_id="user-id", status="available",
+        requested_at=now, expires_at=now + timedelta(days=1), created_at=now, updated_at=now,
+    )))
+    asyncio.run(store.upsert_availability(Availability(
+        media_id=media.id, provider="radarr", state="available", last_synced_at=now,
+    )))
+
+    class NotificationService:
+        async def storage_status(self):
+            return {"low_space": True, "temporary_quota_reached": False}
+
+        async def activity(self):
+            return {"items": [], "disks": []}
+
+    auth_store = type("AuthStoreStub", (), {"list_users": lambda self: [
+        {"id": "user-id", "display_name": "Paul", "role": "user"},
+        {"id": "admin-id", "display_name": "Hugo", "role": "admin"},
+    ]})()
+    service = NotificationService()
+
+    asyncio.run(notify_automatic_events(service, store, auth_store, now=now))
+    asyncio.run(notify_automatic_events(service, store, auth_store, now=now))
+
+    user_notifications = asyncio.run(store.list_notifications("user-id"))
+    admin_notifications = asyncio.run(store.list_notifications("admin-id"))
+    assert {item.kind for item in user_notifications} == {"rental_expiring", "media_available"}
+    assert [item.kind for item in admin_notifications] == ["storage_alert"]
 
 
 def test_playback_manifest_returns_available_jellyfin_item(tmp_path):
