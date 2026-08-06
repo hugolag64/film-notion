@@ -1,5 +1,5 @@
 """Shared models for the local media-server integration."""
-from datetime import datetime
+from datetime import datetime, timedelta
 from datetime import timezone
 from typing import Any, Literal, Optional
 
@@ -107,6 +107,11 @@ class MediaServerService:
             if availability.arr_id is not None:
                 await self.store.clear_arr_id_conflict(provider, availability.arr_id, media.id)
             saved = await self.store.upsert_availability(availability)
+            if availability.state == "available" and availability.jellyfin_id:
+                available_at = datetime.now(timezone.utc)
+                await self.store.mark_rentals_available(
+                    media.id, available_at, available_at + timedelta(days=21),
+                )
             if remote.get("hasFile") and not media.support:
                 await self.store.update(media.id, {"support": "Serveur"})
             return saved
@@ -215,6 +220,11 @@ class MediaServerService:
                 last_played_at=item.get("last_played_at"),
             )
             await self.store.upsert_playback(progress)
+            if media_id and progress.position_ticks > 0:
+                first_played_at = datetime.now(timezone.utc)
+                await self.store.mark_rental_first_played(
+                    backstage_user_id, media_id, first_played_at, first_played_at + timedelta(days=7),
+                )
             synced += 1
         return {"synced": synced}
 

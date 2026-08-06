@@ -1,4 +1,6 @@
 """FastAPI REST API for Backstage UI integration."""
+from datetime import datetime, timezone
+import uuid
 from typing import Any, Dict, List, Optional
 import httpx
 from fastapi import APIRouter, HTTPException, Depends, Request
@@ -7,7 +9,7 @@ from pydantic import BaseModel
 
 from backend.config import Config
 from backend.core.store import MediaStore
-from backend.core.models import Media
+from backend.core.models import Media, Rental
 
 from backend.core.tmdb import TMDBClient
 from backend.core.mapping import is_series
@@ -83,6 +85,13 @@ class AcquisitionRequest(BaseModel):
     root_folder: Optional[str] = None
     language_profile_id: Optional[int] = None
     monitor: str = "all"
+
+
+MAX_ACTIVE_RENTALS = 5
+
+
+def _serialize_rental(rental: Rental) -> dict[str, Any]:
+    return rental.model_dump(mode="json")
 
 
 def get_media_server_service(store: MediaStore = Depends(get_store)) -> MediaServerService:
@@ -469,6 +478,7 @@ async def get_playback_resource(
 async def request_acquisition(
     media_id: str,
     payload: AcquisitionRequest,
+    current: AuthContext = Depends(get_current_user),
     service: MediaServerService = Depends(get_media_server_service),
 ):
     media = await service.store.fetch_one(media_id)
@@ -476,18 +486,60 @@ async def request_acquisition(
         raise HTTPException(status_code=404, detail="Média non trouvé")
     if not media.tmdb_id:
         raise HTTPException(status_code=409, detail="Associez d'abord ce média à TMDB")
+    owner_id = current.user["id"]
+    existing_rental = await service.store.find_active_rental(owner_id, media_id)
+    if existing_rental:
+        return {
+            "availability": await service.store.get_availability(media_id),
+            "rental": _serialize_rental(existing_rental),
+        }
+    if await service.store.count_active_rentals(owner_id) >= MAX_ACTIVE_RENTALS:
+        raise HTTPException(status_code=409, detail="Limite de 5 locations actives atteinte")
     try:
         availability = await service.add(
             media, payload.quality_profile_id, payload.root_folder,
             payload.language_profile_id, payload.monitor,
         )
-        return {"availability": availability}
+        now = datetime.now(timezone.utc)
+        rental = await service.store.create_rental(Rental(
+            id=str(uuid.uuid4()), media_id=media_id, backstage_user_id=owner_id,
+            status=availability.state, requested_at=now, created_at=now, updated_at=now,
+        ))
+        return {"availability": availability, "rental": _serialize_rental(rental)}
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except MediaServerError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail="Service non configuré") from error
+
+
+@router.get("/rentals")
+async def list_rentals(
+    current: AuthContext = Depends(get_current_user),
+    store: MediaStore = Depends(get_store),
+):
+    rentals = await store.list_user_rentals(current.user["id"])
+    return {"rentals": [_serialize_rental(rental) for rental in rentals]}
+
+
+@router.post("/rentals/{rental_id}/keep")
+async def request_rental_keep(
+    rental_id: str,
+    current: AuthContext = Depends(get_current_user),
+    store: MediaStore = Depends(get_store),
+):
+    rental = await store.get_rental(rental_id)
+    if not rental or rental.backstage_user_id != current.user["id"]:
+        raise HTTPException(status_code=404, detail="Location non trouvée")
+    if rental.status not in {"available", "keep_requested"}:
+        raise HTTPException(status_code=409, detail="Le film n'est pas encore disponible")
+    if rental.status == "available":
+        rental = await store.update_rental(rental_id, {
+            "status": "keep_requested",
+            "keep_requested_at": datetime.now(timezone.utc),
+        })
+    return {"rental": _serialize_rental(rental)}
 
 
 @router.get("/media-server/options")

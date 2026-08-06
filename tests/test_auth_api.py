@@ -1,5 +1,6 @@
 import httpx
 import asyncio
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -12,6 +13,7 @@ from backend.auth_api import auth_router
 from backend.config import Config
 from backend.core.auth import AuthStore
 from backend.core.store import MediaStore
+from backend.core.models import Rental
 from backend.core.media_server import Availability
 from backend.core.arr import MediaServerError
 
@@ -287,6 +289,70 @@ def test_regular_user_can_submit_an_acquisition_request(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert service.calls == [("dune", 5, "/media/movies")]
+
+
+def test_acquisition_creates_owned_rental_and_keep_is_scoped(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    media = asyncio.run(MediaStore(Config.DB_PATH).create({
+        "id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631,
+    }))
+
+    class FakeAcquisitionService:
+        store = MediaStore(Config.DB_PATH)
+
+        async def add(self, *args):
+            return Availability(media_id=media.id, provider="radarr", state="available", jellyfin_id="jelly-dune")
+
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: FakeAcquisitionService()
+    response = client.post(f"/api/medias/{media.id}/acquisition", json={})
+
+    assert response.status_code == 200
+    rental = response.json()["rental"]
+    assert rental["backstage_user_id"] == client.get("/api/auth/me").json()["user"]["id"]
+    assert client.get("/api/rentals").json()["rentals"][0]["id"] == rental["id"]
+
+    kept = client.post(f"/api/rentals/{rental['id']}/keep")
+    assert kept.status_code == 200
+    assert kept.json()["rental"]["status"] == "keep_requested"
+
+    client.post("/api/auth/users", json={
+        "display_name": "Paul", "email": "paul@example.com", "password": "12345678",
+    })
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={
+        "email": "paul@example.com", "password": "12345678", "remember_device": False,
+    })
+    assert client.get("/api/rentals").json() == {"rentals": []}
+    assert client.post(f"/api/rentals/{rental['id']}/keep").status_code == 404
+
+
+def test_acquisition_rejects_sixth_active_rental(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    store = MediaStore(Config.DB_PATH)
+    user_id = client.get("/api/auth/me").json()["user"]["id"]
+    now = datetime.now(timezone.utc)
+    for index in range(5):
+        media = asyncio.run(store.create({
+            "id": f"rented-{index}", "title": f"Film {index}", "type": "Film", "tmdb_id": index + 1,
+        }))
+        asyncio.run(store.create_rental(Rental(
+            id=f"rental-{index}", media_id=media.id, backstage_user_id=user_id,
+            requested_at=now, created_at=now, updated_at=now,
+        )))
+    media = asyncio.run(store.create({"id": "sixth", "title": "Sixth", "type": "Film", "tmdb_id": 99}))
+
+    quota_store = store
+    class FailingIfCalledService:
+        store = quota_store
+
+        async def add(self, *args):
+            raise AssertionError("the media service must not be called after the quota check")
+
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: FailingIfCalledService()
+
+    assert client.post(f"/api/medias/{media.id}/acquisition", json={}).status_code == 409
 
 
 def test_media_activity_is_admin_only(tmp_path, monkeypatch):

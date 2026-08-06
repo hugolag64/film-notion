@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import Hls from 'hls.js';
 import AccountPanel from './AccountPanel';
 import { useAuth } from './auth-context';
-import { fetchMedias, updateMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchMediaServerActivity, syncMediaServer, importMediaServerLibrary, syncPlayback } from './api';
+import { fetchMedias, updateMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncMediaServer, importMediaServerLibrary, syncPlayback } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
 
@@ -97,6 +97,7 @@ export default function BackstagePrototype() {
     const [mediaActivity, setMediaActivity] = useState([]);
     const [mediaDisks, setMediaDisks] = useState([]);
     const [availabilityByMedia, setAvailabilityByMedia] = useState({});
+    const [rentalsByMedia, setRentalsByMedia] = useState({});
     const [actorQuery, setActorQuery] = useState('');
     const [actorSuggestions, setActorSuggestions] = useState([]);
     const [actorSearchLoading, setActorSearchLoading] = useState(false);
@@ -134,6 +135,11 @@ export default function BackstagePrototype() {
 
     const selectedMedia = selectedMovie || selectedSeries;
     const mediaAction = getMediaAction(selectedMedia?.type, mediaAvailability?.availability);
+    const selectedRental = selectedMedia?.id ? rentalsByMedia[selectedMedia.id] : null;
+
+    const loadRentals = () => fetchRentals().then((result) => {
+        setRentalsByMedia(Object.fromEntries((result.rentals || []).map((rental) => [rental.media_id, rental])));
+    }).catch(() => {});
 
     const closePlayer = () => {
         setPlayerMedia(null);
@@ -250,6 +256,7 @@ export default function BackstagePrototype() {
 
     useEffect(() => {
         if (!user?.id) return;
+        loadRentals();
         syncPlayback().catch((error) => {
             console.error('Erreur synchronisation progression Jellyfin:', error);
         });
@@ -298,6 +305,7 @@ export default function BackstagePrototype() {
                 language_profile_id: acquisitionForm.language_profile_id ? Number(acquisitionForm.language_profile_id) : null,
             });
             setMediaAvailability({ availability: result.availability, playback_url: null });
+            if (result.rental) setRentalsByMedia((current) => ({...current, [selectedMedia.id]: result.rental}));
             setShowAcquisitionModal(false);
             showToast(`"${selectedMedia?.title}" a bien été ajouté au serveur !`, 'success');
             fetchMediaServerActivity().then((activity) => {
@@ -308,6 +316,17 @@ export default function BackstagePrototype() {
             const errorMsg = error.message || 'Erreur lors de l\'ajout au serveur.';
             setMediaServerError(errorMsg);
             showToast(`Échec de l'ajout au serveur : ${errorMsg}`, 'error');
+        }
+    };
+
+    const keepRental = async () => {
+        if (!selectedRental?.id) return;
+        try {
+            const result = await requestRentalKeep(selectedRental.id);
+            setRentalsByMedia((current) => ({...current, [selectedMedia.id]: result.rental}));
+            showToast('Demande de conservation envoyée.', 'success');
+        } catch (error) {
+            showToast(error.message || 'Demande impossible.', 'error');
         }
     };
 
@@ -1209,6 +1228,13 @@ export default function BackstagePrototype() {
                                     >
                                         {mediaAction.label}
                                     </button>
+                                    {selectedRental && (
+                                        <div className="mt-3 rounded-lg border border-[#635bff]/30 bg-[#635bff]/5 p-3 text-xs">
+                                            <div>Location : <strong>{selectedRental.status === 'keep_requested' ? 'conservation demandée' : selectedRental.status}</strong></div>
+                                            {selectedRental.expires_at && <div className="mt-1 opacity-70">Expire le {new Date(selectedRental.expires_at).toLocaleDateString('fr-FR')}</div>}
+                                            {selectedRental.status === 'available' && <button onClick={keepRental} className="mt-2 rounded border border-[#635bff] px-2 py-1 font-semibold text-[#635bff]">Demander à conserver</button>}
+                                        </div>
+                                    )}
                                 </div>
                                 <div className={`rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
                                     <p className="text-[10px] font-mono uppercase tracking-widest opacity-60">Informations</p>
@@ -1503,6 +1529,14 @@ export default function BackstagePrototype() {
                                     <span>{mediaAction.label}</span>
                                 </button>
                             </div>
+
+                            {selectedRental && (
+                                <div className={`mt-4 rounded-xl border p-4 text-xs ${isDarkMode ? 'border-[#635bff]/30 bg-[#635bff]/10' : 'border-[#635bff]/30 bg-[#635bff]/5'}`}>
+                                    <div>Location : <strong>{selectedRental.status === 'keep_requested' ? 'conservation demandée' : selectedRental.status}</strong></div>
+                                    {selectedRental.expires_at && <div className="mt-1 opacity-70">Expire le {new Date(selectedRental.expires_at).toLocaleDateString('fr-FR')}</div>}
+                                    {selectedRental.status === 'available' && <button onClick={keepRental} className="mt-2 rounded border border-[#635bff] px-2 py-1 font-semibold text-[#635bff]">Demander à conserver</button>}
+                                </div>
+                            )}
 
                             {/* 5-Star Rating System with Half-Star Precision & Side Score */}
                             <div className={`p-4 rounded-xl border shadow-sm flex items-center justify-between transition-colors duration-300 ${isDarkMode ? 'bg-[#0a0a0a] border-white/10' : 'bg-white border-[#e3e8ee]'

@@ -25,3 +25,5 @@ def test_media_action_labels_are_user_facing_and_cover_pending_states():
     assert "Indexation Jellyfin en cours" in source
     assert "mediaAction.canPlay ? '▶' : '+'" not in source
     assert "user?.role === 'admin'" in source
+    assert "Demander à conserver" in source
+    assert "fetchRentals" in source

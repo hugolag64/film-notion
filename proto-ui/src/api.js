@@ -165,6 +165,18 @@ export async function requestAcquisition(mediaId, payload) {
     return response.json();
 }
 
+export async function fetchRentals() {
+    const response = await fetch(`${API_BASE_URL}/rentals`);
+    if (!response.ok) throw new Error((await response.json()).detail || 'Locations indisponibles');
+    return response.json();
+}
+
+export async function requestRentalKeep(rentalId) {
+    const response = await fetch(`${API_BASE_URL}/rentals/${rentalId}/keep`, {method: 'POST'});
+    if (!response.ok) throw new Error((await response.json()).detail || 'Demande de conservation impossible');
+    return response.json();
+}
+
 export async function fetchMediaServerStatus() {
     const response = await fetch(`${API_BASE_URL}/media-server/status`);
     if (!response.ok) throw new Error('État des services indisponible');

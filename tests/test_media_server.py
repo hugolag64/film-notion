@@ -1,8 +1,10 @@
 import asyncio
 
 import httpx
+from datetime import datetime, timedelta, timezone
 
 from backend.core.media_server import Availability, MediaServerService
+from backend.core.models import Rental
 from backend.core.store import MediaStore
 
 
@@ -72,6 +74,25 @@ def test_imported_arr_item_becomes_available_when_jellyfin_matches(tmp_path):
 
     assert availability.state == "available"
     assert availability.jellyfin_id == "jelly-dune"
+
+
+def test_sync_media_starts_a_rental_when_jellyfin_has_the_film(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    media = asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    now = datetime.now(timezone.utc)
+    asyncio.run(store.create_rental(Rental(
+        id="rental", media_id=media.id, backstage_user_id="hugo",
+        requested_at=now, created_at=now, updated_at=now,
+    )))
+    service = MediaServerService(store, radarr=FakeRadarr(), jellyfin=FakeJellyfin())
+
+    asyncio.run(service.sync_media(media.id))
+
+    rental = asyncio.run(store.get_rental("rental"))
+    assert rental.status == "available"
+    assert rental.available_at is not None
+    assert rental.expires_at is not None
 
 
 def test_sync_reclaims_reused_arr_id_from_stale_media_link(tmp_path):
@@ -212,6 +233,37 @@ def test_playback_sync_is_isolated_by_backstage_user(tmp_path):
     ophelie = asyncio.run(service.playback_summary("ophelie"))
     assert hugo["resume"][0].percent == 50
     assert ophelie["resume"][0].percent == 80
+
+
+def test_playback_sync_starts_the_seven_day_rental_window(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    media = asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    asyncio.run(store.upsert_availability(Availability(
+        media_id=media.id, provider="radarr", jellyfin_id="jelly-dune", state="available",
+    )))
+    now = datetime.now(timezone.utc)
+    asyncio.run(store.create_rental(Rental(
+        id="rental", media_id=media.id, backstage_user_id="hugo", status="available",
+        requested_at=now, available_at=now, expires_at=now + timedelta(days=21),
+        created_at=now, updated_at=now,
+    )))
+    asyncio.run(store.create_rental(Rental(
+        id="kept-rental", media_id=media.id, backstage_user_id="ophelie", status="keep_requested",
+        requested_at=now, available_at=now, expires_at=now + timedelta(days=21),
+        created_at=now, updated_at=now,
+    )))
+    service = MediaServerService(store, jellyfin=FakePlaybackJellyfin())
+
+    asyncio.run(service.sync_playback("hugo", "jf-hugo"))
+
+    rental = asyncio.run(store.get_rental("rental"))
+    assert rental.first_played_at is not None
+    assert rental.expires_at < now + timedelta(days=8)
+    kept = asyncio.run(store.get_rental("kept-rental"))
+    assert kept.status == "keep_requested"
+    assert kept.first_played_at is None
+    assert kept.expires_at == now + timedelta(days=21)
 
 
 def test_playback_sync_error_does_not_erase_existing_state(tmp_path):
