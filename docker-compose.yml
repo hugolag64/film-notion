@@ -16,6 +16,12 @@ services:
       JELLYFIN_API_KEY: "${JELLYFIN_API_KEY:-}"
       JELLYFIN_SERVER_ID: "${JELLYFIN_SERVER_ID:-}"
       MEDIA_SYNC_INTERVAL_SEC: "${MEDIA_SYNC_INTERVAL_SEC:-60}"
+      SMTP_HOST: "${SMTP_HOST:-smtp.gmail.com}"
+      SMTP_PORT: "${SMTP_PORT:-587}"
+      SMTP_USERNAME: "${SMTP_USERNAME:-}"
+      SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
+      SMTP_FROM: "${SMTP_FROM:-}"
+      BACKSTAGE_PUBLIC_URL: "${BACKSTAGE_PUBLIC_URL:-http://localhost:8090}"
     ports:
       - "${BACKSTAGE_PORT:-8090}:8090"
     volumes:
