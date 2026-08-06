@@ -62,7 +62,7 @@ def test_two_pass_usage_is_user_and_session_scoped(tmp_path, monkeypatch):
         enabled = True
         final_answers = []
 
-        def plan_questions(self, profile, recent_axes):
+        def plan_questions(self, profile, recent_axes, recent_plans=None):
             return GeminiQuestionPlan(
                 axes=["movie_compare", "mood", "genre", "era"],
                 usage={"input_tokens": 10, "output_tokens": 3},
@@ -98,9 +98,35 @@ def test_empty_local_pool_skips_gemini_planner(tmp_path, monkeypatch):
     class FailingGateway:
         enabled = True
 
-        def plan_questions(self, profile, recent_axes):
+        def plan_questions(self, profile, recent_axes, recent_plans=None):
             raise AssertionError("Gemini planner must not run without local candidates")
 
     monkeypatch.setattr(api, "_gemini_gateway", lambda: FailingGateway())
     response = asyncio.run(api.start_recommendation_session(current, store))
     assert response["state"] == "empty"
+
+
+def test_each_session_gets_a_different_path_even_when_gemini_repeats_plan(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    current = current_user()
+    pool = candidate_pool()
+    monkeypatch.setattr(api, "_recommendation_pool", lambda *args: asyncio.sleep(0, result=pool))
+
+    class RepeatingGateway:
+        enabled = True
+        calls = 0
+
+        def plan_questions(self, profile, recent_axes, recent_plans=None):
+            self.calls += 1
+            return GeminiQuestionPlan(
+                axes=["movie_compare", "mood", "genre", "era"],
+                usage={"input_tokens": 10, "output_tokens": 3},
+            )
+
+    gateway = RepeatingGateway()
+    monkeypatch.setattr(api, "_gemini_gateway", lambda: gateway)
+    first = asyncio.run(api.start_recommendation_session(current, store))
+    second = asyncio.run(api.start_recommendation_session(current, store))
+
+    assert gateway.calls == 2
+    assert first["question"]["axis"] != second["question"]["axis"]

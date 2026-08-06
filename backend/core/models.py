@@ -86,7 +86,7 @@ class UserMediaState(BaseModel):
 RecommendationEventType = Literal[
     "shown", "picked", "dismissed", "more_like_this", "less_like_this",
     "question_answered", "session_completed", "skipped", "not_now",
-    "hard_reject", "already_seen",
+    "hard_reject", "already_seen", "confirmed",
 ]
 
 

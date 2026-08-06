@@ -8,6 +8,7 @@ from backend.core.models import Rental
 from backend.core.models import Notification
 from backend.core.store import MediaStore
 from backend.core.scheduler import notify_automatic_events
+from backend.config import Config
 
 
 class FakeRadarr:
@@ -29,6 +30,17 @@ class FakeDiskRadarr(FakeRadarr):
             {"path": "/", "freeSpace": 300 * 1024**3},
             {"path": "/data", "freeSpace": 40 * 1024**3},
         ]
+
+
+class OptionsRadarr(FakeRadarr):
+    async def list_options(self):
+        return {
+            "quality_profiles": [
+                {"id": 4, "name": "720p"},
+                {"id": 9, "name": "1080 FR - max 10go"},
+            ],
+            "root_folders": [{"path": "D:/Films"}, {"path": "E:/Films"}],
+        }
 
 
 class FakeSeerr:
@@ -136,6 +148,34 @@ def test_add_film_creates_requested_availability(tmp_path):
 
     assert availability.state == "requested"
     assert availability.arr_id == 42
+
+
+def test_admin_defaults_resolve_quality_profile_by_name_and_first_root(tmp_path, monkeypatch):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    media = asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    monkeypatch.setattr(Config, "RADARR_DEFAULT_QUALITY_PROFILE_NAME", "1080 FR - max 10go")
+    monkeypatch.setattr(Config, "RADARR_DEFAULT_ROOT_FOLDER", None)
+    service = MediaServerService(store, radarr=OptionsRadarr())
+
+    defaults = asyncio.run(service.acquisition_defaults(media))
+
+    assert defaults == {"quality_profile_id": 9, "root_folder": "D:/Films", "language_profile_id": None, "monitor": "all"}
+
+
+def test_admin_defaults_reject_unknown_quality_profile(tmp_path, monkeypatch):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    media = asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    monkeypatch.setattr(Config, "RADARR_DEFAULT_QUALITY_PROFILE_NAME", "4K introuvable")
+    service = MediaServerService(store, radarr=OptionsRadarr())
+
+    try:
+        asyncio.run(service.acquisition_defaults(media))
+    except ValueError as error:
+        assert "4K introuvable" in str(error)
+    else:
+        raise AssertionError("An unknown admin quality profile should fail")
 
 
 def test_add_film_uses_seerr_when_configured(tmp_path):

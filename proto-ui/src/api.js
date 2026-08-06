@@ -131,6 +131,12 @@ export function answerRecommendation(sessionId, payload) {
     });
 }
 
+export function confirmRecommendation(sessionId, payload) {
+    return recommendationRequest(`/recommendations/sessions/${encodeURIComponent(sessionId)}/confirm`, {
+        method: 'POST', body: JSON.stringify(payload),
+    });
+}
+
 export function finishRecommendation(sessionId) {
     return recommendationRequest(`/recommendations/sessions/${encodeURIComponent(sessionId)}/finish`, {method: 'POST'});
 }

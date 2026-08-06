@@ -69,6 +69,29 @@ class MediaServerService:
             last_synced_at=datetime.now(timezone.utc),
         ))
 
+    async def acquisition_defaults(self, media) -> dict[str, Any]:
+        if self.radarr is None:
+            if self.seerr is not None:
+                return {"quality_profile_id": None, "root_folder": None, "language_profile_id": None, "monitor": "all"}
+            raise RuntimeError("Aucun service de téléchargement n'est configuré")
+        options = await self.radarr.list_options()
+        profile_name = Config.RADARR_DEFAULT_QUALITY_PROFILE_NAME
+        profile = next((item for item in options.get("quality_profiles", []) if item.get("name") == profile_name), None)
+        if profile is None or profile.get("id") is None:
+            raise ValueError(f"Profil qualité administrateur introuvable : {profile_name}")
+        root_folder = Config.RADARR_DEFAULT_ROOT_FOLDER
+        if not root_folder:
+            root_folder = next((item.get("path") for item in options.get("root_folders", []) if item.get("path")), None)
+        if not root_folder:
+            raise ValueError("Aucun dossier racine Radarr disponible")
+        return {
+            "quality_profile_id": int(profile["id"]), "root_folder": root_folder,
+            "language_profile_id": None, "monitor": "all",
+        }
+
+    async def add_with_defaults(self, media) -> Availability:
+        return await self.add(media, **(await self.acquisition_defaults(media)))
+
     async def sync_media(self, media_id: str) -> Optional[Availability]:
         media = await self.store.fetch_one(media_id)
         if not media or not media.tmdb_id:

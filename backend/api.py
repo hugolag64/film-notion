@@ -171,10 +171,34 @@ def _recent_question_axes(events: list[RecommendationEvent]) -> list[str]:
     ]
 
 
+def _recent_question_plans(events: list[RecommendationEvent]) -> list[list[str]]:
+    plans: dict[str, list[str]] = {}
+    for event in reversed(events):
+        value = str(event.value or "")
+        if event.event_type != "question_answered" or not value.startswith("plan:") or not event.session_id:
+            continue
+        axis = value.removeprefix("plan:")
+        if axis in SUPPORTED_QUESTION_AXES:
+            plans.setdefault(event.session_id, []).append(axis)
+    return list(plans.values())[-4:]
+
+
 def _fallback_question_plan(recent_axes: list[str]) -> list[str]:
     recent = set(recent_axes[-len(SUPPORTED_QUESTION_AXES):])
     fresh = [axis for axis in SUPPORTED_QUESTION_AXES if axis not in recent]
     return (fresh + [axis for axis in SUPPORTED_QUESTION_AXES if axis not in fresh])[:5]
+
+
+def _vary_question_plan(plan: list[str], recent_plans: list[list[str]], recent_axes: list[str]) -> list[str]:
+    normalized = list(dict.fromkeys(axis for axis in plan if axis in SUPPORTED_QUESTION_AXES))
+    if not normalized:
+        return _fallback_question_plan(recent_axes)
+    recent = [item for item in recent_plans[-4:] if item]
+    for offset in range(len(normalized)):
+        candidate = normalized[offset:] + normalized[:offset]
+        if candidate not in recent:
+            return candidate
+    return _fallback_question_plan(recent_axes)
 
 
 def _planned_question(
@@ -232,6 +256,11 @@ class RecommendationAnswerRequest(BaseModel):
     answer: str
     value: Optional[str] = None
     media_id: Optional[str] = None
+
+
+class RecommendationConfirmRequest(BaseModel):
+    tmdb_id: int
+    download: bool = True
 
 
 class RelinkTMDBRequest(BaseModel):
@@ -596,6 +625,7 @@ async def start_recommendation_session(
     )
     profile, events = await _recommendation_profile(current, store)
     recent_axes = _recent_question_axes(events)
+    recent_plans = _recent_question_plans(events)
     session.session_preferences.update({
         "answers": [],
         "question_index": 0,
@@ -607,15 +637,16 @@ async def start_recommendation_session(
     question_plan: list[str] = []
     if gateway.enabled:
         try:
-            plan = gateway.plan_questions(profile.model_dump(mode="json"), recent_axes)
+            plan = gateway.plan_questions(profile.model_dump(mode="json"), recent_axes, recent_plans)
             question_plan = plan.axes if plan else []
             if plan and plan.usage:
                 await _record_gemini_usage(store, current, session.id, plan.usage)
         except Exception as error:
             await _record_gemini_failure(store, current, session.id, error)
     session.session_preferences.update({
-        "question_plan": question_plan or _fallback_question_plan(recent_axes),
+        "question_plan": _vary_question_plan(question_plan, recent_plans, recent_axes),
     })
+    question_plan = session.session_preferences["question_plan"]
     question = _planned_question(session, candidates, profile, 0)
     if question is None:
         return {"session": session.model_dump(mode="json"), "state": "empty", "question": None, "result": None, "quota": quota}
@@ -632,6 +663,12 @@ async def start_recommendation_session(
             )
         quota["used"] += 1
         quota["remaining"] = max(0, quota["limit"] - quota["used"])
+    for axis in question_plan:
+        await store.record_recommendation_event(RecommendationEvent(
+            id=str(uuid.uuid4()), backstage_user_id=current.user["id"],
+            session_id=session.id, event_type="question_answered", value=f"plan:{axis}",
+            created_at=datetime.now(timezone.utc),
+        ))
     await _remember_question_options(session, question, store)
     return {"session": session.model_dump(mode="json"), "state": "question", "question": question, "result": None, "quota": quota}
 
@@ -725,6 +762,63 @@ async def answer_recommendation(
         return {"session_id": session_id, "state": "result", "question": None, "result": _serialize_recommendation(result)}
     await _remember_question_options(session, question, store)
     return {"session_id": session_id, "state": "question", "question": question, "result": None}
+
+
+@router.post("/recommendations/sessions/{session_id}/confirm")
+async def confirm_recommendation(
+    session_id: str,
+    payload: RecommendationConfirmRequest,
+    current: AuthContext = Depends(get_current_user),
+    store: MediaStore = Depends(get_store),
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    session = await store.get_recommendation_session(session_id)
+    if not session or session.backstage_user_id != current.user["id"]:
+        raise HTTPException(status_code=404, detail="Session de recommandation introuvable")
+    events = await store.list_recommendation_events(current.user["id"])
+    selected = any(
+        event.session_id == session_id
+        and event.event_type == "session_completed"
+        and str(event.value) == str(payload.tmdb_id)
+        for event in events
+    )
+    if not selected:
+        raise HTTPException(status_code=403, detail="Ce film ne correspond pas à la recommandation validée")
+
+    media = next((item for item in await store.fetch_all() if item.type == "Film" and item.tmdb_id == payload.tmdb_id), None)
+    if media is None:
+        tmdb = TMDBClient()
+        details = await tmdb.get_movie_details(payload.tmdb_id)
+        if not details:
+            raise HTTPException(status_code=400, detail="Impossible de récupérer les détails TMDB")
+        media = await store.create({
+            "title": details.get("title") or details.get("original_title") or "Sans titre",
+            "original_title": details.get("original_title") or None,
+            "type": "Film", "status": "À regarder", "rating": None,
+            "release_date": details.get("release_date") or None,
+            "director": tmdb.get_director(details), "categories": tmdb.get_genres(details),
+            "synopsis": (details.get("overview") or "")[:2000],
+            "cover_url": tmdb.get_poster_url(details), "backdrop_url": tmdb.get_backdrop_url(details),
+            "cast": tmdb.get_cast(details, limit=5), "tmdb_ok": True, "tmdb_id": payload.tmdb_id,
+        })
+
+    availability = await store.get_availability(media.id)
+    download_error = None
+    if payload.download and not availability:
+        try:
+            availability = await service.add_with_defaults(media)
+        except (MediaServerError, RuntimeError, ValueError) as error:
+            download_error = str(error)
+    await store.record_recommendation_event(RecommendationEvent(
+        id=str(uuid.uuid4()), backstage_user_id=current.user["id"], session_id=session_id,
+        media_id=media.id, event_type="confirmed", value=str(payload.tmdb_id),
+        created_at=datetime.now(timezone.utc),
+    ))
+    return {
+        "media": media.model_dump(mode="json"),
+        "availability": availability.model_dump(mode="json") if availability else None,
+        "download_error": download_error,
+    }
 
 
 @router.post("/recommendations/sessions/{session_id}/finish")

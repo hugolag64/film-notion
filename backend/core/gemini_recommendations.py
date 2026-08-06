@@ -125,7 +125,12 @@ class GeminiRecommendationGateway:
             usage=usage,
         )
 
-    def plan_questions(self, profile: dict, recent_axes: list[str]) -> GeminiQuestionPlan | None:
+    def plan_questions(
+        self,
+        profile: dict,
+        recent_axes: list[str],
+        recent_plans: list[list[str]] | None = None,
+    ) -> GeminiQuestionPlan | None:
         if not self.enabled:
             return None
         parsed, usage = self._request(
@@ -133,6 +138,7 @@ class GeminiRecommendationGateway:
             {
                 "profile": profile,
                 "recent_axes": recent_axes[-8:],
+                "recent_plans": (recent_plans or [])[-4:],
                 "allowed_axes": list(SUPPORTED_QUESTION_AXES),
             },
         )

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { answerRecommendation, startRecommendationSession } from '../api';
+import { answerRecommendation, confirmRecommendation, startRecommendationSession } from '../api';
 
 const posterUrl = (path) => path ? `https://image.tmdb.org/t/p/w500${path}` : null;
 
@@ -28,12 +28,15 @@ export default function RecommendationFlow({ isDarkMode, onClose }) {
     const [questionCount, setQuestionCount] = useState(0);
     const [quota, setQuota] = useState(null);
     const [error, setError] = useState('');
+    const [confirmation, setConfirmation] = useState(null);
+    const [confirming, setConfirming] = useState(false);
 
     const start = async () => {
         try {
             setState('loading');
             setError('');
             setResult(null);
+            setConfirmation(null);
             const response = await startRecommendationSession();
             setSession(response.session);
             setQuota(response.quota || null);
@@ -64,6 +67,20 @@ export default function RecommendationFlow({ isDarkMode, onClose }) {
         }
     };
 
+    const confirm = async () => {
+        if (!session?.id || !result?.tmdb_id || confirming) return;
+        try {
+            setConfirming(true);
+            setError('');
+            const response = await confirmRecommendation(session.id, { tmdb_id: result.tmdb_id, download: true });
+            setConfirmation(response);
+        } catch (requestError) {
+            setError(requestError.message || 'Impossible d’ajouter le film.');
+        } finally {
+            setConfirming(false);
+        }
+    };
+
     const text = isDarkMode ? 'text-white' : 'text-[#0a2540]';
     const muted = isDarkMode ? 'text-white/60' : 'text-[#425466]';
     const panel = isDarkMode ? 'bg-[#111111] border-white/10' : 'bg-white border-[#e3e8ee]';
@@ -81,7 +98,7 @@ export default function RecommendationFlow({ isDarkMode, onClose }) {
                 {state === 'error' && <div className="mx-auto max-w-md text-center"><p className="text-rose-500">{error}</p><button type="button" onClick={start} className="mt-5 rounded-lg bg-[#635bff] px-4 py-2 text-sm font-semibold text-white">Réessayer</button></div>}
                 {state === 'empty' && <div className="mx-auto max-w-md text-center"><p className={`text-lg ${muted}`}>Je n’ai pas encore assez de données pour te proposer un film.</p><button type="button" onClick={start} className="mt-5 rounded-lg border px-4 py-2 text-sm font-semibold">Recommencer</button></div>}
                 {state === 'question' && question && <div className="mx-auto w-full max-w-3xl"><div className="mb-8 flex items-center justify-between text-xs"><span className={muted}>Affinons la sélection</span><span className="font-mono text-[#635bff]">{questionNumber} / {question.max_questions ?? 5}</span></div><h3 className="mb-7 text-center text-2xl font-semibold">{question.prompt}</h3>{question.type === 'choice' ? <div className="mx-auto grid max-w-xl gap-3">{question.options.map((option) => <ChoiceOption key={option.answer} option={option} onSelect={(selected) => answer({ answer: selected.answer, value: selected.value })} isDarkMode={isDarkMode} />)}</div> : <div className="grid gap-5 sm:grid-cols-2">{question.options.map((option) => <PosterCard key={option.tmdb_id} option={option} onSelect={(selected) => answer({ answer: 'picked', value: String(selected.tmdb_id) })} isDarkMode={isDarkMode} />)}</div>}{question.type === 'compare' && <div className="mt-7 flex flex-wrap justify-center gap-2"><button type="button" onClick={() => answer({ answer: 'not_now', value: String(question.options[0].tmdb_id) })} className="rounded-full border px-3 py-2 text-xs">Pas maintenant</button><button type="button" onClick={() => answer({ answer: 'less_like_this', value: String(question.options[0].tmdb_id) })} className="rounded-full border px-3 py-2 text-xs">Pas mon style</button><button type="button" onClick={() => answer({ answer: 'already_seen', value: String(question.options[0].tmdb_id) })} className="rounded-full border px-3 py-2 text-xs">Déjà vu</button><button type="button" onClick={() => answer({ answer: 'surprise' })} className="rounded-full border px-3 py-2 text-xs">Surprise</button></div>}</div>}
-                {state === 'result' && result && <div className="mx-auto w-full max-w-2xl text-center"><p className={`text-xs uppercase tracking-[0.2em] ${muted}`}>Ma recommandation</p><div className="mx-auto mt-5 max-w-xs"><PosterCard option={result} onSelect={() => {}} isDarkMode={isDarkMode} /></div><p className={`mt-5 text-sm ${muted}`}>Choisi à partir de tes notes, de ton historique et de tes réponses.</p><div className="mt-6 flex justify-center gap-2"><button type="button" onClick={start} className="rounded-lg bg-[#635bff] px-4 py-2 text-sm font-semibold text-white">Nouvelle sélection</button><button type="button" onClick={onClose} className="rounded-lg border px-4 py-2 text-sm font-semibold">Retour à la bibliothèque</button></div></div>}
+                {state === 'result' && result && <div className="mx-auto w-full max-w-2xl text-center"><p className={`text-xs uppercase tracking-[0.2em] ${muted}`}>Ma recommandation</p><div className="mx-auto mt-5 max-w-xs"><PosterCard option={result} onSelect={() => {}} isDarkMode={isDarkMode} /></div><p className={`mt-5 text-sm ${muted}`}>Choisi à partir de tes notes, de ton historique et de tes réponses.</p>{confirmation ? <div className={`mx-auto mt-5 max-w-md rounded-xl border p-4 text-sm ${confirmation.download_error ? 'border-amber-400/40 text-amber-700' : 'border-emerald-400/40 text-emerald-700'}`}>{confirmation.download_error ? `Film ajouté, mais téléchargement non lancé : ${confirmation.download_error}` : confirmation.availability ? 'Film ajouté à la bibliothèque. Téléchargement demandé.' : 'Film ajouté à la bibliothèque.'}</div> : <button type="button" onClick={confirm} disabled={confirming} className="mt-6 rounded-lg bg-[#635bff] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{confirming ? 'Ajout en cours…' : 'Ajouter et télécharger'}</button>}<div className="mt-6 flex justify-center gap-2"><button type="button" onClick={start} className="rounded-lg border px-4 py-2 text-sm font-semibold">Nouvelle sélection</button><button type="button" onClick={onClose} className="rounded-lg border px-4 py-2 text-sm font-semibold">Retour à la bibliothèque</button></div>{error && <p className="mt-4 text-sm text-rose-500">{error}</p>}</div>}
             </main>
         </section>
     </div>;

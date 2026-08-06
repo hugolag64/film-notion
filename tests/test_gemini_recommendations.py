@@ -49,6 +49,7 @@ def test_question_plan_keeps_supported_unique_axes():
     assert isinstance(result, GeminiQuestionPlan)
     assert result.axes == ["mood", "movie_compare", "genre"]
     assert result.usage["input_tokens"] == 120
+    assert gateway.plan_questions({"confidence": 0.5}, ["mood"], [["mood", "genre"]]).axes
 
 
 def test_valid_json_selection_is_limited_to_supplied_tmdb_ids():
