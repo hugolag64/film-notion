@@ -2,6 +2,78 @@
 
 const API_BASE_URL = '/api';
 
+async function authRequest(path, options = {}) {
+    const response = await fetch(`${API_BASE_URL}/auth${path}`, {
+        ...options,
+        credentials: 'same-origin',
+        headers: {
+            'Content-Type': 'application/json',
+            ...(options.headers || {}),
+        },
+    });
+    let body = null;
+    if (response.status !== 204) {
+        body = await response.json().catch(() => null);
+    }
+    if (!response.ok) {
+        const error = new Error(body?.detail || 'Erreur d’authentification');
+        error.status = response.status;
+        throw error;
+    }
+    return body;
+}
+
+export async function fetchAuthStatus() {
+    return authRequest('/status');
+}
+
+export async function fetchCurrentUser() {
+    try {
+        return (await authRequest('/me')).user;
+    } catch (error) {
+        if (error.status === 401) return null;
+        throw error;
+    }
+}
+
+export async function setupAdmin(payload) {
+    return (await authRequest('/setup', {method: 'POST', body: JSON.stringify(payload)})).user;
+}
+
+export async function login(payload) {
+    return (await authRequest('/login', {method: 'POST', body: JSON.stringify(payload)})).user;
+}
+
+export async function logout() {
+    await authRequest('/logout', {method: 'POST'});
+}
+
+export async function fetchDevices() {
+    return (await authRequest('/devices')).devices;
+}
+
+export async function revokeDevice(sessionId) {
+    await authRequest(`/devices/${encodeURIComponent(sessionId)}`, {method: 'DELETE'});
+}
+
+export async function revokeOtherDevices() {
+    return authRequest('/devices/revoke-others', {method: 'POST'});
+}
+
+export async function fetchUsers() {
+    return (await authRequest('/users')).users;
+}
+
+export async function createUser(payload) {
+    return (await authRequest('/users', {method: 'POST', body: JSON.stringify(payload)})).user;
+}
+
+export async function updateUser(userId, payload) {
+    return (await authRequest(`/users/${encodeURIComponent(userId)}`, {
+        method: 'PATCH', body: JSON.stringify(payload),
+    })).user;
+}
+
 /**
  * Fetch all media items from SQLite database via FastAPI.
  */
