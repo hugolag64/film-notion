@@ -3,11 +3,13 @@ import { createUser, deleteUser, fetchDevices, fetchUsers, revokeDevice, revokeO
 import { useAuth } from './auth-context';
 
 export default function AccountPanel({isDarkMode, onClose}) {
-    const {user, logout} = useAuth();
+    const {user, setUser, logout} = useAuth();
     const [devices, setDevices] = useState([]);
     const [users, setUsers] = useState([]);
+    const [displayName, setDisplayName] = useState(user.display_name);
     const [newUser, setNewUser] = useState({display_name: '', email: '', password: ''});
     const [error, setError] = useState('');
+    const [savingName, setSavingName] = useState(false);
 
     const refresh = useCallback(async () => {
         try {
@@ -29,6 +31,20 @@ export default function AccountPanel({isDarkMode, onClose}) {
             await refresh();
         } catch (requestError) {
             setError(requestError.message);
+        }
+    };
+
+    const handleNameSave = async (event) => {
+        event.preventDefault();
+        try {
+            setSavingName(true);
+            setError('');
+            const updatedUser = await updateUser(user.id, {display_name: displayName});
+            setUser(updatedUser);
+        } catch (requestError) {
+            setError(requestError.message);
+        } finally {
+            setSavingName(false);
         }
     };
 
@@ -68,6 +84,16 @@ export default function AccountPanel({isDarkMode, onClose}) {
                 </div>
 
                 {error && <p className="mb-4 rounded-lg bg-rose-500/10 p-3 text-sm text-rose-500" role="alert">{error}</p>}
+
+                <form className="mb-8 flex flex-wrap items-end gap-2" onSubmit={handleNameSave}>
+                    <label className="grid min-w-56 flex-1 gap-1 text-sm">
+                        Nom du compte
+                        <input required value={displayName} onChange={(event) => setDisplayName(event.target.value)} className="rounded border bg-transparent px-2 py-2" />
+                    </label>
+                    <button className="rounded bg-[#635bff] px-3 py-2 text-sm font-semibold text-white" type="submit" disabled={savingName}>
+                        {savingName ? 'Enregistrement…' : 'Enregistrer'}
+                    </button>
+                </form>
 
                 <div className="mb-8">
                     <div className="mb-3 flex items-center justify-between">

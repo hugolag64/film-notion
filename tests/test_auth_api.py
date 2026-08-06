@@ -169,3 +169,17 @@ def test_admin_can_delete_a_user_but_not_themselves(tmp_path, monkeypatch):
 
     admin_id = client.get("/api/auth/me").json()["user"]["id"]
     assert client.delete(f"/api/auth/users/{admin_id}").status_code == 400
+
+
+def test_admin_can_change_their_own_display_name(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    admin_id = client.get("/api/auth/me").json()["user"]["id"]
+
+    response = client.patch(
+        f"/api/auth/users/{admin_id}",
+        json={"display_name": "Hugo Maison"},
+    )
+
+    assert response.status_code == 200
+    assert client.get("/api/auth/me").json()["user"]["display_name"] == "Hugo Maison"
