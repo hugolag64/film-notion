@@ -486,26 +486,31 @@ async def request_acquisition(
         raise HTTPException(status_code=404, detail="Média non trouvé")
     if not media.tmdb_id:
         raise HTTPException(status_code=409, detail="Associez d'abord ce média à TMDB")
+    is_admin = current.user.get("role") == "admin"
     owner_id = current.user["id"]
-    existing_rental = await service.store.find_active_rental(owner_id, media_id)
-    if existing_rental:
-        return {
-            "availability": await service.store.get_availability(media_id),
-            "rental": _serialize_rental(existing_rental),
-        }
-    if await service.store.count_active_rentals(owner_id) >= MAX_ACTIVE_RENTALS:
-        raise HTTPException(status_code=409, detail="Limite de 5 locations actives atteinte")
+    if not is_admin:
+        existing_rental = await service.store.find_active_rental(owner_id, media_id)
+        if existing_rental:
+            return {
+                "availability": await service.store.get_availability(media_id),
+                "rental": _serialize_rental(existing_rental),
+            }
+        if await service.store.count_active_rentals(owner_id) >= MAX_ACTIVE_RENTALS:
+            raise HTTPException(status_code=409, detail="Limite de 5 locations actives atteinte")
     try:
         availability = await service.add(
             media, payload.quality_profile_id, payload.root_folder,
             payload.language_profile_id, payload.monitor,
         )
-        now = datetime.now(timezone.utc)
-        rental = await service.store.create_rental(Rental(
-            id=str(uuid.uuid4()), media_id=media_id, backstage_user_id=owner_id,
-            status=availability.state, requested_at=now, created_at=now, updated_at=now,
-        ))
-        return {"availability": availability, "rental": _serialize_rental(rental)}
+        response = {"availability": availability}
+        if not is_admin:
+            now = datetime.now(timezone.utc)
+            rental = await service.store.create_rental(Rental(
+                id=str(uuid.uuid4()), media_id=media_id, backstage_user_id=owner_id,
+                status=availability.state, requested_at=now, created_at=now, updated_at=now,
+            ))
+            response["rental"] = _serialize_rental(rental)
+        return response
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except MediaServerError as error:
@@ -519,6 +524,8 @@ async def list_rentals(
     current: AuthContext = Depends(get_current_user),
     store: MediaStore = Depends(get_store),
 ):
+    if current.user.get("role") == "admin":
+        return {"rentals": []}
     rentals = await store.list_user_rentals(current.user["id"])
     return {"rentals": [_serialize_rental(rental) for rental in rentals]}
 
@@ -529,6 +536,8 @@ async def request_rental_keep(
     current: AuthContext = Depends(get_current_user),
     store: MediaStore = Depends(get_store),
 ):
+    if current.user.get("role") == "admin":
+        raise HTTPException(status_code=404, detail="Location non trouvée")
     rental = await store.get_rental(rental_id)
     if not rental or rental.backstage_user_id != current.user["id"]:
         raise HTTPException(status_code=404, detail="Location non trouvée")

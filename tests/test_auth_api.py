@@ -291,9 +291,40 @@ def test_regular_user_can_submit_an_acquisition_request(tmp_path, monkeypatch):
     assert service.calls == [("dune", 5, "/media/movies")]
 
 
+def test_admin_acquisition_is_permanent_and_creates_no_rental(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    media = asyncio.run(MediaStore(Config.DB_PATH).create({
+        "id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631,
+    }))
+
+    class FakeAcquisitionService:
+        store = MediaStore(Config.DB_PATH)
+
+        async def add(self, *args):
+            return Availability(media_id=media.id, provider="radarr", state="requested")
+
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: FakeAcquisitionService()
+    response = client.post(f"/api/medias/{media.id}/acquisition", json={})
+
+    assert response.status_code == 200
+    assert "rental" not in response.json()
+    assert client.get("/api/rentals").json() == {"rentals": []}
+
+
 def test_acquisition_creates_owned_rental_and_keep_is_scoped(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     _setup(client)
+    client.post("/api/auth/users", json={
+        "display_name": "Paul", "email": "paul@example.com", "password": "12345678",
+    })
+    client.post("/api/auth/users", json={
+        "display_name": "Claire", "email": "claire@example.com", "password": "12345678",
+    })
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={
+        "email": "paul@example.com", "password": "12345678", "remember_device": False,
+    })
     media = asyncio.run(MediaStore(Config.DB_PATH).create({
         "id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631,
     }))
@@ -316,12 +347,9 @@ def test_acquisition_creates_owned_rental_and_keep_is_scoped(tmp_path, monkeypat
     assert kept.status_code == 200
     assert kept.json()["rental"]["status"] == "keep_requested"
 
-    client.post("/api/auth/users", json={
-        "display_name": "Paul", "email": "paul@example.com", "password": "12345678",
-    })
     client.post("/api/auth/logout")
     client.post("/api/auth/login", json={
-        "email": "paul@example.com", "password": "12345678", "remember_device": False,
+        "email": "claire@example.com", "password": "12345678", "remember_device": False,
     })
     assert client.get("/api/rentals").json() == {"rentals": []}
     assert client.post(f"/api/rentals/{rental['id']}/keep").status_code == 404
@@ -330,6 +358,13 @@ def test_acquisition_creates_owned_rental_and_keep_is_scoped(tmp_path, monkeypat
 def test_acquisition_rejects_sixth_active_rental(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     _setup(client)
+    client.post("/api/auth/users", json={
+        "display_name": "Paul", "email": "paul@example.com", "password": "12345678",
+    })
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={
+        "email": "paul@example.com", "password": "12345678", "remember_device": False,
+    })
     store = MediaStore(Config.DB_PATH)
     user_id = client.get("/api/auth/me").json()["user"]["id"]
     now = datetime.now(timezone.utc)
