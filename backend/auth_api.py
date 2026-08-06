@@ -23,7 +23,7 @@ class AuthContext:
 class SetupRequest(BaseModel):
     display_name: str = Field(min_length=1)
     email: str = Field(min_length=3)
-    password: str = Field(min_length=12)
+    password: str = Field(min_length=8)
     password_confirmation: str
 
 
@@ -36,7 +36,7 @@ class LoginRequest(BaseModel):
 class CreateUserRequest(BaseModel):
     display_name: str = Field(min_length=1)
     email: str = Field(min_length=3)
-    password: str = Field(min_length=12)
+    password: str = Field(min_length=8)
 
 
 class UpdateUserRequest(BaseModel):
@@ -90,7 +90,9 @@ async def require_admin(user: AuthContext = Depends(get_current_user)) -> AuthCo
 
 def _handle_store_error(error: ValueError) -> HTTPException:
     message = str(error)
-    if message in {"administrator already exists", "email already exists"}:
+    if message == "user not found":
+        return HTTPException(status_code=404, detail=message)
+    if message in {"administrator already exists", "email already exists", "last administrator cannot be removed"}:
         return HTTPException(status_code=409, detail=message)
     return HTTPException(status_code=422, detail=message)
 
@@ -205,3 +207,17 @@ async def update_user(
     except ValueError as error:
         raise _handle_store_error(error) from error
     return {"user": user}
+
+
+@auth_router.delete("/users/{user_id}", status_code=204)
+async def delete_user(
+    user_id: str,
+    current: AuthContext = Depends(require_admin),
+    store: AuthStore = Depends(get_auth_store),
+):
+    if user_id == current.user["id"]:
+        raise HTTPException(status_code=400, detail="Impossible de supprimer son propre compte")
+    try:
+        store.delete_user(user_id)
+    except ValueError as error:
+        raise _handle_store_error(error) from error

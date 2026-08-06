@@ -74,6 +74,10 @@ export async function updateUser(userId, payload) {
     })).user;
 }
 
+export async function deleteUser(userId) {
+    await authRequest(`/users/${encodeURIComponent(userId)}`, {method: 'DELETE'});
+}
+
 /**
  * Fetch all media items from SQLite database via FastAPI.
  */

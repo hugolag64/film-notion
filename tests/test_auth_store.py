@@ -88,3 +88,16 @@ def test_deactivating_a_user_revokes_their_sessions(tmp_path):
     store.update_user(user["id"], {"is_active": False})
 
     assert store.user_from_token(token) is None
+
+
+def test_deleting_a_user_removes_the_account_and_sessions(tmp_path):
+    db = tmp_path / "backstage.db"
+    store = AuthStore(str(db))
+    store.init_schema()
+    store.create_admin("Hugo", "hugo@example.com", "Correct Horse Battery Staple")
+    user = store.create_user("Paul", "paul@example.com", "12345678")
+    _, token, _ = store.authenticate("paul@example.com", "12345678", True, "Laptop")
+
+    assert store.delete_user(user["id"])
+    assert store.user_from_token(token) is None
+    assert all(item["id"] != user["id"] for item in store.list_users())

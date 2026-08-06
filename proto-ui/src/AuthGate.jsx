@@ -41,7 +41,7 @@ function AuthForm({setupRequired, onSubmit, error, loading}) {
                 </label>
                 <label>
                     Mot de passe
-                    <input required type="password" autoComplete={setupRequired ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} />
+                    <input required minLength={8} type="password" autoComplete={setupRequired ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} />
                 </label>
                 {setupRequired && (
                     <label>

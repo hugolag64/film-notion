@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { createUser, fetchDevices, fetchUsers, revokeDevice, revokeOtherDevices, updateUser } from './api';
+import { createUser, deleteUser, fetchDevices, fetchUsers, revokeDevice, revokeOtherDevices, updateUser } from './api';
 import { useAuth } from './auth-context';
 
 export default function AccountPanel({isDarkMode, onClose}) {
@@ -35,6 +35,16 @@ export default function AccountPanel({isDarkMode, onClose}) {
     const handleUserUpdate = async (target, fields) => {
         try {
             await updateUser(target.id, fields);
+            await refresh();
+        } catch (requestError) {
+            setError(requestError.message);
+        }
+    };
+
+    const handleUserDelete = async (target) => {
+        if (!window.confirm(`Supprimer définitivement le compte ${target.display_name} ?`)) return;
+        try {
+            await deleteUser(target.id);
             await refresh();
         } catch (requestError) {
             setError(requestError.message);
@@ -95,6 +105,7 @@ export default function AccountPanel({isDarkMode, onClose}) {
                                         <button className="text-xs text-[#635bff]" onClick={() => handleUserUpdate(target, {is_active: !target.is_active})}>
                                             {target.is_active ? 'Désactiver' : 'Activer'}
                                         </button>
+                                        <button className="text-xs text-rose-500" onClick={() => handleUserDelete(target)}>Supprimer</button>
                                     </div>
                                 </div>
                             ))}
@@ -102,7 +113,7 @@ export default function AccountPanel({isDarkMode, onClose}) {
                         <form className="grid gap-2 sm:grid-cols-3" onSubmit={handleCreateUser}>
                             <input required placeholder="Nom" value={newUser.display_name} onChange={(event) => setNewUser({...newUser, display_name: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
                             <input required type="email" placeholder="Email" value={newUser.email} onChange={(event) => setNewUser({...newUser, email: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
-                            <input required minLength="12" type="password" placeholder="Mot de passe" value={newUser.password} onChange={(event) => setNewUser({...newUser, password: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
+                            <input required minLength="8" type="password" placeholder="Mot de passe (8 caractères min.)" value={newUser.password} onChange={(event) => setNewUser({...newUser, password: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
                             <button className="rounded bg-[#635bff] px-3 py-2 text-sm font-semibold text-white sm:col-span-3" type="submit">Créer un utilisateur</button>
                         </form>
                     </div>

@@ -149,3 +149,23 @@ def test_user_cannot_revoke_another_users_device(tmp_path, monkeypatch):
         "remember_device": False,
     })
     assert len(client.get("/api/auth/devices").json()["devices"]) == 1
+
+
+def test_admin_can_delete_a_user_but_not_themselves(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    created = client.post("/api/auth/users", json={
+        "display_name": "Paul",
+        "email": "paul@example.com",
+        "password": "12345678",
+    })
+    user_id = created.json()["user"]["id"]
+
+    assert client.delete(f"/api/auth/users/{user_id}").status_code == 204
+    assert all(user["id"] != user_id for user in client.get("/api/auth/users").json()["users"])
+    assert client.delete(
+        f"/api/auth/users/{created.json()['user']['id']}"
+    ).status_code == 404
+
+    admin_id = client.get("/api/auth/me").json()["user"]["id"]
+    assert client.delete(f"/api/auth/users/{admin_id}").status_code == 400

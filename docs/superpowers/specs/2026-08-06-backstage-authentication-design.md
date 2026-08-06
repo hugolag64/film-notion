@@ -33,7 +33,7 @@ When no administrator exists, the frontend displays a setup screen with:
 - password;
 - password confirmation.
 
-`POST /api/auth/setup` creates exactly one administrator inside a SQLite transaction. It rejects the request once an administrator already exists. The endpoint validates a non-empty display name, a normalized email address, and a password of at least 12 characters. After successful setup, the endpoint creates a normal authenticated session and returns the new user profile.
+`POST /api/auth/setup` creates exactly one administrator inside a SQLite transaction. It rejects the request once an administrator already exists. The endpoint validates a non-empty display name, a normalized email address, and a password of at least 8 characters. After successful setup, the endpoint creates a normal authenticated session and returns the new user profile.
 
 The setup screen must not be reachable after the first administrator has been created, even if a user revisits the URL.
 
@@ -89,7 +89,7 @@ The initial device-management endpoint lists the current user’s sessions using
 
 ## User administration
 
-After setup, an administrator can create regular users from the Backstage account area. The first implementation accepts display name, email, and an initial password, and always creates the account with the `user` role. An administrator can rename, deactivate, reactivate, or promote/demote an account, but the last active administrator cannot be deactivated or demoted. Deactivating a user revokes all of that user’s sessions.
+After setup, an administrator can create regular users from the Backstage account area. The first implementation accepts display name, email, and an initial password of at least 8 characters, and always creates the account with the `user` role. An administrator can rename, deactivate, reactivate, promote/demote, or permanently delete an account, but cannot delete their own account and cannot remove the last active administrator. Deactivating or deleting a user revokes all of that user’s sessions.
 
 ## API surface
 
@@ -106,6 +106,7 @@ The authentication router will be included under the existing `/api` prefix:
 - `GET /api/auth/users` — returns the user list for administrators.
 - `POST /api/auth/users` — creates a regular user for administrators.
 - `PATCH /api/auth/users/{user_id}` — updates display name, role, or active state for administrators.
+- `DELETE /api/auth/users/{user_id}` — permanently deletes another user for administrators.
 
 Authentication dependencies will provide `get_current_user` and `require_admin`. Existing media and maintenance routes will be protected by `get_current_user` in this phase. Administrative-only routes will use `require_admin`; initially this applies to media-server import, synchronization, and acquisition actions that can modify external services. Read-only catalog and playback routes remain available to authenticated users.
 

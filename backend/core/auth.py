@@ -314,3 +314,22 @@ class AuthStore:
                 )
             refreshed = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
             return self._row_to_user(refreshed)
+
+    def delete_user(self, user_id: str) -> bool:
+        with sqlite3.connect(self.db_path) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT role, is_active FROM users WHERE id = ?", (user_id,)
+            ).fetchone()
+            if not row:
+                raise ValueError("user not found")
+            if row["role"] == "admin" and row["is_active"]:
+                active_admins = connection.execute(
+                    "SELECT COUNT(*) FROM users WHERE role = 'admin' AND is_active = 1"
+                ).fetchone()[0]
+                if active_admins <= 1:
+                    raise ValueError("last administrator cannot be removed")
+            connection.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user_id,))
+            cursor = connection.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            return cursor.rowcount > 0

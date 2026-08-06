@@ -8,7 +8,7 @@ Après le premier démarrage, ouvrir :
 http://192.168.1.5:8090
 ```
 
-L’écran de première installation demande le nom affiché, l’adresse email et un mot de passe d’au moins 12 caractères. Le premier compte devient automatiquement administrateur.
+L’écran de première installation demande le nom affiché, l’adresse email et un mot de passe d’au moins 8 caractères. Le premier compte devient automatiquement administrateur.
 
 Le mot de passe est haché dans SQLite. Il n’est pas nécessaire et il ne faut pas le placer dans GitHub, `.env` ou les variables Portainer.
 

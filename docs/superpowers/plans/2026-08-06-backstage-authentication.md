@@ -168,7 +168,7 @@ export async function updateUser(userId, payload) {}
 
 - [ ] **Étape 3 : créer `AuthGate`.** Gérer explicitement les états `loading`, `setup`, `login`, `authenticated` et `error`. Après setup ou login, stocker uniquement le profil utilisateur en mémoire.
 
-- [ ] **Étape 4 : créer les formulaires setup et login.** Le setup exige confirmation du mot de passe et 12 caractères minimum côté interface ; le serveur reste l’autorité de validation. Le login expose la case « Se souvenir de cet appareil ».
+- [ ] **Étape 4 : créer les formulaires setup et login.** Le setup exige confirmation du mot de passe et 8 caractères minimum côté interface ; le serveur reste l’autorité de validation. Le login expose la case « Se souvenir de cet appareil ».
 
 - [ ] **Étape 5 : intégrer `AuthGate` dans `App.jsx`.** Ne monter `BackstagePrototype` qu’après authentification, afin qu’il ne lance pas de requêtes médias anonymes. Fournir au composant principal le profil courant et une fonction de déconnexion.
 
