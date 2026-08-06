@@ -237,9 +237,10 @@ async def _media_for_user(media: Media, current: AuthContext, store: MediaStore)
     if state and state.is_favorite:
         tags.append("Favoris")
     status = state.status if state else None
+    is_watchlist = bool(state and state.is_watchlist)
     if state and state.rating and str(state.rating).strip():
         status = "Terminé"
-    is_watchlist = bool(state and state.is_watchlist)
+        is_watchlist = False
     updates = {
         "status": status,
         "rating": state.rating if state else None,
@@ -317,7 +318,10 @@ async def _recommendation_pool(
         media.tmdb_id
         for media in medias
         if media.tmdb_id and (
-            state_by_media.get(media.id, None) and state_by_media[media.id].status in {"Terminé", "Terminée"}
+            state_by_media.get(media.id, None) and (
+                state_by_media[media.id].status in {"Terminé", "Terminée"}
+                or bool(state_by_media[media.id].rating and str(state_by_media[media.id].rating).strip())
+            )
             or any(progress.media_id == media.id and (progress.played or progress.percent >= 95) for progress in playback)
         )
     }
@@ -325,7 +329,7 @@ async def _recommendation_pool(
         media.tmdb_id
         for media in medias
         if media.tmdb_id and state_by_media.get(media.id) and (
-            state_by_media[media.id].status == "À regarder" or state_by_media[media.id].is_favorite
+            state_by_media[media.id].is_watchlist or state_by_media[media.id].is_favorite
         )
     }
     return [

@@ -25,7 +25,7 @@ function formatDate(value) {
     return new Date(value).toLocaleString('fr-FR');
 }
 
-export default function AdminCenter({ isDarkMode, onClose }) {
+export default function AdminCenter({ isDarkMode, onClose, onMediaChanged }) {
     const [section, setSection] = useState('overview');
     const [dashboard, setDashboard] = useState(null);
     const [activity, setActivity] = useState(null);
@@ -76,6 +76,7 @@ export default function AdminCenter({ isDarkMode, onClose }) {
             setRefreshing(true);
             await syncMediaServer();
             await load();
+            await onMediaChanged?.();
         } catch (requestError) {
             setError(requestError.message || 'Synchronisation impossible.');
             setRefreshing(false);
@@ -87,6 +88,7 @@ export default function AdminCenter({ isDarkMode, onClose }) {
             setRefreshing(true);
             await importMediaServerLibrary();
             await load();
+            await onMediaChanged?.();
         } catch (requestError) {
             setError(requestError.message || 'Import impossible.');
             setRefreshing(false);

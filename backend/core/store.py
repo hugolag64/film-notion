@@ -429,7 +429,7 @@ class MediaStore:
         }
         updates = {key: value for key, value in fields.items() if key in allowed}
         now = datetime.now(timezone.utc)
-        if "status" in updates and updates["status"] == "À regarder" and "added_to_watchlist_at" not in updates:
+        if updates.get("is_watchlist") is True and "added_to_watchlist_at" not in updates:
             updates["added_to_watchlist_at"] = now
         encoded = {}
         for key, value in updates.items():

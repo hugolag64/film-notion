@@ -5,7 +5,7 @@ import AdminCenter from './components/AdminCenter';
 import RecommendationFlow from './components/RecommendationFlow';
 import FilmDetailView from './components/FilmDetailView';
 import { useAuth } from './auth-context';
-import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncMediaServer, importMediaServerLibrary, syncPlayback } from './api';
+import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncPlayback } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
 
@@ -65,13 +65,72 @@ const getMediaAction = (mediaType, availability) => {
     };
 };
 
+const parseMediaList = (value, fallback = []) => {
+    if (Array.isArray(value)) return value;
+    if (typeof value !== 'string' || !value.trim()) return fallback;
+    try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed : [value];
+    } catch {
+        return [value];
+    }
+};
+
+const mapMediaToMovie = (media, index = 0) => {
+    try {
+        const tagsList = parseMediaList(media.tags);
+        const castList = parseMediaList(media.cast, []);
+        const categories = parseMediaList(media.categories, ['Film']);
+        const supports = parseMediaList(media.support);
+        let rawRating = 0;
+        if (typeof media.rating === 'string' && media.rating.trim()) {
+            const starMatches = media.rating.match(/⭐️|⭐|★/g);
+            rawRating = starMatches?.length || parseFloat(media.rating) || 0;
+        } else if (typeof media.rating === 'number') {
+            rawRating = media.rating;
+        }
+        const numericRating = Math.min(5, Math.max(0, rawRating));
+
+        return {
+            id: media.id || `media-${index}`,
+            type: media.type || 'Film',
+            title: media.title || 'Sans titre',
+            originalTitle: media.original_title || '',
+            tmdbId: media.tmdb_id || null,
+            director: media.director || 'Réalisateur inconnu',
+            year: media.release_date ? (new Date(media.release_date).getFullYear() || '—') : '—',
+            genre: categories,
+            poster: media.cover_url || 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?auto=format&fit=crop&w=600&q=80',
+            backdrop: media.backdrop_url || media.cover_url || 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=1200&q=80',
+            synopsis: media.synopsis || 'Aucun synopsis disponible pour le moment.',
+            cast: castList.length > 0 ? castList : ['Acteur principal'],
+            rating: numericRating,
+            userNotes: media.review || '',
+            status: numericRating > 0 ? 'Terminé' : normalizeStatus(media.status || 'À regarder'),
+            isFavorite: tagsList.includes('Favoris'),
+            isWatchlist: Boolean(media.is_watchlist),
+            runtime: '120 min',
+            supports,
+            support: media.support || null,
+            ratingCount: 1,
+            watchedInCinema: media.watched_in_cinema || false,
+            watchedDate: media.watched_date || '',
+            createdAt: media.created_at || '',
+            localStreamUrl: `http://hp-prodesk.local:8090/stream/${media.id}.mkv`,
+        };
+    } catch (itemError) {
+        console.error('Erreur mapping item', media?.title, itemError);
+        return null;
+    }
+};
+
 export default function BackstagePrototype() {
     const {user} = useAuth();
     const [movies, setMovies] = useState(INITIAL_MOVIES);
     const [collection, setCollection] = useState('Films');
     const [, setLoading] = useState(true);
     const [, setError] = useState(null);
-    const [activeFilter, setActiveFilter] = useState('all'); // 'all' | 'watched' | 'watchlist' | 'favorite'
+    const [activeFilter, setActiveFilter] = useState('all'); // 'all' | 'watched' | 'unwatched' | 'watchlist' | 'favorite'
     const [selectedMovie, setSelectedMovie] = useState(null);
     const libraryScrollTop = useRef(0);
     const [selectedSeries, setSelectedSeries] = useState(null);
@@ -97,9 +156,6 @@ export default function BackstagePrototype() {
     const [mediaServerError, setMediaServerError] = useState(null);
     const [mediaServerOptions, setMediaServerOptions] = useState(null);
     const [showAcquisitionModal, setShowAcquisitionModal] = useState(false);
-    const [showActivityModal, setShowActivityModal] = useState(false);
-    const [mediaActivity, setMediaActivity] = useState([]);
-    const [mediaDisks, setMediaDisks] = useState([]);
     const [availabilityByMedia, setAvailabilityByMedia] = useState({});
     const [rentalsByMedia, setRentalsByMedia] = useState({});
     const [actorQuery, setActorQuery] = useState('');
@@ -242,12 +298,9 @@ export default function BackstagePrototype() {
                 const onServer = Boolean(availability?.jellyfin_id)
                     || ['imported', 'available'].includes(availability?.state);
                 if (onServer) {
-                    setMovies((current) => current.map((movie) => movie.id === selectedMedia.id
-                        ? { ...movie, supports: ['Serveur'], support: 'Serveur' }
-                        : movie));
-                    setSelectedMovie((current) => current?.id === selectedMedia.id
-                        ? { ...current, supports: ['Serveur'], support: 'Serveur' }
-                        : current);
+                    refreshCanonicalMedia(selectedMedia.id).catch((error) => {
+                        console.error('Erreur de synchronisation du média serveur:', error);
+                    });
                 }
             })
             .catch(() => { if (!cancelled) setMediaAvailability(null); });
@@ -374,33 +427,6 @@ export default function BackstagePrototype() {
         }
     };
 
-    const openMediaActivity = async () => {
-        try {
-            setMediaServerError(null);
-            const activity = await fetchMediaServerActivity();
-            const items = activity.items || [];
-            setMediaActivity(items);
-            setMediaDisks(activity.disks || []);
-            setAvailabilityByMedia(Object.fromEntries(items.map(item => [item.media_id, item])));
-            setShowActivityModal(true);
-        } catch (error) { setMediaServerError(error.message); }
-    };
-
-    const refreshMediaActivity = async () => {
-        await syncMediaServer();
-        const activity = await fetchMediaServerActivity();
-        const items = activity.items || [];
-        setMediaActivity(items);
-        setMediaDisks(activity.disks || []);
-        setAvailabilityByMedia(Object.fromEntries(items.map(item => [item.media_id, item])));
-    };
-
-    const importMediaLibrary = async () => {
-        await importMediaServerLibrary();
-        await loadRealMedias();
-        await openMediaActivity();
-    };
-
     const handleRelinkMovie = async (mediaId, tmdbId) => {
         try {
             setLoading(true);
@@ -433,94 +459,28 @@ export default function BackstagePrototype() {
         }
     };
 
+    const replaceCanonicalMedia = (rawMedia) => {
+        const mapped = mapMediaToMovie(rawMedia);
+        if (!mapped) return null;
+        setMovies((current) => current.map((movie) => movie.id === mapped.id ? mapped : movie));
+        setSelectedMovie((current) => current?.id === mapped.id ? mapped : current);
+        setSelectedSeries((current) => current?.id === mapped.id ? mapped : current);
+        return mapped;
+    };
+
+    const refreshCanonicalMedia = async (mediaId) => {
+        const data = await fetchMedias();
+        const rawMedia = (data || []).find((media) => media.id === mediaId);
+        return rawMedia ? replaceCanonicalMedia(rawMedia) : null;
+    };
+
     // Load real movies from Python FastAPI backend
     const loadRealMedias = async () => {
         try {
             setLoading(true);
             const data = await fetchMedias();
             console.log('API Medias chargées:', data?.length);
-
-            const mapped = (data || []).map((m, index) => {
-                try {
-                    // Safe tags parsing
-                    let tagsList = [];
-                    if (Array.isArray(m.tags)) tagsList = m.tags;
-                    else if (typeof m.tags === 'string' && m.tags.trim()) {
-                        try { tagsList = JSON.parse(m.tags); } catch { tagsList = [m.tags]; }
-                    }
-                    const isFav = tagsList.includes('Favoris');
-
-                    // Robust parsing of numeric/half-star ratings
-                    let rawRating = 0;
-                    if (typeof m.rating === 'string' && m.rating.trim()) {
-                        const starMatches = m.rating.match(/⭐️|⭐|★/g);
-                        if (starMatches && starMatches.length > 0) {
-                            rawRating = starMatches.length;
-                        } else {
-                            rawRating = parseFloat(m.rating) || 0;
-                        }
-                    } else if (typeof m.rating === 'number') {
-                        rawRating = m.rating;
-                    }
-                    const numericRating = Math.min(5, Math.max(0, rawRating));
-
-                    // Robust cast array parsing
-                    let castList = [];
-                    if (Array.isArray(m.cast) && m.cast.length > 0) {
-                        castList = m.cast;
-                    } else if (typeof m.cast === 'string' && m.cast.trim()) {
-                        try {
-                            const parsed = JSON.parse(m.cast);
-                            if (Array.isArray(parsed) && parsed.length > 0) castList = parsed;
-                            else if (m.cast.trim()) castList = [m.cast];
-                        } catch {
-                            castList = [m.cast];
-                        }
-                    }
-
-                    // Robust categories parsing
-                    let catList = ['Film'];
-                    if (Array.isArray(m.categories) && m.categories.length > 0) catList = m.categories;
-                    else if (typeof m.categories === 'string' && m.categories.trim()) {
-                        try {
-                            const parsed = JSON.parse(m.categories);
-                            if (Array.isArray(parsed) && parsed.length > 0) catList = parsed;
-                        } catch {
-                            catList = [m.categories];
-                        }
-                    }
-
-                    return {
-                        id: m.id || `media-${index}`,
-                        type: m.type || 'Film',
-                        title: m.title || 'Sans titre',
-                        originalTitle: m.original_title || '',
-                        tmdbId: m.tmdb_id || null,
-                        director: m.director || 'Réalisateur inconnu',
-                        year: m.release_date ? (new Date(m.release_date).getFullYear() || '—') : '—',
-                        genre: catList,
-                        poster: m.cover_url || 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?auto=format&fit=crop&w=600&q=80',
-                        backdrop: m.backdrop_url || m.cover_url || 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=1200&q=80',
-                        synopsis: m.synopsis || 'Aucun synopsis disponible pour le moment.',
-                        cast: castList.length > 0 ? castList : ['Acteur principal'],
-                        rating: numericRating,
-                        userNotes: m.review || '',
-                        status: numericRating > 0 ? 'Terminé' : normalizeStatus(m.status || 'À regarder'),
-                        isFavorite: isFav,
-                        runtime: '120 min',
-                        supports: (m.support ? (m.support.startsWith('[') ? JSON.parse(m.support) : [m.support]) : []),
-                        support: m.support || null,
-                        ratingCount: 1,
-                        watchedInCinema: m.watched_in_cinema || false,
-                        watchedDate: m.watched_date || '',
-                        createdAt: m.created_at || '',
-                        localStreamUrl: `http://hp-prodesk.local:8090/stream/${m.id}.mkv`
-                    };
-                } catch (itemErr) {
-                    console.error('Erreur mapping item', m?.title, itemErr);
-                    return null;
-                }
-            }).filter(Boolean);
+            const mapped = (data || []).map(mapMediaToMovie).filter(Boolean);
 
             setMovies(mapped);
             setError(null);
@@ -540,7 +500,8 @@ export default function BackstagePrototype() {
     const collectionMedias = movies.filter((movie) => movie.type === (collection === 'Séries' ? 'Série' : 'Film'));
     const filteredMovies = filterAndSortMovies(collectionMedias, { ...filters, query: searchQuery }, sort)
         .filter(movie => activeFilter === 'all' || activeFilter === 'watched' ? activeFilter === 'all' || ['Terminé', 'Terminée'].includes(movie.status)
-            : activeFilter === 'watchlist' ? movie.status === 'À regarder' : movie.isFavorite);
+            : activeFilter === 'unwatched' ? !['Terminé', 'Terminée'].includes(movie.status)
+                : activeFilter === 'watchlist' ? movie.isWatchlist : movie.isFavorite);
 
     // Toggle Favorite
     const toggleFavorite = async (id, e) => {
@@ -549,31 +510,30 @@ export default function BackstagePrototype() {
         if (!target) return;
         const newFav = !target.isFavorite;
 
-        setMovies(prev =>
-            prev.map(m => m.id === id ? { ...m, isFavorite: newFav } : m)
-        );
-        if (selectedMovie && selectedMovie.id === id) {
-            setSelectedMovie(prev => prev ? { ...prev, isFavorite: newFav } : null);
-        }
-
         try {
-            await updatePersonalMedia(id, { is_favorite: newFav });
+            const updated = await updatePersonalMedia(id, { is_favorite: newFav });
+            replaceCanonicalMedia(updated);
         } catch (err) {
             console.error('API update failed:', err);
         }
     };
 
+    const toggleWatchlist = async (id) => {
+        const target = movies.find((movie) => movie.id === id);
+        if (!target) return;
+        try {
+            const updated = await updatePersonalMedia(id, { is_watchlist: !target.isWatchlist });
+            replaceCanonicalMedia(updated);
+        } catch (err) {
+            console.error('API Watchlist update failed:', err);
+        }
+    };
+
     // Update Rating
     const handleRate = async (id, rating) => {
-        setMovies(prev =>
-            prev.map(m => m.id === id ? { ...m, rating, status: 'Terminé' } : m)
-        );
-        if (selectedMovie && selectedMovie.id === id) {
-            setSelectedMovie(prev => prev ? { ...prev, rating, status: 'Terminé' } : null);
-        }
-
         try {
-            await updatePersonalMedia(id, { rating: String(rating), status: 'Terminé' });
+            const updated = await updatePersonalMedia(id, { rating: String(rating), status: 'Terminé' });
+            replaceCanonicalMedia(updated);
         } catch (err) {
             console.error('API update failed:', err);
         }
@@ -617,15 +577,9 @@ export default function BackstagePrototype() {
 
     // Update Status ("À regarder", "Terminé", "À télécharger", etc.)
     const handleStatusChange = async (id, newStatus) => {
-        setMovies(prev =>
-            prev.map(m => m.id === id ? { ...m, status: newStatus, rating: newStatus === 'À regarder' ? 0 : m.rating } : m)
-        );
-        if (selectedMovie && selectedMovie.id === id) {
-            setSelectedMovie(prev => prev ? { ...prev, status: newStatus, rating: newStatus === 'À regarder' ? 0 : prev.rating } : null);
-        }
-
         try {
-            await updatePersonalMedia(id, { status: newStatus });
+            const updated = await updatePersonalMedia(id, { status: newStatus });
+            replaceCanonicalMedia(updated);
         } catch (err) {
             console.error('API update status failed:', err);
         }
@@ -649,15 +603,9 @@ export default function BackstagePrototype() {
         const supportJson = JSON.stringify(currentSupports);
         const watchedInCinema = currentSupports.includes('Cinéma');
 
-        setMovies(prev =>
-            prev.map(m => m.id === id ? { ...m, supports: currentSupports, support: currentSupports[0], watchedInCinema } : m)
-        );
-        if (selectedMovie && selectedMovie.id === id) {
-            setSelectedMovie(prev => prev ? { ...prev, supports: currentSupports, support: currentSupports[0], watchedInCinema } : null);
-        }
-
         try {
             await updateMedia(id, { support: supportJson, watched_in_cinema: watchedInCinema });
+            await refreshCanonicalMedia(id);
         } catch (err) {
             console.error('API update support failed:', err);
         }
@@ -665,15 +613,9 @@ export default function BackstagePrototype() {
 
     // Update Notes
     const handleNotesChange = async (id, notes) => {
-        setMovies(prev =>
-            prev.map(m => m.id === id ? { ...m, userNotes: notes } : m)
-        );
-        if (selectedMovie && selectedMovie.id === id) {
-            setSelectedMovie(prev => prev ? { ...prev, userNotes: notes } : null);
-        }
-
         try {
-            await updatePersonalMedia(id, { review: notes });
+            const updated = await updatePersonalMedia(id, { review: notes });
+            replaceCanonicalMedia(updated);
         } catch (err) {
             console.error('API update failed:', err);
         }
@@ -1006,9 +948,6 @@ export default function BackstagePrototype() {
                         {user?.role === 'admin' && <button onClick={() => setShowAdminCenter(true)} className="rounded-lg border border-[#635bff]/40 px-3 py-2 text-xs font-semibold text-[#635bff]" title="Ouvrir l’administration">
                             Administration
                         </button>}
-                        <button onClick={() => setShowRecommendationFlow(true)} className="rounded-lg border px-3 py-2 text-xs font-semibold" title="Choisir un film">
-                            Choisir un film
-                        </button>
                         <button onClick={() => setShowAccountPanel(true)} className="rounded-lg border px-3 py-2 text-xs font-semibold" title="Ouvrir le compte">
                             {user?.display_name || 'Compte'}
                         </button>
@@ -1017,7 +956,7 @@ export default function BackstagePrototype() {
             </header>
 
             {showAccountPanel && <AccountPanel isDarkMode={isDarkMode} onClose={() => setShowAccountPanel(false)} />}
-            {showAdminCenter && user?.role === 'admin' && <AdminCenter isDarkMode={isDarkMode} onClose={() => setShowAdminCenter(false)} />}
+            {showAdminCenter && user?.role === 'admin' && <AdminCenter isDarkMode={isDarkMode} onClose={() => setShowAdminCenter(false)} onMediaChanged={loadRealMedias} />}
             {showRecommendationFlow && <RecommendationFlow isDarkMode={isDarkMode} onClose={() => setShowRecommendationFlow(false)} />}
 
             {/* Main App Layout with Dynamic Floating Sidebar */}
@@ -1041,7 +980,8 @@ export default function BackstagePrototype() {
                             {[
                                 { id: 'all', label: collection === 'Séries' ? 'Toutes les séries' : 'Tous les films', icon: '🎬', count: collectionMedias.length },
                                 { id: 'watched', label: collection === 'Séries' ? 'Séries terminées' : 'Films vus', icon: '👁️', count: collectionMedias.filter(m => ['Terminé', 'Terminée'].includes(m.status)).length },
-                                { id: 'watchlist', label: 'Watchlist', icon: '📌', count: collectionMedias.filter(m => m.status === 'À regarder').length },
+                                { id: 'watchlist', label: 'Watchlist', icon: '📌', count: collectionMedias.filter(m => m.isWatchlist).length },
+                                { id: 'unwatched', label: collection === 'Séries' ? 'Séries à regarder' : 'À regarder', icon: '🔖', count: collectionMedias.filter(m => !['Terminé', 'Terminée'].includes(m.status)).length },
                                 { id: 'favorite', label: 'Favoris', icon: '❤️', count: collectionMedias.filter(m => m.isFavorite).length },
                             ].map((item) => (
                                 <button
@@ -1069,6 +1009,22 @@ export default function BackstagePrototype() {
                                 </button>
                             ))}
                         </nav>
+
+                        <button
+                            type="button"
+                            onClick={() => setShowRecommendationFlow(true)}
+                            className="group relative mt-1 w-full overflow-hidden rounded-xl bg-gradient-to-br from-[#635bff] via-[#705cf6] to-[#a855f7] px-4 py-3 text-left text-white shadow-lg shadow-[#635bff]/25 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-[#635bff]/35"
+                            title="Choisir un film en quelques questions"
+                        >
+                            <span className="absolute -right-5 -top-7 h-20 w-20 rounded-full bg-white/20 blur-xl transition-transform duration-300 group-hover:scale-125" />
+                            <span className="relative flex items-center justify-between gap-2">
+                                <span>
+                                    <span className="block text-[10px] font-mono uppercase tracking-widest text-white/70">Sélection personnalisée</span>
+                                    <span className="mt-1 block text-sm font-semibold">✨ Choisir un film</span>
+                                </span>
+                                <span className="text-lg transition-transform duration-200 group-hover:translate-x-0.5">→</span>
+                            </span>
+                        </button>
                     </div>
 
                     {/* Genres Card */}
@@ -1124,16 +1080,16 @@ export default function BackstagePrototype() {
                             </span>
                             <h1 className={`text-3xl font-serif font-bold tracking-tight mt-1 ${isDarkMode ? 'text-white' : 'text-[#0a2540]'
                                 }`}>
-                                {collection === 'Séries' && (activeFilter === 'all' ? 'Toutes les séries' : activeFilter === 'watched' ? 'Séries terminées' : activeFilter === 'watchlist' ? 'Watchlist' : 'Favoris')}
+                                {collection === 'Séries' && (activeFilter === 'all' ? 'Toutes les séries' : activeFilter === 'watched' ? 'Séries terminées' : activeFilter === 'unwatched' ? 'Séries à regarder' : activeFilter === 'watchlist' ? 'Watchlist' : 'Favoris')}
                                 {collection === 'Films' && <>
                                 {activeFilter === 'all' && 'Tous les Films'}
                                 {activeFilter === 'watched' && 'Films Vus'}
+                                {activeFilter === 'unwatched' && 'À regarder'}
                                 {activeFilter === 'watchlist' && 'Watchlist'}
                                 {activeFilter === 'favorite' && 'Favoris'}
                                 </>}
                             </h1>
                         </div>
-                        {user?.role === 'admin' && <button onClick={openMediaActivity} className="rounded border px-2 py-1 text-xs text-[#635bff]">Activité serveur</button>}
                         <div className={`text-xs font-mono ${isDarkMode ? 'text-white/50' : 'text-[#425466]'
                             }`}>
                             {filteredMovies.length} Titre{filteredMovies.length > 1 ? 's' : ''} affiché{filteredMovies.length > 1 ? 's' : ''}
@@ -1291,7 +1247,10 @@ export default function BackstagePrototype() {
                                 <div className={`rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
                                     <p className="text-[10px] font-mono uppercase tracking-widest opacity-60">Informations</p>
                                     <div className="mt-3 grid grid-cols-2 gap-4 text-sm"><div><span className="block text-xs opacity-60">Créateur</span>{selectedSeries.director || '—'}</div><div><span className="block text-xs opacity-60">Statut</span>{selectedSeries.status || 'À regarder'}</div><div className="col-span-2"><span className="block text-xs opacity-60">Genres</span>{(selectedSeries.genre || []).join(' • ') || '—'}</div><div className="col-span-2"><span className="block text-xs opacity-60">Casting</span>{(selectedSeries.cast || []).join(' • ') || '—'}</div></div>
-                                    <div className="mt-4 flex flex-wrap gap-2">{['À regarder', 'Terminé', 'Watchlist'].map((status) => <button key={status} onClick={() => { handleStatusChange(selectedSeries.id, status); setSelectedSeries((current) => ({ ...current, status })); }} className={`rounded-lg border px-3 py-1.5 text-xs ${selectedSeries.status === status ? 'border-[#635bff] bg-[#635bff]/10 text-[#635bff]' : 'opacity-70'}`}>{status}</button>)}</div>
+                                    <div className="mt-4 flex flex-wrap gap-2">
+                                        {['À regarder', 'Terminé'].map((status) => <button key={status} onClick={() => handleStatusChange(selectedSeries.id, status)} className={`rounded-lg border px-3 py-1.5 text-xs ${selectedSeries.status === status ? 'border-[#635bff] bg-[#635bff]/10 text-[#635bff]' : 'opacity-70'}`}>{status}</button>)}
+                                        <button type="button" onClick={() => toggleWatchlist(selectedSeries.id)} className={`rounded-lg border px-3 py-1.5 text-xs ${selectedSeries.isWatchlist ? 'border-blue-500/40 bg-blue-500/10 text-blue-500' : 'opacity-70'}`}>📌 Watchlist</button>
+                                    </div>
                                 </div>
                             </div>}
 
@@ -1446,12 +1405,11 @@ export default function BackstagePrototype() {
                                         {[
                                             { id: 'À regarder', label: '🔖 À regarder', color: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
                                             { id: 'watched', label: '👁️ Terminé (Vu)', color: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' },
-                                            { id: 'watchlist', label: '📌 Watchlist', color: 'bg-blue-500/20 text-blue-300 border-blue-500/40' },
                                         ].map((st) => (
                                             <button
                                                 key={st.id}
                                                 onClick={() => handleStatusChange(selectedMovie.id, st.id)}
-                                                className={`text-xs px-3 py-1.5 rounded-lg border font-medium cursor-pointer transition-all ${selectedMovie.status === st.id
+                                                className={`text-xs px-3 py-1.5 rounded-lg border font-medium cursor-pointer transition-all ${(st.id === 'watched' ? ['Terminé', 'Terminée'].includes(selectedMovie.status) : selectedMovie.status === st.id)
                                                     ? `${st.color} font-bold shadow-sm scale-105`
                                                     : isDarkMode
                                                         ? 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10 hover:text-white'
@@ -1461,6 +1419,18 @@ export default function BackstagePrototype() {
                                                 {st.label}
                                             </button>
                                         ))}
+                                        <button
+                                            type="button"
+                                            onClick={() => toggleWatchlist(selectedMovie.id)}
+                                            className={`text-xs px-3 py-1.5 rounded-lg border font-medium cursor-pointer transition-all ${selectedMovie.isWatchlist
+                                                ? 'bg-blue-500/20 text-blue-500 border-blue-500/40 font-bold shadow-sm scale-105'
+                                                : isDarkMode
+                                                    ? 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10 hover:text-white'
+                                                    : 'bg-[#f6f9fc] border-[#e3e8ee] text-[#425466] hover:bg-[#ebeef3] hover:text-[#0a2540]'
+                                                }`}
+                                        >
+                                            📌 Watchlist
+                                        </button>
                                     </div>
                                 </div>
 
@@ -1852,15 +1822,6 @@ export default function BackstagePrototype() {
                     </div>
                 </div>
             )}
-
-            {showActivityModal && <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
-                <div className="w-full max-w-xl rounded-xl bg-white p-5 text-[#0a2540]">
-                    <div className="flex items-center justify-between"><h2 className="font-serif text-lg font-bold">Activité serveur</h2><button onClick={() => setShowActivityModal(false)}>×</button></div>
-                    <div className="mt-3 flex gap-2"><button onClick={refreshMediaActivity} className="rounded bg-[#635bff] px-3 py-1.5 text-xs text-white">Actualiser</button><button onClick={importMediaLibrary} className="rounded border px-3 py-1.5 text-xs">Importer la bibliothèque</button></div>
-                    <div className="mt-4 max-h-80 space-y-2 overflow-y-auto">{mediaActivity.length ? mediaActivity.map(item => <div key={item.media_id} className="rounded border p-3 text-sm"><strong>{item.provider}</strong> — {item.state}{item.progress_percent != null ? ` (${item.progress_percent}%)` : ''}{item.last_error && <p className="mt-1 text-xs text-red-600">{item.last_error}</p>}</div>) : <p className="text-sm text-slate-500">Aucune activité.</p>}</div>
-                    {mediaDisks.length > 0 && <div className="mt-4 border-t pt-3"><h3 className="text-xs font-bold uppercase tracking-wide">Espace disque</h3><div className="mt-2 grid grid-cols-2 gap-2">{mediaDisks.map((disk, index) => <div key={`${disk.provider}-${disk.path || index}`} className="rounded border p-2 text-xs"><strong>{disk.provider}</strong><br />{disk.path || 'Volume'}<br />{disk.freeSpace != null ? `${Math.round(disk.freeSpace / 1024 / 1024 / 1024)} Go libres` : 'Espace non communiqué'}</div>)}</div></div>}
-                </div>
-            </div>}
 
             {showAcquisitionModal && selectedMedia && (
                 <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
