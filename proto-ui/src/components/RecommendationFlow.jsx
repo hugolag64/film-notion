@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { answerRecommendation, recordRecommendationEvent, startRecommendationSession } from '../api';
+import { answerRecommendation, startRecommendationSession } from '../api';
 
 const posterUrl = (path) => path ? `https://image.tmdb.org/t/p/w500${path}` : null;
 
@@ -19,6 +19,7 @@ export default function RecommendationFlow({ isDarkMode, onClose }) {
     const [question, setQuestion] = useState(null);
     const [result, setResult] = useState(null);
     const [questionCount, setQuestionCount] = useState(0);
+    const [quota, setQuota] = useState(null);
     const [error, setError] = useState('');
 
     const start = async () => {
@@ -28,12 +29,13 @@ export default function RecommendationFlow({ isDarkMode, onClose }) {
             setResult(null);
             const response = await startRecommendationSession();
             setSession(response.session);
+            setQuota(response.quota || null);
             setQuestion(response.question);
             setQuestionCount(response.session?.question_count || 0);
             setState(response.state);
         } catch (requestError) {
             setError(requestError.message || 'Impossible de lancer la recommandation.');
-            setState('error');
+            setState(requestError.status === 429 ? 'quota_exhausted' : 'error');
         }
     };
 
@@ -43,10 +45,10 @@ export default function RecommendationFlow({ isDarkMode, onClose }) {
         if (!session?.id) return;
         try {
             setState('loading');
-            await recordRecommendationEvent({session_id: session.id, event_type: 'question_answered', value: payload.answer});
             const response = await answerRecommendation(session.id, payload);
             setQuestion(response.question);
             setResult(response.result);
+            setQuota(response.quota || quota);
             setQuestionCount((current) => current + 1);
             setState(response.state);
         } catch (requestError) {
@@ -62,14 +64,15 @@ export default function RecommendationFlow({ isDarkMode, onClose }) {
     return <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/80 p-3 backdrop-blur-md sm:p-6" onClick={onClose}>
         <section className={`flex h-[min(94vh,820px)] w-full max-w-5xl flex-col overflow-y-auto rounded-2xl border shadow-2xl ${panel} ${text}`} onClick={(event) => event.stopPropagation()}>
             <header className="flex items-center justify-between gap-4 border-b border-inherit px-5 py-4 sm:px-8">
-                <div><p className="text-[10px] font-mono uppercase tracking-[0.24em] text-[#635bff]">Sélection personnelle</p><h2 className="mt-1 text-2xl font-semibold">Trouve ton prochain film</h2></div>
+                <div><p className="text-[10px] font-mono uppercase tracking-[0.24em] text-[#635bff]">Sélection personnelle</p><h2 className="mt-1 text-2xl font-semibold">Trouve ton prochain film</h2>{quota && <p className={`mt-1 text-xs ${muted}`}>{quota.unlimited ? 'Sessions illimitées' : `${quota.remaining} session${quota.remaining > 1 ? 's' : ''} restante${quota.remaining > 1 ? 's' : ''} aujourd’hui`}</p>}</div>
                 <button type="button" onClick={onClose} className="rounded-lg border px-3 py-2 text-xs font-semibold">Fermer</button>
             </header>
             <main className="flex flex-1 flex-col justify-center px-5 py-8 sm:px-12">
                 {state === 'loading' && <p className={`text-center ${muted}`}>Je cherche une piste qui te ressemble…</p>}
+                {state === 'quota_exhausted' && <div className="mx-auto max-w-md text-center"><p className={`text-lg ${muted}`}>Tu as utilisé tes 2 sélections du jour.</p><p className={`mt-2 text-sm ${muted}`}>La prochaine session sera disponible demain.</p><button type="button" onClick={onClose} className="mt-5 rounded-lg border px-4 py-2 text-sm font-semibold">Fermer</button></div>}
                 {state === 'error' && <div className="mx-auto max-w-md text-center"><p className="text-rose-500">{error}</p><button type="button" onClick={start} className="mt-5 rounded-lg bg-[#635bff] px-4 py-2 text-sm font-semibold text-white">Réessayer</button></div>}
                 {state === 'empty' && <div className="mx-auto max-w-md text-center"><p className={`text-lg ${muted}`}>Je n’ai pas encore assez de données pour te proposer un film.</p><button type="button" onClick={start} className="mt-5 rounded-lg border px-4 py-2 text-sm font-semibold">Recommencer</button></div>}
-                {state === 'question' && question && <div className="mx-auto w-full max-w-3xl"><div className="mb-8 flex items-center justify-between text-xs"><span className={muted}>Affinons la sélection</span><span className="font-mono text-[#635bff]">{questionCount + 1} / 10</span></div><h3 className="mb-7 text-center text-2xl font-semibold">{question.prompt}</h3>{question.type === 'compare' ? <div className="grid gap-5 sm:grid-cols-2">{question.options.map((option) => <PosterCard key={option.tmdb_id} option={option} onSelect={(selected) => answer({answer: 'picked', value: String(selected.tmdb_id)})} isDarkMode={isDarkMode} />)}</div> : <div className="mx-auto max-w-sm"><PosterCard option={question.options[0]} onSelect={(selected) => answer({answer: 'picked', value: String(selected.tmdb_id)})} isDarkMode={isDarkMode} /></div>}<div className="mt-7 flex flex-wrap justify-center gap-2"><button type="button" onClick={() => answer({answer: 'light'})} className="rounded-full border px-3 py-2 text-xs">Plus léger</button><button type="button" onClick={() => answer({answer: 'intense'})} className="rounded-full border px-3 py-2 text-xs">Plus intense</button><button type="button" onClick={() => answer({answer: 'surprise'})} className="rounded-full border px-3 py-2 text-xs">Surprise</button></div></div>}
+                {state === 'question' && question && <div className="mx-auto w-full max-w-3xl"><div className="mb-8 flex items-center justify-between text-xs"><span className={muted}>Affinons la sélection</span><span className="font-mono text-[#635bff]">{questionCount + 1} / 5</span></div><h3 className="mb-7 text-center text-2xl font-semibold">{question.prompt}</h3>{question.type === 'compare' ? <div className="grid gap-5 sm:grid-cols-2">{question.options.map((option) => <PosterCard key={option.tmdb_id} option={option} onSelect={(selected) => answer({answer: 'picked', value: String(selected.tmdb_id)})} isDarkMode={isDarkMode} />)}</div> : <div className="mx-auto max-w-sm"><PosterCard option={question.options[0]} onSelect={(selected) => answer({answer: 'picked', value: String(selected.tmdb_id)})} isDarkMode={isDarkMode} /></div>}<div className="mt-7 flex flex-wrap justify-center gap-2"><button type="button" onClick={() => answer({answer: 'light'})} className="rounded-full border px-3 py-2 text-xs">Plus léger</button><button type="button" onClick={() => answer({answer: 'intense'})} className="rounded-full border px-3 py-2 text-xs">Plus intense</button><button type="button" onClick={() => answer({answer: 'not_now'})} className="rounded-full border px-3 py-2 text-xs">Pas maintenant</button><button type="button" onClick={() => answer({answer: 'less_like_this'})} className="rounded-full border px-3 py-2 text-xs">Pas mon style</button><button type="button" onClick={() => answer({answer: 'already_seen'})} className="rounded-full border px-3 py-2 text-xs">Déjà vu</button><button type="button" onClick={() => answer({answer: 'surprise'})} className="rounded-full border px-3 py-2 text-xs">Surprise</button></div></div>}
                 {state === 'result' && result && <div className="mx-auto w-full max-w-2xl text-center"><p className={`text-xs uppercase tracking-[0.2em] ${muted}`}>Ma recommandation</p><div className="mx-auto mt-5 max-w-xs"><PosterCard option={result} onSelect={() => {}} isDarkMode={isDarkMode} /></div><p className={`mt-5 text-sm ${muted}`}>Choisi à partir de tes notes, de ton historique et de tes réponses.</p><div className="mt-6 flex justify-center gap-2"><button type="button" onClick={start} className="rounded-lg bg-[#635bff] px-4 py-2 text-sm font-semibold text-white">Nouvelle sélection</button><button type="button" onClick={onClose} className="rounded-lg border px-4 py-2 text-sm font-semibold">Retour à la bibliothèque</button></div></div>}
             </main>
         </section>
