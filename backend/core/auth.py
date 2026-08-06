@@ -22,6 +22,7 @@ class AuthUser(TypedDict):
     email: str
     role: str
     is_active: bool
+    jellyfin_user_id: str | None
 
 
 def hash_password(password: str) -> str:
@@ -75,6 +76,15 @@ class AuthStore:
                     updated_at TEXT NOT NULL
                 )
                 """
+            )
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(users)").fetchall()
+            }
+            if "jellyfin_user_id" not in columns:
+                connection.execute("ALTER TABLE users ADD COLUMN jellyfin_user_id TEXT")
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_jellyfin_user_id "
+                "ON users(jellyfin_user_id) WHERE jellyfin_user_id IS NOT NULL"
             )
             connection.execute(
                 """
@@ -132,6 +142,7 @@ class AuthStore:
             "email": row["email"],
             "role": row["role"],
             "is_active": bool(row["is_active"]),
+            "jellyfin_user_id": row["jellyfin_user_id"],
         }
 
     @staticmethod
@@ -411,6 +422,30 @@ class AuthStore:
             connection.row_factory = sqlite3.Row
             rows = connection.execute("SELECT * FROM users ORDER BY created_at").fetchall()
         return [self._row_to_user(row) for row in rows]
+
+    def set_jellyfin_user_id(
+        self, user_id: str, jellyfin_user_id: str | None,
+    ) -> AuthUser:
+        normalized_id = jellyfin_user_id.strip() if jellyfin_user_id else None
+        with sqlite3.connect(self.db_path) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM users WHERE id = ?", (user_id,)
+            ).fetchone()
+            if not row:
+                raise ValueError("user not found")
+            try:
+                connection.execute(
+                    "UPDATE users SET jellyfin_user_id = ?, updated_at = ? WHERE id = ?",
+                    (normalized_id, self._now().isoformat(), user_id),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError("jellyfin user already linked") from error
+            refreshed = connection.execute(
+                "SELECT * FROM users WHERE id = ?", (user_id,)
+            ).fetchone()
+            return self._row_to_user(refreshed)
 
     def update_user(self, user_id: str, fields: dict[str, object]) -> AuthUser:
         allowed = {"display_name", "email", "role", "is_active"}

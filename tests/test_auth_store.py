@@ -203,3 +203,36 @@ def test_admin_set_password_revokes_all_sessions(tmp_path):
 
     assert store.user_from_token(token) is None
     assert store.authenticate("paul@example.com", "new-password", False, "Browser")[0] == user
+
+
+def test_jellyfin_user_link_can_be_changed_and_removed(tmp_path):
+    db = tmp_path / "backstage.db"
+    store = AuthStore(str(db))
+    store.init_schema()
+    store.create_admin("Hugo", "hugo@example.com", "Correct Horse Battery Staple")
+    user = store.create_user("Ophélie", "ophelie@example.com", "12345678")
+
+    linked = store.set_jellyfin_user_id(user["id"], "jf-ophelie")
+    assert linked["jellyfin_user_id"] == "jf-ophelie"
+    assert store.list_users()[1]["jellyfin_user_id"] == "jf-ophelie"
+
+    changed = store.set_jellyfin_user_id(user["id"], "jf-ophelie-2")
+    assert changed["jellyfin_user_id"] == "jf-ophelie-2"
+
+    unlinked = store.set_jellyfin_user_id(user["id"], None)
+    assert unlinked["jellyfin_user_id"] is None
+
+
+def test_jellyfin_user_link_rejects_duplicates_and_missing_users(tmp_path):
+    db = tmp_path / "backstage.db"
+    store = AuthStore(str(db))
+    store.init_schema()
+    store.create_admin("Hugo", "hugo@example.com", "Correct Horse Battery Staple")
+    first = store.create_user("Hugo 2", "hugo2@example.com", "12345678")
+    second = store.create_user("Ophélie", "ophelie@example.com", "12345678")
+
+    store.set_jellyfin_user_id(first["id"], "jf-shared")
+    with pytest.raises(ValueError, match="jellyfin user already linked"):
+        store.set_jellyfin_user_id(second["id"], "jf-shared")
+    with pytest.raises(ValueError, match="user not found"):
+        store.set_jellyfin_user_id("missing", "jf-missing")
