@@ -787,6 +787,17 @@ L’interface doit rester moderne et cinématographique : affiches centrées, pr
 
 ---
 
+### Etat d'implementation du mode « Choisir un film »
+
+- [x] Persistance SQLite partagee, isolee par `backstage_user_id`, pour les preferences et les usages IA.
+- [x] Signaux distincts : films affiches, choisis, ignores, « pas maintenant », « pas mon style », deja vus et refus durable.
+- [x] Moteur local de score : notes, visionnage, genres TMDB, favoris, liste « A voir », nouveaute, exploration et diversite.
+- [x] Questions adaptatives avec un maximum de 5 questions et anti-repetition dans la session.
+- [x] Deux sessions quotidiennes par utilisateur, fuseau Europe/Paris, administrateur illimite.
+- [x] Passerelle Gemini optionnelle a deux appels maximum par session, avec validation des IDs TMDB, suivi des tokens et fallback local.
+- [x] Interface moderne : progression 1/5, quota visible et retours « Pas maintenant », « Pas mon style », « Deja vu » et « Surprise ».
+- [ ] Sauvegardes et maintenance disque : reportees jusqu'a la reception du disque dedie.
+
 ## 13. Notifications
 
 Des notifications doivent être prévues pour les événements importants.

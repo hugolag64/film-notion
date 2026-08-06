@@ -121,6 +121,129 @@ def build_taste_profile(
     )
 
 
+def _parse_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def is_candidate_eligible(preference: dict[str, Any] | None, now: datetime) -> bool:
+    if not preference:
+        return True
+    if preference.get("disposition") in {"hard_reject", "already_seen"}:
+        return False
+    # Temporary dispositions remain eligible for the durable profile; the
+    # caller may lower their score until expires_at instead of banning them.
+    return True
+
+
+def apply_recommendation_signal(
+    profile: TasteProfile,
+    event_type: str,
+    value: str | None,
+    weight: float,
+    now: datetime,
+) -> TasteProfile:
+    updated = profile.model_copy(deep=True)
+    if event_type in {"shown", "skipped", "not_now", "already_seen", "hard_reject"} or not value:
+        return updated
+    current = updated.genre_affinity.get(value, 0.0)
+    updated.genre_affinity[value] = round(max(-1.0, min(1.0, current + weight)), 4)
+    return updated
+
+
+def _candidate_field(candidate: dict[str, Any] | RecommendationCandidate, field: str, default: Any = None) -> Any:
+    if isinstance(candidate, RecommendationCandidate):
+        return getattr(candidate, field, default)
+    return candidate.get(field, default)
+
+
+def score_recommendation_candidate(
+    candidate: dict[str, Any] | RecommendationCandidate,
+    profile: TasteProfile,
+    session_preferences: dict[str, Any],
+    exclusions: dict[str, Any] | set[int] | None,
+    now: datetime,
+) -> RecommendationCandidate:
+    tmdb_id = int(_candidate_field(candidate, "tmdb_id"))
+    exclusions = {"seen_tmdb_ids": exclusions} if isinstance(exclusions, set) else (exclusions or {})
+    if tmdb_id in set(exclusions.get("seen_tmdb_ids", set())) or tmdb_id in set(exclusions.get("hard_reject_tmdb_ids", set())):
+        return RecommendationCandidate(
+            tmdb_id=tmdb_id, title=_candidate_field(candidate, "title", "Sans titre") or "Sans titre", score=-1,
+            overview=_candidate_field(candidate, "overview", "") or "", genre_ids=_candidate_field(candidate, "genre_ids", []) or [],
+        )
+    genre_ids = _candidate_field(candidate, "genre_ids", []) or []
+    genres = [TMDB_GENRE_NAMES.get(genre_id, str(genre_id)) for genre_id in genre_ids]
+    matching_affinities = [profile.genre_affinity.get(genre, 0) for genre in genres]
+    taste = sum(matching_affinities) / len(matching_affinities) if matching_affinities else 0.5 * (1 - profile.confidence)
+    session = 1 if session_preferences.get("genre") in genres else 0
+    if tmdb_id in session_preferences.get("preferred_tmdb_ids", []):
+        session = 1
+    if session_preferences.get("mood") == "light" and "Comédie" in genres:
+        session += 0.5
+    if session_preferences.get("mood") == "intense" and any(genre in genres for genre in ("Thriller", "Action", "Horreur")):
+        session += 0.5
+    session = min(1, session)
+    quality = min(1, max(0, float(_candidate_field(candidate, "vote_average", 0) or 0) / 10))
+    list_bonus = 1 if tmdb_id in set(exclusions.get("watchlisted_tmdb_ids", set())) else 0
+    novelty = 1 if profile.confidence > 0 and not matching_affinities else 0.5
+    exploration = 0.09 if profile.confidence else 0.18
+    temporary_penalty = float(exclusions.get("temporary_negative_tmdb_ids", {}).get(tmdb_id, 0))
+    score = (
+        SCORE_WEIGHTS["taste"] * taste + (SCORE_WEIGHTS["session"] + 0.07) * session
+        + SCORE_WEIGHTS["tmdb_quality"] * quality + SCORE_WEIGHTS["list_bonus"] * list_bonus
+        + SCORE_WEIGHTS["novelty"] * novelty + exploration * novelty - temporary_penalty
+    )
+    reasons = ["not_seen"]
+    if matching_affinities and max(matching_affinities) >= 0.7:
+        reasons.insert(0, "genre_match")
+    if list_bonus:
+        reasons.append("watchlist_bonus")
+    if session:
+        reasons.append("session_match")
+    reasons.append("exploration")
+    return RecommendationCandidate(
+        tmdb_id=tmdb_id, title=_candidate_field(candidate, "title", "Sans titre") or "Sans titre",
+        overview=_candidate_field(candidate, "overview", "") or "", score=round(score, 6), reasons=reasons,
+        genre_ids=genre_ids, poster_path=_candidate_field(candidate, "poster_path"),
+        backdrop_path=_candidate_field(candidate, "backdrop_path"), release_date=_candidate_field(candidate, "release_date"),
+        vote_average=float(_candidate_field(candidate, "vote_average", 0) or 0),
+    )
+
+
+def build_adaptive_question(
+    candidates: list[dict[str, Any] | RecommendationCandidate],
+    profile: TasteProfile,
+    session_preferences: dict[str, Any],
+) -> dict[str, Any] | None:
+    eligible = [item for item in candidates if float(_candidate_field(item, "score", 0) or 0) >= 0]
+    if not eligible:
+        return None
+    ordered = sorted(eligible, key=lambda item: float(_candidate_field(item, "score", 0) or 0), reverse=True)
+    first = ordered[0]
+    first_genres = set(_candidate_field(first, "genre_ids", []) or [])
+    second = next((item for item in ordered[1:] if not first_genres.intersection(_candidate_field(item, "genre_ids", []) or [])), None)
+    second = second or (ordered[1] if len(ordered) > 1 else None)
+
+    def serialize(item: dict[str, Any] | RecommendationCandidate) -> dict[str, Any]:
+        if isinstance(item, RecommendationCandidate):
+            return item.model_dump(mode="json")
+        return score_recommendation_candidate(item, profile, session_preferences, {}, datetime.now(timezone.utc)).model_dump(mode="json")
+
+    options = [serialize(first)] + ([serialize(second)] if second else [])
+    return {
+        "type": "compare" if len(options) == 2 else "single",
+        "prompt": "Tu préfères lequel ?" if len(options) == 2 else "Voici une piste pour toi.",
+        "options": options,
+    }
+
+
 def score_candidate(
     candidate: dict[str, Any],
     profile: TasteProfile,
