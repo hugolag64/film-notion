@@ -189,6 +189,12 @@ export async function fetchCleanupPreview() {
     return response.json();
 }
 
+export async function fetchStorageStatus() {
+    const response = await fetch(`${API_BASE_URL}/admin/storage/status`);
+    if (!response.ok) throw new Error((await response.json()).detail || 'Stockage indisponible');
+    return response.json();
+}
+
 async function rentalDecision(rentalId, action) {
     const response = await fetch(`${API_BASE_URL}/admin/rentals/${rentalId}/${action}`, {method: 'POST'});
     if (!response.ok) throw new Error((await response.json()).detail || 'Action impossible');

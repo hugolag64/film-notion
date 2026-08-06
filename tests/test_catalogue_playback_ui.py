@@ -52,3 +52,11 @@ def test_cleanup_simulation_is_available_to_admins():
     assert "Aperçu du nettoyage (simulation)" in account
     assert "Aucune suppression réelle" in account
     assert "fetchCleanupPreview" in api
+
+
+def test_storage_quota_controls_are_visible():
+    account = ACCOUNT_SOURCE.read_text(encoding="utf-8")
+    api = API_SOURCE.read_text(encoding="utf-8")
+
+    assert "Espace de stockage" in account
+    assert "fetchStorageStatus" in api

@@ -484,6 +484,56 @@ def test_cleanup_preview_is_admin_only_and_does_not_delete(tmp_path, monkeypatch
     assert client.get("/api/admin/rentals/cleanup-preview").status_code == 403
 
 
+def test_regular_acquisition_is_blocked_when_storage_is_low(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    paul = client.post("/api/auth/users", json={
+        "display_name": "Paul", "email": "paul@example.com", "password": "12345678",
+    }).json()["user"]
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={
+        "email": "paul@example.com", "password": "12345678", "remember_device": False,
+    })
+    media = asyncio.run(MediaStore(Config.DB_PATH).create({
+        "id": "low-space", "title": "Low space", "type": "Film", "tmdb_id": 1,
+    }))
+
+    class LowStorageService:
+        store = MediaStore(Config.DB_PATH)
+
+        async def storage_status(self):
+            return {"min_free_bytes": 1, "temporary_bytes": 0}
+
+        async def add(self, *args):
+            raise AssertionError("the media service must not be called when storage is low")
+
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: LowStorageService()
+    response = client.post(f"/api/medias/{media.id}/acquisition", json={})
+
+    assert response.status_code == 507
+
+
+def test_storage_status_is_admin_only(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+
+    class StorageService:
+        async def storage_status(self):
+            return {"min_free_gb": 40, "temporary_gb": 2}
+
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: StorageService()
+    assert client.get("/api/admin/storage/status").json() == {"min_free_gb": 40, "temporary_gb": 2}
+
+    client.post("/api/auth/users", json={
+        "display_name": "Paul", "email": "paul@example.com", "password": "12345678",
+    })
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={
+        "email": "paul@example.com", "password": "12345678", "remember_device": False,
+    })
+    assert client.get("/api/admin/storage/status").status_code == 403
+
+
 def test_media_activity_is_admin_only(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     _setup(client)

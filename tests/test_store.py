@@ -254,3 +254,16 @@ def test_cleanup_preview_only_marks_unprotected_expired_rentals(tmp_path):
     assert reasons["kept-rental"] == "permanent"
     assert actions["pending-rental"] == "protected"
     assert reasons["pending-rental"] == "conservation_pending"
+
+
+def test_active_temporary_storage_is_counted_per_user(tmp_path):
+    store = _store(tmp_path)
+    media = asyncio.run(store.create({"title": "Dune", "type": "Film"}))
+    now = datetime.now(timezone.utc)
+    asyncio.run(store.create_rental(Rental(
+        id="sized-rental", media_id=media.id, backstage_user_id="hugo", status="available",
+        size_bytes=3 * 1024**3, requested_at=now, created_at=now, updated_at=now,
+    )))
+
+    assert asyncio.run(store.active_temporary_bytes("hugo")) == 3 * 1024**3
+    assert asyncio.run(store.active_temporary_bytes("other")) == 0

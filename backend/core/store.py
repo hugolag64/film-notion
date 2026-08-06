@@ -99,6 +99,7 @@ class MediaStore:
                     expires_at TEXT,
                     keep_requested_at TEXT,
                     storage_policy TEXT NOT NULL DEFAULT 'temporary',
+                    size_bytes INTEGER,
                     keep_decision TEXT,
                     decided_by TEXT,
                     decided_at TEXT,
@@ -111,6 +112,8 @@ class MediaStore:
             rental_columns = {row[1] for row in conn.execute("PRAGMA table_info(media_rentals)").fetchall()}
             if "storage_policy" not in rental_columns:
                 conn.execute("ALTER TABLE media_rentals ADD COLUMN storage_policy TEXT NOT NULL DEFAULT 'temporary'")
+            if "size_bytes" not in rental_columns:
+                conn.execute("ALTER TABLE media_rentals ADD COLUMN size_bytes INTEGER")
             if "keep_decision" not in rental_columns:
                 conn.execute("ALTER TABLE media_rentals ADD COLUMN keep_decision TEXT")
             if "decided_by" not in rental_columns:
@@ -500,6 +503,20 @@ class MediaStore:
             ).fetchone()
         return int(row[0])
 
+    def _active_temporary_bytes_sync(self, user_id: Optional[str] = None) -> int:
+        placeholders = ", ".join("?" for _ in _ACTIVE_RENTAL_STATES)
+        query = (
+            "SELECT COALESCE(SUM(size_bytes), 0) FROM media_rentals "
+            "WHERE storage_policy = 'temporary' AND status IN (" + placeholders + ")"
+        )
+        params: tuple[Any, ...] = (*_ACTIVE_RENTAL_STATES,)
+        if user_id is not None:
+            query += " AND backstage_user_id = ?"
+            params += (user_id,)
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(query, params).fetchone()
+        return int(row[0] or 0)
+
     def _find_active_rental_sync(self, user_id: str, media_id: str) -> Optional[Rental]:
         placeholders = ", ".join("?" for _ in _ACTIVE_RENTAL_STATES)
         with sqlite3.connect(self.db_path) as conn:
@@ -514,7 +531,7 @@ class MediaStore:
     def _update_rental_sync(self, rental_id: str, updates: Dict[str, Any]) -> Optional[Rental]:
         allowed = {
             "status", "available_at", "first_played_at", "expires_at", "keep_requested_at",
-            "storage_policy", "keep_decision", "decided_by", "decided_at", "updated_at",
+            "storage_policy", "size_bytes", "keep_decision", "decided_by", "decided_at", "updated_at",
         }
         values = {key: value for key, value in updates.items() if key in allowed}
         values["updated_at"] = values.get("updated_at") or datetime.now(timezone.utc)
@@ -620,14 +637,18 @@ class MediaStore:
             )
         return cursor.rowcount > 0
 
-    def _mark_rentals_available_sync(self, media_id: str, available_at: datetime, expires_at: datetime) -> int:
+    def _mark_rentals_available_sync(
+        self, media_id: str, available_at: datetime, expires_at: datetime,
+        size_bytes: Optional[int] = None,
+    ) -> int:
         active_states = ("requested", "downloading", "available")
         placeholders = ", ".join("?" for _ in active_states)
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
                 f"UPDATE media_rentals SET status = 'available', available_at = COALESCE(available_at, ?), "
-                f"expires_at = COALESCE(expires_at, ?), updated_at = ? WHERE media_id = ? AND status IN ({placeholders})",
-                (available_at.isoformat(), expires_at.isoformat(), available_at.isoformat(), media_id, *active_states),
+                f"expires_at = COALESCE(expires_at, ?), size_bytes = COALESCE(size_bytes, ?), updated_at = ? "
+                f"WHERE media_id = ? AND status IN ({placeholders})",
+                (available_at.isoformat(), expires_at.isoformat(), size_bytes, available_at.isoformat(), media_id, *active_states),
             )
         return cursor.rowcount
 
@@ -875,6 +896,9 @@ class MediaStore:
     async def count_active_rentals(self, user_id: str) -> int:
         return await asyncio.to_thread(self._count_active_rentals_sync, user_id)
 
+    async def active_temporary_bytes(self, user_id: Optional[str] = None) -> int:
+        return await asyncio.to_thread(self._active_temporary_bytes_sync, user_id)
+
     async def find_active_rental(self, user_id: str, media_id: str) -> Optional[Rental]:
         return await asyncio.to_thread(self._find_active_rental_sync, user_id, media_id)
 
@@ -901,8 +925,11 @@ class MediaStore:
     async def mark_notification_read(self, notification_id: str, user_id: str, read_at: datetime) -> bool:
         return await asyncio.to_thread(self._mark_notification_read_sync, notification_id, user_id, read_at)
 
-    async def mark_rentals_available(self, media_id: str, available_at: datetime, expires_at: datetime) -> int:
-        return await asyncio.to_thread(self._mark_rentals_available_sync, media_id, available_at, expires_at)
+    async def mark_rentals_available(
+        self, media_id: str, available_at: datetime, expires_at: datetime,
+        size_bytes: Optional[int] = None,
+    ) -> int:
+        return await asyncio.to_thread(self._mark_rentals_available_sync, media_id, available_at, expires_at, size_bytes)
 
     async def mark_rental_first_played(
         self, user_id: str, media_id: str, first_played_at: datetime, expires_at: datetime,

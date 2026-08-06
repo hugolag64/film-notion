@@ -21,6 +21,14 @@ class FakeRadarr:
         return self.queue
 
 
+class FakeDiskRadarr(FakeRadarr):
+    async def disk_space(self):
+        return [
+            {"path": "/", "freeSpace": 300 * 1024**3},
+            {"path": "/data", "freeSpace": 40 * 1024**3},
+        ]
+
+
 class FakeSeerr:
     def __init__(self):
         self.calls = []
@@ -192,6 +200,24 @@ def test_activity_returns_availability_items_and_disks(tmp_path):
     activity = asyncio.run(service.activity())
 
     assert set(activity) == {"items", "disks"}
+
+
+def test_storage_status_uses_data_disk_and_active_temporary_bytes(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    media = asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film"}))
+    now = datetime.now(timezone.utc)
+    asyncio.run(store.create_rental(Rental(
+        id="rental", media_id=media.id, backstage_user_id="hugo", status="available",
+        size_bytes=2 * 1024**3, requested_at=now, created_at=now, updated_at=now,
+    )))
+    service = MediaServerService(store, radarr=FakeDiskRadarr())
+
+    status = asyncio.run(service.storage_status())
+
+    assert status["min_free_bytes"] == 40 * 1024**3
+    assert status["temporary_bytes"] == 2 * 1024**3
+    assert status["low_space"] is False
 
 
 def test_playback_manifest_returns_available_jellyfin_item(tmp_path):

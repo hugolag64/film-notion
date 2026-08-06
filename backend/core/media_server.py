@@ -6,6 +6,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 from backend.core.playback import PlaybackProgress
+from backend.config import Config
 
 
 AvailabilityState = Literal[
@@ -109,8 +110,12 @@ class MediaServerService:
             saved = await self.store.upsert_availability(availability)
             if availability.state == "available" and availability.jellyfin_id:
                 available_at = datetime.now(timezone.utc)
+                size_bytes = remote.get("sizeOnDisk")
+                if not isinstance(size_bytes, (int, float)) or size_bytes < 0:
+                    size_bytes = None
                 await self.store.mark_rentals_available(
                     media.id, available_at, available_at + timedelta(days=21),
+                    int(size_bytes) if size_bytes is not None else None,
                 )
             if remote.get("hasFile") and not media.support:
                 await self.store.update(media.id, {"support": "Serveur"})
@@ -195,6 +200,34 @@ class MediaServerService:
         return {
             "items": [availability.model_dump(mode="json") for availability in await self.store.list_availabilities()],
             "disks": disks,
+        }
+
+    async def storage_status(self) -> dict[str, Any]:
+        activity = await self.activity()
+        disks = activity["disks"]
+        data_disks = [
+            disk for disk in disks
+            if str(disk.get("path", "")).startswith("/data")
+        ]
+        relevant_disks = data_disks or disks
+        free_values = [
+            int(disk["freeSpace"])
+            for disk in relevant_disks
+            if isinstance(disk.get("freeSpace"), (int, float))
+        ]
+        min_free_bytes = min(free_values) if free_values else None
+        temporary_bytes = await self.store.active_temporary_bytes()
+        return {
+            "min_free_bytes": min_free_bytes,
+            "min_free_gb": round(min_free_bytes / 1024**3, 2) if min_free_bytes is not None else None,
+            "temporary_bytes": temporary_bytes,
+            "temporary_gb": round(temporary_bytes / 1024**3, 2),
+            "min_free_threshold_bytes": Config.min_free_bytes(),
+            "min_free_threshold_gb": Config.MIN_FREE_GB,
+            "temporary_max_bytes": Config.temporary_max_bytes(),
+            "temporary_max_gb": Config.TEMPORARY_MAX_GB,
+            "low_space": min_free_bytes is not None and min_free_bytes < Config.min_free_bytes(),
+            "temporary_quota_reached": temporary_bytes >= Config.temporary_max_bytes(),
         }
 
     async def sync_playback(self, backstage_user_id: str, jellyfin_user_id: str) -> dict[str, int]:

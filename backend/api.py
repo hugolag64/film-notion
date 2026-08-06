@@ -502,6 +502,17 @@ async def request_acquisition(
             }
         if await service.store.count_active_rentals(owner_id) >= MAX_ACTIVE_RENTALS:
             raise HTTPException(status_code=409, detail="Limite de 5 locations actives atteinte")
+        if hasattr(service, "storage_status"):
+            storage = await service.storage_status()
+            if storage.get("low_space") or (
+                storage.get("min_free_bytes") is not None
+                and storage["min_free_bytes"] < Config.min_free_bytes()
+            ):
+                raise HTTPException(status_code=507, detail="Espace disque insuffisant pour une nouvelle location")
+            if storage.get("temporary_quota_reached") or (
+                storage.get("temporary_bytes", 0) >= Config.temporary_max_bytes()
+            ):
+                raise HTTPException(status_code=507, detail="Quota de stockage temporaire atteint")
     try:
         availability = await service.add(
             media, payload.quality_profile_id, payload.root_folder,
@@ -697,6 +708,14 @@ async def import_media_server_library(service: MediaServerService = Depends(get_
 @router.get("/media-server/activity", dependencies=[Depends(require_admin)])
 async def media_server_activity(service: MediaServerService = Depends(get_media_server_service)):
     return await service.activity()
+
+
+@router.get("/admin/storage/status")
+async def admin_storage_status(
+    _: AuthContext = Depends(require_admin),
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    return await service.storage_status()
 
 
 def _serialize_playback_summary(summary: dict[str, Any]) -> dict[str, Any]:

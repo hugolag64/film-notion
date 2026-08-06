@@ -18,6 +18,8 @@ class Config:
     JELLYFIN_API_KEY = os.getenv("JELLYFIN_API_KEY")
     JELLYFIN_SERVER_ID = os.getenv("JELLYFIN_SERVER_ID")
     MEDIA_SYNC_INTERVAL_SEC = int(os.getenv("MEDIA_SYNC_INTERVAL_SEC", "60") or "60")
+    MIN_FREE_GB = float(os.getenv("MIN_FREE_GB", "20") or "20")
+    TEMPORARY_MAX_GB = float(os.getenv("TEMPORARY_MAX_GB", "500") or "500")
     SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
     SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
     SMTP_USERNAME = os.getenv("SMTP_USERNAME")
@@ -44,3 +46,11 @@ class Config:
     @classmethod
     def media_server_enabled(cls) -> bool:
         return cls.radarr_enabled() or cls.sonarr_enabled() or cls.seerr_enabled()
+
+    @classmethod
+    def min_free_bytes(cls) -> int:
+        return int(cls.MIN_FREE_GB * 1024**3)
+
+    @classmethod
+    def temporary_max_bytes(cls) -> int:
+        return int(cls.TEMPORARY_MAX_GB * 1024**3)

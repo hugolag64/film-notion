@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { acceptKeepRequest, changePassword, createUser, deleteUser, extendRental, fetchCleanupPreview, fetchDevices, fetchJellyfinUsers, fetchKeepRequests, fetchNotifications, fetchUsers, linkJellyfinUser, markNotificationRead, refuseKeepRequest, revokeDevice, revokeOtherDevices, updateUser } from './api';
+import { acceptKeepRequest, changePassword, createUser, deleteUser, extendRental, fetchCleanupPreview, fetchDevices, fetchJellyfinUsers, fetchKeepRequests, fetchNotifications, fetchStorageStatus, fetchUsers, linkJellyfinUser, markNotificationRead, refuseKeepRequest, revokeDevice, revokeOtherDevices, updateUser } from './api';
 import { useAuth } from './auth-context';
 
 export default function AccountPanel({isDarkMode, onClose}) {
@@ -17,6 +17,7 @@ export default function AccountPanel({isDarkMode, onClose}) {
     const [notifications, setNotifications] = useState([]);
     const [cleanupPreview, setCleanupPreview] = useState(null);
     const [cleanupLoading, setCleanupLoading] = useState(false);
+    const [storageStatus, setStorageStatus] = useState(null);
     const [error, setError] = useState('');
     const [notice, setNotice] = useState('');
     const [savingName, setSavingName] = useState(false);
@@ -29,6 +30,11 @@ export default function AccountPanel({isDarkMode, onClose}) {
             if (user.role === 'admin') {
                 setUsers(await fetchUsers());
                 setKeepRequests(await fetchKeepRequests());
+                try {
+                    setStorageStatus(await fetchStorageStatus());
+                } catch {
+                    setStorageStatus(null);
+                }
             }
         } catch (requestError) {
             setError(requestError.message);
@@ -244,6 +250,21 @@ export default function AccountPanel({isDarkMode, onClose}) {
 
                 {user.role === 'admin' && (
                     <div>
+                        <div className="mb-8">
+                            <h3 className="mb-3 font-semibold">Espace de stockage</h3>
+                            {storageStatus ? (
+                                <div className={`rounded-lg border p-3 text-sm ${storageStatus.low_space || storageStatus.temporary_quota_reached ? 'border-amber-500' : ''}`}>
+                                    <p>
+                                        Libre : {storageStatus.min_free_gb === null ? 'inconnu' : `${storageStatus.min_free_gb} Go`}
+                                        {' '} / seuil {storageStatus.min_free_threshold_gb} Go
+                                    </p>
+                                    <p className={muted}>
+                                        Locations temporaires : {storageStatus.temporary_gb} Go / {storageStatus.temporary_max_gb} Go
+                                    </p>
+                                    {(storageStatus.low_space || storageStatus.temporary_quota_reached) && <p className="mt-1 text-amber-600">Les nouvelles locations sont bloquées jusqu'à libération d'espace.</p>}
+                                </div>
+                            ) : <p className={`rounded-lg border p-3 text-sm ${muted}`}>État du stockage indisponible.</p>}
+                        </div>
                         <div className="mb-8">
                             <h3 className="mb-3 font-semibold">Demandes de conservation</h3>
                             <div className="space-y-2">
