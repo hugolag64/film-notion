@@ -300,3 +300,17 @@ def test_notifications_with_same_dedupe_key_are_created_once(tmp_path):
     notifications = asyncio.run(store.list_notifications("hugo"))
     assert len(notifications) == 1
     assert notifications[0].id == "notification-1"
+
+
+def test_series_rental_scope_is_persisted(tmp_path):
+    store = _store(tmp_path)
+    media = asyncio.run(store.create({"title": "Severance", "type": "Série"}))
+    now = datetime.now(timezone.utc)
+    asyncio.run(store.create_rental(Rental(
+        id="series-rental", media_id=media.id, backstage_user_id="hugo", status="available",
+        rental_scope="series", requested_at=now, created_at=now, updated_at=now,
+    )))
+
+    rental = asyncio.run(store.get_rental("series-rental"))
+
+    assert rental.rental_scope == "series"

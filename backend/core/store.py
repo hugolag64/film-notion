@@ -99,6 +99,7 @@ class MediaStore:
                     expires_at TEXT,
                     keep_requested_at TEXT,
                     storage_policy TEXT NOT NULL DEFAULT 'temporary',
+                    rental_scope TEXT NOT NULL DEFAULT 'movie',
                     size_bytes INTEGER,
                     keep_decision TEXT,
                     decided_by TEXT,
@@ -112,6 +113,12 @@ class MediaStore:
             rental_columns = {row[1] for row in conn.execute("PRAGMA table_info(media_rentals)").fetchall()}
             if "storage_policy" not in rental_columns:
                 conn.execute("ALTER TABLE media_rentals ADD COLUMN storage_policy TEXT NOT NULL DEFAULT 'temporary'")
+            if "rental_scope" not in rental_columns:
+                conn.execute("ALTER TABLE media_rentals ADD COLUMN rental_scope TEXT NOT NULL DEFAULT 'movie'")
+                conn.execute(
+                    "UPDATE media_rentals SET rental_scope = 'series' "
+                    "WHERE media_id IN (SELECT id FROM media WHERE type = 'Série')"
+                )
             if "size_bytes" not in rental_columns:
                 conn.execute("ALTER TABLE media_rentals ADD COLUMN size_bytes INTEGER")
             if "keep_decision" not in rental_columns:
@@ -539,7 +546,7 @@ class MediaStore:
     def _update_rental_sync(self, rental_id: str, updates: Dict[str, Any]) -> Optional[Rental]:
         allowed = {
             "status", "available_at", "first_played_at", "expires_at", "keep_requested_at",
-            "storage_policy", "size_bytes", "keep_decision", "decided_by", "decided_at", "updated_at",
+            "storage_policy", "rental_scope", "size_bytes", "keep_decision", "decided_by", "decided_at", "updated_at",
         }
         values = {key: value for key, value in updates.items() if key in allowed}
         values["updated_at"] = values.get("updated_at") or datetime.now(timezone.utc)

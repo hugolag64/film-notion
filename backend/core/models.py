@@ -50,6 +50,7 @@ class Rental(BaseModel):
     expires_at: Optional[datetime] = None
     keep_requested_at: Optional[datetime] = None
     storage_policy: Literal["temporary", "permanent"] = "temporary"
+    rental_scope: Literal["movie", "series"] = "movie"
     size_bytes: Optional[int] = Field(default=None, ge=0)
     keep_decision: Optional[Literal["accepted", "refused"]] = None
     decided_by: Optional[str] = None

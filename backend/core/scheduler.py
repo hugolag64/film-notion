@@ -55,10 +55,11 @@ async def notify_automatic_events(service, store, auth_store, *, now: datetime |
             continue
         if rental.expires_at and rental.expires_at <= now + timedelta(days=2):
             expiry_day = rental.expires_at.date().isoformat()
+            label = "série" if rental.rental_scope == "series" else "film"
             await store.create_notification(Notification(
                 id=str(uuid.uuid4()), backstage_user_id=rental.backstage_user_id,
                 kind="rental_expiring",
-                message=f"La location de {item['media_title']} expire le {rental.expires_at.astimezone().strftime('%d/%m/%Y')}.",
+                message=f"La location de la {label} {item['media_title']} expire le {rental.expires_at.astimezone().strftime('%d/%m/%Y')}.",
                 dedupe_key=f"rental_expiring:{rental.id}:{expiry_day}", created_at=now,
             ))
 

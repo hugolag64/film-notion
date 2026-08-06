@@ -523,7 +523,8 @@ async def request_acquisition(
             now = datetime.now(timezone.utc)
             rental = await service.store.create_rental(Rental(
                 id=str(uuid.uuid4()), media_id=media_id, backstage_user_id=owner_id,
-                status=availability.state, requested_at=now, created_at=now, updated_at=now,
+                status=availability.state, rental_scope="series" if media.type == "Série" else "movie",
+                requested_at=now, created_at=now, updated_at=now,
             ))
             response["rental"] = _serialize_rental(rental)
         return response
@@ -611,8 +612,8 @@ async def _apply_rental_decision(
     if not rental:
         raise HTTPException(status_code=404, detail="Location non trouvée")
     messages = {
-        "accepted": ("retention_accepted", "Votre film a été conservé définitivement."),
-        "refused": ("retention_refused", "La demande de conservation de votre film a été refusée."),
+        "accepted": ("retention_accepted", "Votre contenu a été conservé définitivement."),
+        "refused": ("retention_refused", "La demande de conservation de votre contenu a été refusée."),
     }
     kind, message = messages[decision]
     await store.create_notification(Notification(
