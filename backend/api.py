@@ -20,7 +20,7 @@ from backend.core.arr import RadarrClient, SonarrClient, MediaServerError
 from backend.core.seerr import SeerrClient
 from backend.core.jellyfin import JellyfinClient
 from backend.core.media_server import MediaServerService
-from backend.core.backup import create_backup, get_backup_status
+from backend.core.backup import create_backup, get_backup_health, get_backup_status, verify_backup
 from backend.auth_api import AuthContext, get_auth_store, get_current_user, require_admin
 from backend.core.auth import AuthStore
 from urllib.parse import quote, parse_qsl, urlencode, urlsplit
@@ -36,6 +36,16 @@ health_router = APIRouter(tags=["health"])
 @health_router.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+
+@health_router.get("/health/backup")
+async def backup_health_check():
+    health = await asyncio.to_thread(
+        get_backup_health, Config.BACKUP_DIR, max_age_hours=Config.BACKUP_MAX_AGE_HOURS,
+    )
+    if health["status"] != "ok":
+        raise HTTPException(status_code=503, detail=health)
+    return health
 
 
 def _rewrite_hls_manifest(manifest: str, media_id: str) -> str:
@@ -782,6 +792,18 @@ async def admin_create_backup(_: AuthContext = Depends(require_admin)):
         )
     except (OSError, sqlite3.Error, RuntimeError) as error:
         raise HTTPException(status_code=503, detail=f"Sauvegarde impossible : {error}") from error
+
+
+@router.post("/admin/system/backup/verify")
+async def admin_verify_backup(_: AuthContext = Depends(require_admin)):
+    status = await asyncio.to_thread(get_backup_status, Config.BACKUP_DIR)
+    latest = status.get("latest")
+    if not latest:
+        raise HTTPException(status_code=404, detail="Aucune sauvegarde à vérifier")
+    result = await asyncio.to_thread(verify_backup, latest["path"])
+    if result["integrity"] != "ok" or not result["readable"]:
+        raise HTTPException(status_code=503, detail=result)
+    return result
 
 
 def _serialize_playback_summary(summary: dict[str, Any]) -> dict[str, Any]:

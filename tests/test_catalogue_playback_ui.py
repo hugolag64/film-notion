@@ -86,3 +86,4 @@ def test_admin_backup_controls_are_visible():
     assert "Sauvegarde" in account
     assert "Sauvegarder maintenant" in account
     assert "fetchBackupStatus" in api
+    assert "verifyBackup" in api

@@ -2,7 +2,7 @@ import asyncio
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from backend.core.backup import create_backup, get_backup_status
+from backend.core.backup import create_backup, get_backup_health, get_backup_status, verify_backup
 
 
 def test_sqlite_backup_is_readable_and_old_backups_are_pruned(tmp_path):
@@ -40,3 +40,23 @@ def test_backup_status_reports_latest_backup(tmp_path):
     assert status["configured"] is True
     assert status["latest"] is not None
     assert status["latest"]["integrity"] == "ok"
+
+
+def test_backup_can_be_verified_for_restore_drill(tmp_path):
+    db_path = tmp_path / "backstage.db"
+    backup_dir = tmp_path / "backups"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("CREATE TABLE health (ok INTEGER)")
+    created = create_backup(str(db_path), str(backup_dir), retention_days=7)
+
+    result = verify_backup(created["path"])
+
+    assert result["integrity"] == "ok"
+    assert result["readable"] is True
+
+
+def test_backup_health_detects_missing_backup(tmp_path):
+    health = get_backup_health(str(tmp_path / "backups"), max_age_hours=24)
+
+    assert health["status"] == "error"
+    assert health["reason"] == "missing"

@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlparse
 
 import backend.auth_api as auth_module
 import backend.api as api_module
-from backend.api import router as media_router
+from backend.api import health_router, router as media_router
 from backend.auth_api import auth_router
 from backend.config import Config
 from backend.core.auth import AuthStore
@@ -40,6 +40,7 @@ def _client(tmp_path, monkeypatch):
     AuthStore(str(db)).init_schema()
     monkeypatch.setattr(Config, "DB_PATH", str(db))
     app = FastAPI()
+    app.include_router(health_router)
     app.include_router(auth_router)
     app.include_router(media_router)
     return TestClient(app)
@@ -607,6 +608,8 @@ def test_admin_can_create_and_inspect_backup(tmp_path, monkeypatch):
     _setup(client)
     monkeypatch.setattr(Config, "BACKUP_DIR", str(tmp_path / "backups"))
 
+    assert client.get("/health/backup").status_code == 503
+
     created = client.post("/api/admin/system/backup")
 
     assert created.status_code == 200
@@ -614,6 +617,8 @@ def test_admin_can_create_and_inspect_backup(tmp_path, monkeypatch):
     status = client.get("/api/admin/system/backup")
     assert status.status_code == 200
     assert status.json()["latest"]["integrity"] == "ok"
+    assert client.get("/health/backup").status_code == 200
+    assert client.post("/api/admin/system/backup/verify").status_code == 200
 
     client.post("/api/auth/users", json={
         "display_name": "Paul", "email": "paul@example.com", "password": "12345678",

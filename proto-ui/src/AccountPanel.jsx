@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { acceptKeepRequest, changePassword, createBackup, createUser, deleteUser, extendRental, fetchAdminDashboard, fetchBackupStatus, fetchCleanupPreview, fetchDevices, fetchJellyfinUsers, fetchKeepRequests, fetchNotifications, fetchStorageStatus, fetchUsers, linkJellyfinUser, markNotificationRead, refuseKeepRequest, revokeDevice, revokeOtherDevices, updateUser } from './api';
+import { acceptKeepRequest, changePassword, createBackup, createUser, deleteUser, extendRental, fetchAdminDashboard, fetchBackupStatus, fetchCleanupPreview, fetchDevices, fetchJellyfinUsers, fetchKeepRequests, fetchNotifications, fetchStorageStatus, fetchUsers, linkJellyfinUser, markNotificationRead, refuseKeepRequest, revokeDevice, revokeOtherDevices, updateUser, verifyBackup } from './api';
 import { useAuth } from './auth-context';
 
 export default function AccountPanel({isDarkMode, onClose}) {
@@ -21,6 +21,7 @@ export default function AccountPanel({isDarkMode, onClose}) {
     const [adminDashboard, setAdminDashboard] = useState(null);
     const [backupStatus, setBackupStatus] = useState(null);
     const [backupLoading, setBackupLoading] = useState(false);
+    const [backupVerifying, setBackupVerifying] = useState(false);
     const [error, setError] = useState('');
     const [notice, setNotice] = useState('');
     const [savingName, setSavingName] = useState(false);
@@ -206,6 +207,19 @@ export default function AccountPanel({isDarkMode, onClose}) {
         }
     };
 
+    const handleBackupVerify = async () => {
+        try {
+            setBackupVerifying(true);
+            setError('');
+            await verifyBackup();
+            setNotice('La dernière sauvegarde est lisible et intègre.');
+        } catch (requestError) {
+            setError(requestError.message);
+        } finally {
+            setBackupVerifying(false);
+        }
+    };
+
     const text = isDarkMode ? 'text-white' : 'text-[#0a2540]';
     const muted = isDarkMode ? 'text-white/60' : 'text-[#425466]';
     const panel = isDarkMode ? 'bg-[#111111] border-white/10' : 'bg-white border-[#e3e8ee]';
@@ -293,6 +307,9 @@ export default function AccountPanel({isDarkMode, onClose}) {
                                 <h3 className="font-semibold">Sauvegarde</h3>
                                 <button type="button" className="rounded border border-[#635bff] px-2 py-1 text-xs text-[#635bff]" onClick={handleBackup} disabled={backupLoading}>
                                     {backupLoading ? 'Sauvegarde…' : 'Sauvegarder maintenant'}
+                                </button>
+                                <button type="button" className="rounded border px-2 py-1 text-xs" onClick={handleBackupVerify} disabled={backupVerifying || !backupStatus?.latest}>
+                                    {backupVerifying ? 'Vérification…' : 'Vérifier'}
                                 </button>
                             </div>
                             {backupStatus?.latest ? <p className={`rounded-lg border p-3 text-sm ${backupStatus.latest.integrity === 'ok' ? '' : 'border-rose-500 text-rose-500'}`}>

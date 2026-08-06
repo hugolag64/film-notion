@@ -213,6 +213,12 @@ export async function createBackup() {
     return response.json();
 }
 
+export async function verifyBackup() {
+    const response = await fetch(`${API_BASE_URL}/admin/system/backup/verify`, {method: 'POST'});
+    if (!response.ok) throw new Error((await response.json()).detail || 'Vérification impossible');
+    return response.json();
+}
+
 async function rentalDecision(rentalId, action) {
     const response = await fetch(`${API_BASE_URL}/admin/rentals/${rentalId}/${action}`, {method: 'POST'});
     if (!response.ok) throw new Error((await response.json()).detail || 'Action impossible');
