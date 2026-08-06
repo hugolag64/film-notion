@@ -1,16 +1,20 @@
 """Authentication and authorization routes for Backstage."""
 
+import logging
 import os
 from dataclasses import dataclass
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
+from urllib.parse import quote
 
 from backend.config import Config
 from backend.core.auth import AuthStore, AuthUser
+from backend.core.email import EmailSender
 
 
 SESSION_COOKIE = "backstage_session"
 auth_router = APIRouter(prefix="/api/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -33,6 +37,22 @@ class LoginRequest(BaseModel):
     remember_device: bool = False
 
 
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
+    password_confirmation: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field(min_length=3)
+
+
+class PasswordResetRequest(BaseModel):
+    token: str = Field(min_length=1)
+    new_password: str = Field(min_length=8)
+    password_confirmation: str
+
+
 class CreateUserRequest(BaseModel):
     display_name: str = Field(min_length=1)
     email: str = Field(min_length=3)
@@ -44,6 +64,7 @@ class UpdateUserRequest(BaseModel):
     email: str | None = Field(default=None, min_length=3)
     role: str | None = None
     is_active: bool | None = None
+    password: str | None = Field(default=None, min_length=8)
 
 
 def get_auth_store() -> AuthStore:
@@ -140,6 +161,58 @@ async def login(
     return {"user": user}
 
 
+@auth_router.post("/change-password")
+async def change_password(
+    payload: PasswordChangeRequest,
+    current: AuthContext = Depends(get_current_user),
+    store: AuthStore = Depends(get_auth_store),
+):
+    if payload.new_password != payload.password_confirmation:
+        raise HTTPException(status_code=422, detail="Les mots de passe ne correspondent pas")
+    try:
+        store.change_password(
+            current.user["id"], payload.current_password, payload.new_password,
+            current.session_id,
+        )
+    except ValueError as error:
+        raise _handle_store_error(error) from error
+    return {"message": "Mot de passe modifié"}
+
+
+@auth_router.post("/forgot-password", status_code=202)
+async def forgot_password(
+    payload: ForgotPasswordRequest,
+    store: AuthStore = Depends(get_auth_store),
+):
+    reset = store.create_password_reset_token(payload.email)
+    if reset is not None:
+        token, _ = reset
+        reset_url = (
+            f"{Config.BACKSTAGE_PUBLIC_URL.rstrip('/')}/reset-password?token={quote(token, safe='')}"
+        )
+        try:
+            EmailSender().send_password_reset(payload.email, reset_url)
+        except Exception:
+            logger.exception("Échec de l'envoi du lien de réinitialisation")
+    return {"message": "Si un compte correspond, un e-mail vient d'être envoyé."}
+
+
+@auth_router.post("/reset-password")
+async def reset_password(
+    payload: PasswordResetRequest,
+    store: AuthStore = Depends(get_auth_store),
+):
+    if payload.new_password != payload.password_confirmation:
+        raise HTTPException(status_code=422, detail="Les mots de passe ne correspondent pas")
+    try:
+        store.reset_password(payload.token, payload.new_password)
+    except ValueError as error:
+        if str(error) == "invalid or expired reset token":
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        raise _handle_store_error(error) from error
+    return {"message": "Mot de passe réinitialisé"}
+
+
 @auth_router.post("/logout", status_code=204)
 async def logout(request: Request, response: Response, store: AuthStore = Depends(get_auth_store)):
     token = request.cookies.get(SESSION_COOKIE)
@@ -203,7 +276,11 @@ async def update_user(
     store: AuthStore = Depends(get_auth_store),
 ):
     try:
-        user = store.update_user(user_id, payload.model_dump(exclude_unset=True))
+        fields = payload.model_dump(exclude_unset=True)
+        password = fields.pop("password", None)
+        user = store.update_user(user_id, fields)
+        if password is not None:
+            store.set_password(user_id, password)
     except ValueError as error:
         raise _handle_store_error(error) from error
     return {"user": user}

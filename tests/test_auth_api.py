@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from urllib.parse import parse_qs, urlparse
 
+import backend.auth_api as auth_module
 from backend.api import router as media_router
 from backend.auth_api import auth_router
 from backend.config import Config
@@ -202,3 +204,128 @@ def test_admin_can_change_another_users_display_name(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert next(user for user in client.get("/api/auth/users").json()["users"] if user["id"] == user_id)["display_name"] == "Ophélie"
+
+
+def test_user_can_change_password_and_keep_the_current_session(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    client.post("/api/auth/users", json={
+        "display_name": "Paul",
+        "email": "paul@example.com",
+        "password": "old-password",
+    })
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={
+        "email": "paul@example.com",
+        "password": "old-password",
+        "remember_device": True,
+    })
+    _, other_token, _ = AuthStore(Config.DB_PATH).authenticate(
+        "paul@example.com", "old-password", True, "Phone"
+    )
+
+    response = client.post("/api/auth/change-password", json={
+        "current_password": "old-password",
+        "new_password": "new-password",
+        "password_confirmation": "new-password",
+    })
+
+    assert response.status_code == 200
+    assert client.get("/api/auth/me").status_code == 200
+    assert AuthStore(Config.DB_PATH).user_from_token(other_token) is None
+
+
+def test_change_password_rejects_wrong_current_password_and_confirmation(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+
+    wrong_current = client.post("/api/auth/change-password", json={
+        "current_password": "wrong-password",
+        "new_password": "new-password",
+        "password_confirmation": "new-password",
+    })
+    mismatch = client.post("/api/auth/change-password", json={
+        "current_password": "Correct Horse Battery Staple",
+        "new_password": "new-password",
+        "password_confirmation": "different-password",
+    })
+
+    assert wrong_current.status_code == 422
+    assert mismatch.status_code == 422
+
+
+class FakeEmailSender:
+    deliveries = []
+
+    def send_password_reset(self, recipient, reset_url):
+        self.__class__.deliveries.append((recipient, reset_url))
+
+
+def test_forgot_password_has_a_generic_response_and_sends_to_registered_email(tmp_path, monkeypatch):
+    FakeEmailSender.deliveries.clear()
+    monkeypatch.setattr(auth_module, "EmailSender", FakeEmailSender, raising=False)
+    monkeypatch.setattr(Config, "BACKSTAGE_PUBLIC_URL", "https://backstage.home.arpa")
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+
+    known = client.post("/api/auth/forgot-password", json={"email": "hugo@example.com"})
+    unknown = client.post("/api/auth/forgot-password", json={"email": "missing@example.com"})
+
+    assert known.status_code == 202
+    assert unknown.status_code == 202
+    assert known.json() == unknown.json()
+    assert FakeEmailSender.deliveries[0][0] == "hugo@example.com"
+    assert FakeEmailSender.deliveries[0][1].startswith("https://backstage.home.arpa/reset-password?token=")
+
+
+def test_reset_password_consumes_the_link_and_invalidates_existing_sessions(tmp_path, monkeypatch):
+    FakeEmailSender.deliveries.clear()
+    monkeypatch.setattr(auth_module, "EmailSender", FakeEmailSender, raising=False)
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    response = client.post("/api/auth/forgot-password", json={"email": "hugo@example.com"})
+    reset_url = FakeEmailSender.deliveries[0][1]
+    token = parse_qs(urlparse(reset_url).query)["token"][0]
+
+    reset = client.post("/api/auth/reset-password", json={
+        "token": token,
+        "new_password": "new-password",
+        "password_confirmation": "new-password",
+    })
+    reused = client.post("/api/auth/reset-password", json={
+        "token": token,
+        "new_password": "another-password",
+        "password_confirmation": "another-password",
+    })
+
+    assert response.status_code == 202
+    assert reset.status_code == 200
+    assert client.get("/api/auth/me").status_code == 401
+    assert reused.status_code == 400
+
+
+def test_admin_can_set_another_users_password_but_regular_user_cannot(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    created = client.post("/api/auth/users", json={
+        "display_name": "Paul",
+        "email": "paul@example.com",
+        "password": "old-password",
+    })
+    user_id = created.json()["user"]["id"]
+
+    assert client.patch(
+        f"/api/auth/users/{user_id}", json={"password": "admin-set-password"}
+    ).status_code == 200
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={
+        "email": "paul@example.com",
+        "password": "admin-set-password",
+        "remember_device": False,
+    })
+
+    forbidden = client.patch(
+        f"/api/auth/users/{user_id}", json={"password": "user-set-password"}
+    )
+
+    assert forbidden.status_code == 403
