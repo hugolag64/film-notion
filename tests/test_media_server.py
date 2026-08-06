@@ -19,6 +19,15 @@ class FakeRadarr:
         return self.queue
 
 
+class FakeSeerr:
+    def __init__(self):
+        self.calls = []
+
+    async def request_media(self, **payload):
+        self.calls.append(payload)
+        return {"id": 77, "status": 2}
+
+
 class FakeJellyfin:
     async def find_by_tmdb(self, tmdb_id, media_type):
         return {"Id": "jelly-dune"}
@@ -75,6 +84,24 @@ def test_add_film_creates_requested_availability(tmp_path):
 
     assert availability.state == "requested"
     assert availability.arr_id == 42
+
+
+def test_add_film_uses_seerr_when_configured(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    media = asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    seerr = FakeSeerr()
+    service = MediaServerService(store, radarr=FakeRadarr(), seerr=seerr)
+
+    availability = asyncio.run(service.add(media, 5, "D:/Media/Films", None, "all"))
+
+    assert availability.state == "requested"
+    assert availability.provider == "radarr"
+    assert availability.arr_id is None
+    assert seerr.calls == [{
+        "tmdb_id": 438631, "media_type": "Film", "quality_profile_id": 5,
+        "root_folder": "D:/Media/Films", "language_profile_id": None, "monitor": "all",
+    }]
 
 
 def test_import_existing_library_links_matching_tmdb_media(tmp_path):

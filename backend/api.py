@@ -12,7 +12,8 @@ from backend.core.models import Media
 from backend.core.tmdb import TMDBClient
 from backend.core.mapping import is_series
 from backend.core.tmdb_relink import build_relink_updates
-from backend.core.arr import RadarrClient, SonarrClient
+from backend.core.arr import RadarrClient, SonarrClient, MediaServerError
+from backend.core.seerr import SeerrClient
 from backend.core.jellyfin import JellyfinClient
 from backend.core.media_server import MediaServerService
 from backend.auth_api import AuthContext, get_current_user, require_admin
@@ -87,11 +88,12 @@ class AcquisitionRequest(BaseModel):
 def get_media_server_service(store: MediaStore = Depends(get_store)) -> MediaServerService:
     radarr = RadarrClient(Config.RADARR_URL, Config.RADARR_API_KEY) if Config.radarr_enabled() else None
     sonarr = SonarrClient(Config.SONARR_URL, Config.SONARR_API_KEY) if Config.sonarr_enabled() else None
+    seerr = SeerrClient(Config.SEERR_URL, Config.SEERR_API_KEY) if Config.seerr_enabled() else None
     jellyfin = JellyfinClient(
         Config.JELLYFIN_URL, Config.JELLYFIN_API_KEY,
         server_id=Config.JELLYFIN_SERVER_ID,
     ) if Config.jellyfin_enabled() else None
-    return MediaServerService(store, radarr=radarr, sonarr=sonarr, jellyfin=jellyfin)
+    return MediaServerService(store, radarr=radarr, sonarr=sonarr, jellyfin=jellyfin, seerr=seerr)
 
 
 @router.get("/tmdb/search")
@@ -406,6 +408,7 @@ async def media_server_status():
     return {
         "radarr": {"configured": Config.radarr_enabled()},
         "sonarr": {"configured": Config.sonarr_enabled()},
+        "seerr": {"configured": Config.seerr_enabled()},
         "jellyfin": {"configured": Config.jellyfin_enabled()},
     }
 
@@ -462,7 +465,7 @@ async def get_playback_resource(
     })
 
 
-@router.post("/medias/{media_id}/acquisition", dependencies=[Depends(require_admin)])
+@router.post("/medias/{media_id}/acquisition")
 async def request_acquisition(
     media_id: str,
     payload: AcquisitionRequest,
@@ -481,7 +484,7 @@ async def request_acquisition(
         return {"availability": availability}
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    except RuntimeError as error:
+    except (MediaServerError, RuntimeError) as error:
         raise HTTPException(status_code=503, detail="Service non configuré") from error
 
 

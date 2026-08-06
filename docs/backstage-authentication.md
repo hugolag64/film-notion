@@ -40,6 +40,10 @@ Après association, Backstage synchronise la progression du compte Jellyfin corr
 
 La synchronisation se lance à l’ouverture de l’application et peut être relancée avec **Actualiser**. Une indisponibilité temporaire de Jellyfin ne bloque pas le catalogue local.
 
+### Demandes via Seerr
+
+Quand Seerr est configuré, le bouton **Demander via Seerr** envoie les films et séries à Seerr. Seerr applique ensuite ses profils, quotas et règles d’approbation avant de transmettre la demande à Radarr ou Sonarr.
+
 ## Déploiement Portainer
 
 La stack doit utiliser la branche `main` et conserver le volume :
@@ -91,5 +95,16 @@ SMTP_PASSWORD=mot-de-passe-d-application-google
 SMTP_FROM=adresse-gmail-d-envoi@gmail.com
 BACKSTAGE_PUBLIC_URL=https://backstage.home.arpa
 ```
+
+### Configuration Seerr dans Portainer
+
+Ajoute aussi ces variables dans la stack `backstage`. La clé API Seerr ne doit jamais être commitée dans GitHub :
+
+```env
+SEERR_URL=http://host.docker.internal:5055
+SEERR_API_KEY=clé-copiée-de-Seerr
+```
+
+Après **Pull and redeploy**, un utilisateur Backstage authentifié peut demander un contenu. Le volume `/srv/data/backstage:/data` reste inchangé.
 
 `SMTP_PASSWORD` reste uniquement dans Portainer. Après le déploiement, teste avec **Mot de passe oublié ?** sur un compte non administrateur.

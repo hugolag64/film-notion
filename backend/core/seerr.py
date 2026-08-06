@@ -1,0 +1,48 @@
+"""Small client for the Seerr media-request API."""
+from typing import Any, Optional
+
+import httpx
+
+from backend.core import http
+from backend.core.arr import MediaServerError
+
+
+class SeerrClient:
+    def __init__(self, base_url: str, api_key: str, client: Optional[httpx.AsyncClient] = None):
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.client = client
+
+    async def _request(self, method: str, path: str, **kwargs) -> Any:
+        headers = {"X-Api-Key": self.api_key, **kwargs.pop("headers", {})}
+        try:
+            if self.client is not None:
+                response = await self.client.request(method, f"{self.base_url}{path}", headers=headers, timeout=10.0, **kwargs)
+            else:
+                response = await http.get_client().request(method, f"{self.base_url}{path}", headers=headers, timeout=10.0, **kwargs)
+            response.raise_for_status()
+            return response.json()
+        except (httpx.HTTPError, ValueError) as error:
+            raise MediaServerError("Seerr inaccessible ou demande refusée") from error
+
+    async def request_media(
+        self, *, tmdb_id: int, media_type: str, quality_profile_id: int,
+        root_folder: str, language_profile_id: Optional[int], monitor: str,
+    ) -> dict[str, Any]:
+        if media_type not in {"Film", "Série"}:
+            raise ValueError("Type de média non pris en charge")
+        if monitor not in {"all", "future"}:
+            raise ValueError("monitor doit être 'all' ou 'future'")
+        payload: dict[str, Any] = {
+            "mediaType": "movie" if media_type == "Film" else "tv",
+            "mediaId": tmdb_id,
+            "is4k": False,
+            "profileId": quality_profile_id,
+            "rootFolder": root_folder,
+            "ignoreQuota": False,
+        }
+        if media_type == "Série":
+            payload["seasons"] = "all" if monitor == "all" else []
+            if language_profile_id is not None:
+                payload["languageProfileId"] = language_profile_id
+        return await self._request("POST", "/api/v1/request", json=payload)

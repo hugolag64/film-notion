@@ -1,4 +1,6 @@
 import httpx
+import asyncio
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from urllib.parse import parse_qs, urlparse
@@ -10,6 +12,7 @@ from backend.auth_api import auth_router
 from backend.config import Config
 from backend.core.auth import AuthStore
 from backend.core.store import MediaStore
+from backend.core.media_server import Availability
 
 
 class FakeJellyfinClient:
@@ -250,6 +253,39 @@ def test_playback_routes_use_the_current_users_jellyfin_mapping(tmp_path, monkey
         "linked": True, "resume": [], "next_episodes": [],
         "recently_completed": [], "last_synced_at": None,
     }
+
+
+def test_regular_user_can_submit_an_acquisition_request(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    created = client.post("/api/auth/users", json={
+        "display_name": "Paul", "email": "paul@example.com", "password": "12345678",
+    }).json()["user"]
+    media = asyncio.run(MediaStore(Config.DB_PATH).create({
+        "id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631,
+    }))
+
+    class FakeAcquisitionService:
+        store = MediaStore(Config.DB_PATH)
+        calls = []
+
+        async def add(self, media, quality_profile_id, root_folder, language_profile_id, monitor):
+            self.calls.append((media.id, quality_profile_id, root_folder))
+            return Availability(media_id=media.id, provider="radarr", state="requested")
+
+    service = FakeAcquisitionService()
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: service
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={
+        "email": "paul@example.com", "password": "12345678", "remember_device": False,
+    })
+
+    response = client.post(f"/api/medias/{media.id}/acquisition", json={
+        "quality_profile_id": 5, "root_folder": "/media/movies",
+    })
+
+    assert response.status_code == 200
+    assert service.calls == [("dune", 5, "/media/movies")]
 
 
 def test_media_catalog_requires_authentication(tmp_path, monkeypatch):

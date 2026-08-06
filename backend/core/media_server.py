@@ -31,11 +31,12 @@ class Availability(BaseModel):
 class MediaServerService:
     """Maps Arr/Jellyfin state into durable, UI-safe availability records."""
 
-    def __init__(self, store, *, radarr=None, sonarr=None, jellyfin=None):
+    def __init__(self, store, *, radarr=None, sonarr=None, jellyfin=None, seerr=None):
         self.store = store
         self.radarr = radarr
         self.sonarr = sonarr
         self.jellyfin = jellyfin
+        self.seerr = seerr
 
     async def add(
         self, media, quality_profile_id: int, root_folder: str,
@@ -43,20 +44,25 @@ class MediaServerService:
     ) -> Availability:
         if not media.tmdb_id:
             raise ValueError("Associez d'abord ce média à TMDB")
-        if media.type == "Série":
+        provider = "sonarr" if media.type == "Série" else "radarr"
+        if self.seerr:
+            remote = await self.seerr.request_media(
+                tmdb_id=media.tmdb_id, media_type=media.type,
+                quality_profile_id=quality_profile_id, root_folder=root_folder,
+                language_profile_id=language_profile_id, monitor=monitor,
+            )
+        elif media.type == "Série":
             if not self.sonarr or language_profile_id is None:
                 raise RuntimeError("Sonarr n'est pas configuré")
             remote = await self.sonarr.add_series(
                 media.tmdb_id, quality_profile_id, language_profile_id, root_folder, monitor,
             )
-            provider = "sonarr"
         else:
             if not self.radarr:
                 raise RuntimeError("Radarr n'est pas configuré")
             remote = await self.radarr.add_movie(media.tmdb_id, quality_profile_id, root_folder)
-            provider = "radarr"
         return await self.store.upsert_availability(Availability(
-            media_id=media.id, provider=provider, arr_id=remote.get("id"),
+            media_id=media.id, provider=provider, arr_id=None if self.seerr else remote.get("id"),
             state="requested", root_folder=root_folder,
             quality_profile_id=quality_profile_id, language_profile_id=language_profile_id,
             last_synced_at=datetime.now(timezone.utc),

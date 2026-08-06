@@ -1232,7 +1232,7 @@ export default function BackstagePrototype() {
                                 <div className={`rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
                                     <div className="flex items-center justify-between gap-3"><p className="text-[10px] font-mono uppercase tracking-widest opacity-60">Synopsis</p><button onClick={refreshSelectedSeries} disabled={seriesRefreshing} className="rounded-lg bg-[#635bff] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{seriesRefreshing ? 'Actualisation…' : 'Actualiser TMDB'}</button></div>
                                     <p className="mt-3 text-sm leading-6 opacity-80">{selectedSeries.synopsis || 'Aucun synopsis disponible.'}</p>
-                                    <button onClick={openAcquisition} className="mt-3 rounded-lg bg-[#635bff] px-3 py-1.5 text-xs font-semibold text-white">Ajouter au serveur</button>
+                                    <button onClick={openAcquisition} className="mt-3 rounded-lg bg-[#635bff] px-3 py-1.5 text-xs font-semibold text-white">Demander via Seerr</button>
                                 </div>
                                 <div className={`rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
                                     <p className="text-[10px] font-mono uppercase tracking-widest opacity-60">Informations</p>
@@ -1523,7 +1523,7 @@ export default function BackstagePrototype() {
                                         : 'bg-[#635bff] hover:bg-[#5048e5] focus-visible:ring-2 focus-visible:ring-[#a9a3ff] text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all shadow-md cursor-pointer flex items-center gap-2 whitespace-nowrap'}
                                 >
                                     <span aria-hidden="true" className={mediaAvailability?.availability?.jellyfin_id ? 'text-base leading-none' : ''}>{mediaAvailability?.availability?.jellyfin_id ? '▶' : '+'}</span>
-                                    <span>{mediaAvailability?.availability?.jellyfin_id ? 'Lire' : 'Ajouter au serveur'}</span>
+                                    <span>{mediaAvailability?.availability?.jellyfin_id ? 'Lire' : 'Demander via Seerr'}</span>
                                 </button>
                             </div>
 

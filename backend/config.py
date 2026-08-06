@@ -12,6 +12,8 @@ class Config:
     RADARR_API_KEY = os.getenv("RADARR_API_KEY")
     SONARR_URL = os.getenv("SONARR_URL", "http://127.0.0.1:8989")
     SONARR_API_KEY = os.getenv("SONARR_API_KEY")
+    SEERR_URL = os.getenv("SEERR_URL", "http://127.0.0.1:5055")
+    SEERR_API_KEY = os.getenv("SEERR_API_KEY")
     JELLYFIN_URL = os.getenv("JELLYFIN_URL", "http://127.0.0.1:8096")
     JELLYFIN_API_KEY = os.getenv("JELLYFIN_API_KEY")
     JELLYFIN_SERVER_ID = os.getenv("JELLYFIN_SERVER_ID")
@@ -32,9 +34,13 @@ class Config:
         return bool(cls.SONARR_API_KEY)
 
     @classmethod
+    def seerr_enabled(cls) -> bool:
+        return bool(cls.SEERR_API_KEY)
+
+    @classmethod
     def jellyfin_enabled(cls) -> bool:
         return bool(cls.JELLYFIN_API_KEY)
 
     @classmethod
     def media_server_enabled(cls) -> bool:
-        return cls.radarr_enabled() or cls.sonarr_enabled()
+        return cls.radarr_enabled() or cls.sonarr_enabled() or cls.seerr_enabled()
