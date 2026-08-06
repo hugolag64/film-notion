@@ -79,8 +79,8 @@ class UpdateEpisodeRequest(BaseModel):
 
 
 class AcquisitionRequest(BaseModel):
-    quality_profile_id: int
-    root_folder: str
+    quality_profile_id: Optional[int] = None
+    root_folder: Optional[str] = None
     language_profile_id: Optional[int] = None
     monitor: str = "all"
 

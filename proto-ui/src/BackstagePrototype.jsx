@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Hls from 'hls.js';
 import AccountPanel from './AccountPanel';
 import { useAuth } from './auth-context';
-import { fetchMedias, updateMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, requestAcquisition, fetchMediaServerActivity, syncMediaServer, importMediaServerLibrary, syncPlayback, fetchPlaybackSummary } from './api';
+import { fetchMedias, updateMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchMediaServerActivity, syncMediaServer, importMediaServerLibrary, syncPlayback, fetchPlaybackSummary } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
 
@@ -263,7 +263,14 @@ export default function BackstagePrototype() {
     const openAcquisition = async () => {
         try {
             setMediaServerError(null);
-            const options = await fetchMediaServerOptions(selectedMedia.type || 'Film');
+            let options;
+            try {
+                options = await fetchMediaServerOptions(selectedMedia.type || 'Film');
+            } catch (optionsError) {
+                const status = await fetchMediaServerStatus();
+                if (!status.seerr?.configured) throw optionsError;
+                options = { quality_profiles: [], language_profiles: [], root_folders: [] };
+            }
             setMediaServerOptions(options);
             setAcquisitionForm({
                 quality_profile_id: options.quality_profiles?.[0]?.id || '',
@@ -282,7 +289,8 @@ export default function BackstagePrototype() {
         try {
             const result = await requestAcquisition(selectedMedia.id, {
                 ...acquisitionForm,
-                quality_profile_id: Number(acquisitionForm.quality_profile_id),
+                quality_profile_id: acquisitionForm.quality_profile_id ? Number(acquisitionForm.quality_profile_id) : null,
+                root_folder: acquisitionForm.root_folder || null,
                 language_profile_id: acquisitionForm.language_profile_id ? Number(acquisitionForm.language_profile_id) : null,
             });
             setMediaAvailability({ availability: result.availability, playback_url: null });

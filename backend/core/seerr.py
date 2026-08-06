@@ -26,8 +26,8 @@ class SeerrClient:
             raise MediaServerError("Seerr inaccessible ou demande refusée") from error
 
     async def request_media(
-        self, *, tmdb_id: int, media_type: str, quality_profile_id: int,
-        root_folder: str, language_profile_id: Optional[int], monitor: str,
+        self, *, tmdb_id: int, media_type: str, quality_profile_id: Optional[int],
+        root_folder: Optional[str], language_profile_id: Optional[int], monitor: str,
     ) -> dict[str, Any]:
         if media_type not in {"Film", "Série"}:
             raise ValueError("Type de média non pris en charge")
@@ -37,10 +37,12 @@ class SeerrClient:
             "mediaType": "movie" if media_type == "Film" else "tv",
             "mediaId": tmdb_id,
             "is4k": False,
-            "profileId": quality_profile_id,
-            "rootFolder": root_folder,
             "ignoreQuota": False,
         }
+        if quality_profile_id is not None:
+            payload["profileId"] = quality_profile_id
+        if root_folder:
+            payload["rootFolder"] = root_folder
         if media_type == "Série":
             payload["seasons"] = "all" if monitor == "all" else []
             if language_profile_id is not None:

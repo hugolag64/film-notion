@@ -165,6 +165,12 @@ export async function requestAcquisition(mediaId, payload) {
     return response.json();
 }
 
+export async function fetchMediaServerStatus() {
+    const response = await fetch(`${API_BASE_URL}/media-server/status`);
+    if (!response.ok) throw new Error('État des services indisponible');
+    return response.json();
+}
+
 export async function syncMediaServer() {
     const response = await fetch(`${API_BASE_URL}/media-server/sync`, {method: 'POST'});
     if (!response.ok) throw new Error((await response.json()).detail || 'Synchronisation impossible');

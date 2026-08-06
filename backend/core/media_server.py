@@ -39,7 +39,7 @@ class MediaServerService:
         self.seerr = seerr
 
     async def add(
-        self, media, quality_profile_id: int, root_folder: str,
+        self, media, quality_profile_id: Optional[int], root_folder: Optional[str],
         language_profile_id: Optional[int], monitor: str,
     ) -> Availability:
         if not media.tmdb_id:
@@ -52,13 +52,13 @@ class MediaServerService:
                 language_profile_id=language_profile_id, monitor=monitor,
             )
         elif media.type == "Série":
-            if not self.sonarr or language_profile_id is None:
+            if not self.sonarr or quality_profile_id is None or not root_folder or language_profile_id is None:
                 raise RuntimeError("Sonarr n'est pas configuré")
             remote = await self.sonarr.add_series(
                 media.tmdb_id, quality_profile_id, language_profile_id, root_folder, monitor,
             )
         else:
-            if not self.radarr:
+            if not self.radarr or quality_profile_id is None or not root_folder:
                 raise RuntimeError("Radarr n'est pas configuré")
             remote = await self.radarr.add_movie(media.tmdb_id, quality_profile_id, root_folder)
         return await self.store.upsert_availability(Availability(

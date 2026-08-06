@@ -73,3 +73,23 @@ def test_seerr_requests_a_movie_with_api_key_and_backstage_options():
         "mediaType": "movie", "mediaId": 438631, "is4k": False,
         "profileId": 5, "rootFolder": "/media/movies", "ignoreQuota": False,
     }
+
+
+def test_seerr_can_request_with_its_own_defaults():
+    captured = {}
+
+    async def handler(request):
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(201, json={"id": 8})
+
+    async def run():
+        async with _client(handler) as client:
+            await SeerrClient("http://seerr:5055", "secret", client).request_media(
+                tmdb_id=27205, media_type="Film", quality_profile_id=None,
+                root_folder=None, language_profile_id=None, monitor="all",
+            )
+
+    asyncio.run(run())
+    assert captured["json"] == {
+        "mediaType": "movie", "mediaId": 27205, "is4k": False, "ignoreQuota": False,
+    }
