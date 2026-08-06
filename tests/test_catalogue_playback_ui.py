@@ -43,3 +43,12 @@ def test_retention_admin_controls_and_notifications_are_present():
     assert "Conservé définitivement" in source
     assert "fetchKeepRequests" in api
     assert "fetchNotifications" in api
+
+
+def test_cleanup_simulation_is_available_to_admins():
+    account = ACCOUNT_SOURCE.read_text(encoding="utf-8")
+    api = API_SOURCE.read_text(encoding="utf-8")
+
+    assert "Aperçu du nettoyage (simulation)" in account
+    assert "Aucune suppression réelle" in account
+    assert "fetchCleanupPreview" in api

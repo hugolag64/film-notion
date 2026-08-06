@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { acceptKeepRequest, changePassword, createUser, deleteUser, extendRental, fetchDevices, fetchJellyfinUsers, fetchKeepRequests, fetchNotifications, fetchUsers, linkJellyfinUser, markNotificationRead, refuseKeepRequest, revokeDevice, revokeOtherDevices, updateUser } from './api';
+import { acceptKeepRequest, changePassword, createUser, deleteUser, extendRental, fetchCleanupPreview, fetchDevices, fetchJellyfinUsers, fetchKeepRequests, fetchNotifications, fetchUsers, linkJellyfinUser, markNotificationRead, refuseKeepRequest, revokeDevice, revokeOtherDevices, updateUser } from './api';
 import { useAuth } from './auth-context';
 
 export default function AccountPanel({isDarkMode, onClose}) {
@@ -15,6 +15,8 @@ export default function AccountPanel({isDarkMode, onClose}) {
     const [adminPasswords, setAdminPasswords] = useState({});
     const [keepRequests, setKeepRequests] = useState([]);
     const [notifications, setNotifications] = useState([]);
+    const [cleanupPreview, setCleanupPreview] = useState(null);
+    const [cleanupLoading, setCleanupLoading] = useState(false);
     const [error, setError] = useState('');
     const [notice, setNotice] = useState('');
     const [savingName, setSavingName] = useState(false);
@@ -159,6 +161,18 @@ export default function AccountPanel({isDarkMode, onClose}) {
         }
     };
 
+    const handleCleanupPreview = async () => {
+        try {
+            setCleanupLoading(true);
+            setError('');
+            setCleanupPreview(await fetchCleanupPreview());
+        } catch (requestError) {
+            setError(requestError.message);
+        } finally {
+            setCleanupLoading(false);
+        }
+    };
+
     const text = isDarkMode ? 'text-white' : 'text-[#0a2540]';
     const muted = isDarkMode ? 'text-white/60' : 'text-[#425466]';
     const panel = isDarkMode ? 'bg-[#111111] border-white/10' : 'bg-white border-[#e3e8ee]';
@@ -251,6 +265,26 @@ export default function AccountPanel({isDarkMode, onClose}) {
                                     </div>
                                 ))}
                             </div>
+                        </div>
+                        <div className="mb-8">
+                            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                                <h3 className="font-semibold">Aperçu du nettoyage (simulation)</h3>
+                                <button type="button" className="rounded border border-[#635bff] px-2 py-1 text-xs text-[#635bff]" onClick={handleCleanupPreview} disabled={cleanupLoading}>
+                                    {cleanupLoading ? 'Analyse…' : 'Analyser les expirations'}
+                                </button>
+                            </div>
+                            {cleanupPreview && <>
+                                <p className={`mb-3 rounded-lg border p-3 text-xs ${muted}`}>Aucune suppression réelle. {cleanupPreview.message}</p>
+                                <div className="space-y-2">
+                                    {cleanupPreview.items.length === 0 && <p className={`rounded-lg border p-3 text-sm ${muted}`}>Aucun contenu arrivé à expiration.</p>}
+                                    {cleanupPreview.items.map((item) => (
+                                        <div key={item.rental_id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3 text-sm">
+                                            <div><strong>{item.media_title}</strong><p className={`text-xs ${muted}`}>{item.expires_at ? `Expiré le ${new Date(item.expires_at).toLocaleDateString()}` : 'Sans expiration'}</p></div>
+                                            <span className={item.action === 'protected' ? 'text-emerald-600' : 'text-amber-600'}>{item.action === 'protected' ? `Protégé : ${item.reason}` : 'Serait supprimé'}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </>}
                         </div>
                         <h3 className="mb-3 font-semibold">Utilisateurs</h3>
                         <div className="mb-4 space-y-2">

@@ -183,6 +183,12 @@ export async function fetchKeepRequests() {
     return (await response.json()).requests;
 }
 
+export async function fetchCleanupPreview() {
+    const response = await fetch(`${API_BASE_URL}/admin/rentals/cleanup-preview`);
+    if (!response.ok) throw new Error((await response.json()).detail || 'Simulation indisponible');
+    return response.json();
+}
+
 async function rentalDecision(rentalId, action) {
     const response = await fetch(`${API_BASE_URL}/admin/rentals/${rentalId}/${action}`, {method: 'POST'});
     if (!response.ok) throw new Error((await response.json()).detail || 'Action impossible');
