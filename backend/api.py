@@ -595,9 +595,16 @@ async def start_recommendation_session(
         created_at=datetime.now(timezone.utc),
     )
     profile, events = await _recommendation_profile(current, store)
+    recent_axes = _recent_question_axes(events)
+    session.session_preferences.update({
+        "answers": [],
+        "question_index": 0,
+    })
+    candidates = await _recommendation_pool(current, store, session.session_preferences)
+    if not candidates or not any(item.score >= 0 for item in candidates):
+        return {"session": session.model_dump(mode="json"), "state": "empty", "question": None, "result": None, "quota": quota}
     gateway = _gemini_gateway()
     question_plan: list[str] = []
-    recent_axes = _recent_question_axes(events)
     if gateway.enabled:
         try:
             plan = gateway.plan_questions(profile.model_dump(mode="json"), recent_axes)
@@ -608,10 +615,7 @@ async def start_recommendation_session(
             await _record_gemini_failure(store, current, session.id, error)
     session.session_preferences.update({
         "question_plan": question_plan or _fallback_question_plan(recent_axes),
-        "answers": [],
-        "question_index": 0,
     })
-    candidates = await _recommendation_pool(current, store, session.session_preferences)
     question = _planned_question(session, candidates, profile, 0)
     if question is None:
         return {"session": session.model_dump(mode="json"), "state": "empty", "question": None, "result": None, "quota": quota}

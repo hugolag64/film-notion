@@ -88,3 +88,19 @@ def test_two_pass_usage_is_user_and_session_scoped(tmp_path, monkeypatch):
     assert len(usage) == 2
     assert sum(row["input_tokens"] for row in usage) == 22
     assert all(row["backstage_user_id"] == "hugo" for row in usage)
+
+
+def test_empty_local_pool_skips_gemini_planner(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    current = current_user()
+    monkeypatch.setattr(api, "_recommendation_pool", lambda *args: asyncio.sleep(0, result=[]))
+
+    class FailingGateway:
+        enabled = True
+
+        def plan_questions(self, profile, recent_axes):
+            raise AssertionError("Gemini planner must not run without local candidates")
+
+    monkeypatch.setattr(api, "_gemini_gateway", lambda: FailingGateway())
+    response = asyncio.run(api.start_recommendation_session(current, store))
+    assert response["state"] == "empty"
