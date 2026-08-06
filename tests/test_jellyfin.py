@@ -51,3 +51,69 @@ def test_find_by_tmdb_requests_provider_ids_from_jellyfin():
         assert match["Id"] == "interstellar"
 
     asyncio.run(run())
+
+
+def test_list_users_returns_only_safe_fields_and_uses_api_key():
+    async def handler(request):
+        assert request.url.path == "/Users"
+        assert request.headers["X-Emby-Token"] == "secret"
+        return httpx.Response(200, json={
+            "Users": [
+                {
+                    "Id": "jf-hugo",
+                    "Name": "Hugo",
+                    "Policy": {"IsAdministrator": True, "Password": "hidden"},
+                    "HashedPassword": "hidden",
+                },
+                {
+                    "Id": "jf-ophelie",
+                    "Name": "Ophélie",
+                    "Policy": {"IsAdministrator": False},
+                },
+            ]
+        })
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            client = JellyfinClient("http://127.0.0.1:8096", "secret", http_client)
+            users = await client.list_users()
+        assert users == [
+            {"id": "jf-hugo", "name": "Hugo", "is_admin": True},
+            {"id": "jf-ophelie", "name": "Ophélie", "is_admin": False},
+        ]
+
+    asyncio.run(run())
+
+
+def test_list_users_rejects_invalid_payload():
+    async def handler(request):
+        return httpx.Response(200, json={"Users": [{"Name": "Missing id"}]})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            client = JellyfinClient("http://127.0.0.1:8096", "secret", http_client)
+            try:
+                await client.list_users()
+            except ValueError as error:
+                assert str(error) == "invalid Jellyfin users response"
+            else:
+                raise AssertionError("invalid payload should raise ValueError")
+
+    asyncio.run(run())
+
+
+def test_list_users_propagates_http_errors():
+    async def handler(request):
+        return httpx.Response(503)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            client = JellyfinClient("http://127.0.0.1:8096", "secret", http_client)
+            try:
+                await client.list_users()
+            except httpx.HTTPStatusError as error:
+                assert error.response.status_code == 503
+            else:
+                raise AssertionError("HTTP errors should propagate")
+
+    asyncio.run(run())
