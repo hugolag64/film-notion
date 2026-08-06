@@ -289,6 +289,27 @@ def test_regular_user_can_submit_an_acquisition_request(tmp_path, monkeypatch):
     assert service.calls == [("dune", 5, "/media/movies")]
 
 
+def test_media_activity_is_admin_only(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+
+    class FakeActivityService:
+        async def activity(self):
+            return {"items": [], "disks": []}
+
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: FakeActivityService()
+    assert client.get("/api/media-server/activity").status_code == 200
+
+    client.post("/api/auth/users", json={
+        "display_name": "Paul", "email": "paul@example.com", "password": "12345678",
+    })
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={
+        "email": "paul@example.com", "password": "12345678", "remember_device": False,
+    })
+
+    assert client.get("/api/media-server/activity").status_code == 403
+
 def test_acquisition_returns_remote_media_server_reason(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     _setup(client)

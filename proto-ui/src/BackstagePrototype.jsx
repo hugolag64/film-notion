@@ -1062,7 +1062,7 @@ export default function BackstagePrototype() {
                                 </>}
                             </h1>
                         </div>
-                        <button onClick={openMediaActivity} className="rounded border px-2 py-1 text-xs text-[#635bff]">Activité serveur</button>
+                        {user?.role === 'admin' && <button onClick={openMediaActivity} className="rounded border px-2 py-1 text-xs text-[#635bff]">Activité serveur</button>}
                         <div className={`text-xs font-mono ${isDarkMode ? 'text-white/50' : 'text-[#425466]'
                             }`}>
                             {filteredMovies.length} Titre{filteredMovies.length > 1 ? 's' : ''} affiché{filteredMovies.length > 1 ? 's' : ''}

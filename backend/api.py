@@ -515,7 +515,7 @@ async def import_media_server_library(service: MediaServerService = Depends(get_
     return await service.import_existing_libraries()
 
 
-@router.get("/media-server/activity")
+@router.get("/media-server/activity", dependencies=[Depends(require_admin)])
 async def media_server_activity(service: MediaServerService = Depends(get_media_server_service)):
     return await service.activity()
 
