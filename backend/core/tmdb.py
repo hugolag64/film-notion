@@ -60,6 +60,46 @@ class TMDBClient:
             logger.error("Erreur recherche personne '%s': %s", query, e)
             return []
 
+    async def discover_movies(
+        self,
+        *,
+        with_genres: Optional[List[int]] = None,
+        page: int = 1,
+        sort_by: str = "popularity.desc",
+        min_vote_count: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """Discover French-language movie candidates for recommendations."""
+        url = f"{self.BASE_URL}/discover/movie"
+        params = {
+            **self.params,
+            "page": page,
+            "sort_by": sort_by,
+            "vote_count.gte": min_vote_count,
+        }
+        if with_genres:
+            params["with_genres"] = "|".join(str(genre_id) for genre_id in with_genres)
+        try:
+            response = await http.request_with_retry("GET", url, params=params)
+            response.raise_for_status()
+            return [
+                {
+                    "tmdb_id": result.get("id"),
+                    "title": result.get("title") or result.get("original_title") or "Sans titre",
+                    "overview": result.get("overview") or "",
+                    "genre_ids": result.get("genre_ids") or [],
+                    "release_date": result.get("release_date") or None,
+                    "vote_average": float(result.get("vote_average") or 0),
+                    "popularity": float(result.get("popularity") or 0),
+                    "poster_path": result.get("poster_path"),
+                    "backdrop_path": result.get("backdrop_path"),
+                }
+                for result in response.json().get("results", [])
+                if result.get("id")
+            ]
+        except Exception as error:
+            logger.error("Erreur découverte TMDB : %s", error)
+            return []
+
     async def search(self, query: str, is_series: bool = False, year: Optional[int] = None) -> List[Dict[str, Any]]:
         """Dispatch film/série."""
         return await (self.search_tv(query, year) if is_series else self.search_movie(query, year))

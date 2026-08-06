@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import Hls from 'hls.js';
 import AccountPanel from './AccountPanel';
 import AdminCenter from './components/AdminCenter';
+import RecommendationFlow from './components/RecommendationFlow';
 import { useAuth } from './auth-context';
 import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncMediaServer, importMediaServerLibrary, syncPlayback } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
@@ -112,6 +113,7 @@ export default function BackstagePrototype() {
     const [isDarkMode, setIsDarkMode] = useState(false); // Theme toggle state
     const [showAccountPanel, setShowAccountPanel] = useState(false);
     const [showAdminCenter, setShowAdminCenter] = useState(false);
+    const [showRecommendationFlow, setShowRecommendationFlow] = useState(false);
 
     // TMDB Relink Modal State
     const [showRelinkModal, setShowRelinkModal] = useState(false);
@@ -989,6 +991,9 @@ export default function BackstagePrototype() {
                         {user?.role === 'admin' && <button onClick={() => setShowAdminCenter(true)} className="rounded-lg border border-[#635bff]/40 px-3 py-2 text-xs font-semibold text-[#635bff]" title="Ouvrir l’administration">
                             Administration
                         </button>}
+                        <button onClick={() => setShowRecommendationFlow(true)} className="rounded-lg border px-3 py-2 text-xs font-semibold" title="Choisir un film">
+                            Choisir un film
+                        </button>
                         <button onClick={() => setShowAccountPanel(true)} className="rounded-lg border px-3 py-2 text-xs font-semibold" title="Ouvrir le compte">
                             {user?.display_name || 'Compte'}
                         </button>
@@ -998,6 +1003,7 @@ export default function BackstagePrototype() {
 
             {showAccountPanel && <AccountPanel isDarkMode={isDarkMode} onClose={() => setShowAccountPanel(false)} />}
             {showAdminCenter && user?.role === 'admin' && <AdminCenter isDarkMode={isDarkMode} onClose={() => setShowAdminCenter(false)} />}
+            {showRecommendationFlow && <RecommendationFlow isDarkMode={isDarkMode} onClose={() => setShowRecommendationFlow(false)} />}
 
             {/* Main App Layout with Dynamic Floating Sidebar */}
             <div className="flex-1 max-w-[1536px] w-full mx-auto flex p-6 gap-8">

@@ -23,6 +23,24 @@ async function authRequest(path, options = {}) {
     return body;
 }
 
+async function recommendationRequest(path, options = {}) {
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+        ...options,
+        credentials: 'same-origin',
+        headers: {
+            'Content-Type': 'application/json',
+            ...(options.headers || {}),
+        },
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) {
+        const error = new Error(body?.detail || 'Erreur de recommandation');
+        error.status = response.status;
+        throw error;
+    }
+    return body;
+}
+
 export async function fetchAuthStatus() {
     return authRequest('/status');
 }
@@ -101,6 +119,26 @@ export async function updateUser(userId, payload) {
 
 export async function deleteUser(userId) {
     await authRequest(`/users/${encodeURIComponent(userId)}`, {method: 'DELETE'});
+}
+
+export function startRecommendationSession() {
+    return recommendationRequest('/recommendations/sessions', {method: 'POST'});
+}
+
+export function answerRecommendation(sessionId, payload) {
+    return recommendationRequest(`/recommendations/sessions/${encodeURIComponent(sessionId)}/answers`, {
+        method: 'POST', body: JSON.stringify(payload),
+    });
+}
+
+export function finishRecommendation(sessionId) {
+    return recommendationRequest(`/recommendations/sessions/${encodeURIComponent(sessionId)}/finish`, {method: 'POST'});
+}
+
+export function recordRecommendationEvent(payload) {
+    return recommendationRequest('/recommendations/events', {
+        method: 'POST', body: JSON.stringify(payload),
+    });
 }
 
 /**

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from datetime import date, datetime
 
 
@@ -79,3 +79,30 @@ class UserMediaState(BaseModel):
     added_to_watchlist_at: Optional[datetime] = None
     first_started_at: Optional[datetime] = None
     last_interacted_at: datetime
+
+
+RecommendationEventType = Literal[
+    "shown", "picked", "dismissed", "more_like_this", "less_like_this",
+    "question_answered", "session_completed",
+]
+
+
+class RecommendationEvent(BaseModel):
+    id: str
+    backstage_user_id: str
+    session_id: Optional[str] = None
+    media_id: Optional[str] = None
+    event_type: RecommendationEventType
+    value: Optional[str] = None
+    numeric_value: Optional[float] = None
+    created_at: datetime
+
+
+class RecommendationSession(BaseModel):
+    id: str
+    backstage_user_id: str
+    question_count: int = 0
+    session_preferences: Dict[str, Any] = Field(default_factory=dict)
+    status: Literal["active", "completed", "cancelled"] = "active"
+    created_at: datetime
+    completed_at: Optional[datetime] = None

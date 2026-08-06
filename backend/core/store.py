@@ -6,7 +6,10 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from backend.core.models import Media, Notification, Rental, UserMediaState
+from backend.core.models import (
+    Media, Notification, RecommendationEvent, RecommendationSession,
+    Rental, UserMediaState,
+)
 from backend.core.media_server import Availability
 from backend.core.playback import PlaybackProgress
 
@@ -183,6 +186,41 @@ class MediaStore:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS recommendation_events (
+                    id TEXT PRIMARY KEY,
+                    backstage_user_id TEXT NOT NULL,
+                    session_id TEXT,
+                    media_id TEXT,
+                    event_type TEXT NOT NULL,
+                    value TEXT,
+                    numeric_value REAL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_recommendation_events_user_created "
+                "ON recommendation_events(backstage_user_id, created_at DESC)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS recommendation_sessions (
+                    id TEXT PRIMARY KEY,
+                    backstage_user_id TEXT NOT NULL,
+                    question_count INTEGER NOT NULL DEFAULT 0,
+                    session_preferences TEXT NOT NULL DEFAULT '{}',
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_at TEXT NOT NULL,
+                    completed_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_recommendation_sessions_user_status "
+                "ON recommendation_sessions(backstage_user_id, status)"
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS playback_progress (
                     backstage_user_id TEXT NOT NULL,
                     jellyfin_id TEXT NOT NULL,
@@ -273,6 +311,87 @@ class MediaStore:
                 data[field] = datetime.fromisoformat(data[field])
         data["is_favorite"] = bool(data.get("is_favorite", 0))
         return UserMediaState(**data)
+
+    @staticmethod
+    def _row_to_recommendation_event(row: sqlite3.Row) -> RecommendationEvent:
+        data = dict(row)
+        data["created_at"] = datetime.fromisoformat(data["created_at"])
+        return RecommendationEvent(**data)
+
+    @staticmethod
+    def _row_to_recommendation_session(row: sqlite3.Row) -> RecommendationSession:
+        data = dict(row)
+        data["session_preferences"] = json.loads(data.get("session_preferences") or "{}")
+        data["created_at"] = datetime.fromisoformat(data["created_at"])
+        if data.get("completed_at"):
+            data["completed_at"] = datetime.fromisoformat(data["completed_at"])
+        return RecommendationSession(**data)
+
+    def _record_recommendation_event_sync(self, event: RecommendationEvent) -> RecommendationEvent:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO recommendation_events "
+                "(id, backstage_user_id, session_id, media_id, event_type, value, numeric_value, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    event.id, event.backstage_user_id, event.session_id, event.media_id,
+                    event.event_type, event.value, event.numeric_value, event.created_at.isoformat(),
+                ),
+            )
+        return event
+
+    def _list_recommendation_events_sync(self, user_id: str) -> List[RecommendationEvent]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM recommendation_events WHERE backstage_user_id = ? "
+                "ORDER BY created_at DESC",
+                (user_id,),
+            ).fetchall()
+        return [self._row_to_recommendation_event(row) for row in rows]
+
+    def _create_recommendation_session_sync(self, session: RecommendationSession) -> RecommendationSession:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO recommendation_sessions "
+                "(id, backstage_user_id, question_count, session_preferences, status, created_at, completed_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    session.id, session.backstage_user_id, session.question_count,
+                    json.dumps(session.session_preferences), session.status,
+                    session.created_at.isoformat(),
+                    session.completed_at.isoformat() if session.completed_at else None,
+                ),
+            )
+        return session
+
+    def _get_recommendation_session_sync(self, session_id: str) -> Optional[RecommendationSession]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM recommendation_sessions WHERE id = ?", (session_id,),
+            ).fetchone()
+        return self._row_to_recommendation_session(row) if row else None
+
+    def _update_recommendation_session_sync(
+        self, session_id: str, fields: Dict[str, Any],
+    ) -> Optional[RecommendationSession]:
+        allowed = {"question_count", "session_preferences", "status", "completed_at"}
+        updates = {key: value for key, value in fields.items() if key in allowed}
+        if "session_preferences" in updates:
+            updates["session_preferences"] = json.dumps(updates["session_preferences"])
+        if updates.get("completed_at"):
+            completed_at = updates["completed_at"]
+            updates["completed_at"] = completed_at.isoformat() if isinstance(completed_at, datetime) else completed_at
+        if not updates:
+            return self._get_recommendation_session_sync(session_id)
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                f"UPDATE recommendation_sessions SET {assignments} WHERE id = ?",
+                [*updates.values(), session_id],
+            )
+        return self._get_recommendation_session_sync(session_id)
 
     def _get_user_media_state_sync(self, user_id: str, media_id: str) -> Optional[UserMediaState]:
         with sqlite3.connect(self.db_path) as conn:
@@ -987,6 +1106,25 @@ class MediaStore:
         self, user_id: str, media_id: str, fields: Dict[str, Any],
     ) -> UserMediaState:
         return await asyncio.to_thread(self._upsert_user_media_state_sync, user_id, media_id, fields)
+
+    async def record_recommendation_event(self, event: RecommendationEvent) -> RecommendationEvent:
+        return await asyncio.to_thread(self._record_recommendation_event_sync, event)
+
+    async def list_recommendation_events(self, user_id: str) -> List[RecommendationEvent]:
+        return await asyncio.to_thread(self._list_recommendation_events_sync, user_id)
+
+    async def create_recommendation_session(
+        self, session: RecommendationSession,
+    ) -> RecommendationSession:
+        return await asyncio.to_thread(self._create_recommendation_session_sync, session)
+
+    async def get_recommendation_session(self, session_id: str) -> Optional[RecommendationSession]:
+        return await asyncio.to_thread(self._get_recommendation_session_sync, session_id)
+
+    async def update_recommendation_session(
+        self, session_id: str, fields: Dict[str, Any],
+    ) -> Optional[RecommendationSession]:
+        return await asyncio.to_thread(self._update_recommendation_session_sync, session_id, fields)
 
     async def create(self, fields: Dict[str, Any]) -> Media:
         return await asyncio.to_thread(self._create_sync, fields)

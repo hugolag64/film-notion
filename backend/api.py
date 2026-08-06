@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import asyncio
 import sqlite3
 import uuid
+from random import Random
 from typing import Any, Dict, List, Optional
 import httpx
 from fastapi import APIRouter, HTTPException, Depends, Request
@@ -11,7 +12,10 @@ from pydantic import BaseModel
 
 from backend.config import Config
 from backend.core.store import MediaStore
-from backend.core.models import Media, Notification, Rental
+from backend.core.models import (
+    Media, Notification, RecommendationEvent, RecommendationEventType,
+    RecommendationSession, Rental,
+)
 
 from backend.core.tmdb import TMDBClient
 from backend.core.mapping import is_series
@@ -21,6 +25,10 @@ from backend.core.seerr import SeerrClient
 from backend.core.jellyfin import JellyfinClient
 from backend.core.media_server import MediaServerService
 from backend.core.backup import create_backup, get_backup_health, get_backup_status, verify_backup
+from backend.core.recommendations import (
+    RecommendationCandidate, build_taste_profile, choose_from_top,
+    score_candidate,
+)
 from backend.auth_api import AuthContext, get_auth_store, get_current_user, require_admin
 from backend.core.auth import AuthStore
 from urllib.parse import quote, parse_qsl, urlencode, urlsplit
@@ -87,6 +95,20 @@ class UpdatePersonalMediaRequest(BaseModel):
     review: Optional[str] = None
     status: Optional[str] = None
     is_favorite: Optional[bool] = None
+
+
+class RecommendationEventRequest(BaseModel):
+    session_id: Optional[str] = None
+    media_id: Optional[str] = None
+    event_type: RecommendationEventType
+    value: Optional[str] = None
+    numeric_value: Optional[float] = None
+
+
+class RecommendationAnswerRequest(BaseModel):
+    answer: str
+    value: Optional[str] = None
+    media_id: Optional[str] = None
 
 
 class RelinkTMDBRequest(BaseModel):
@@ -260,6 +282,177 @@ async def update_personal_media(
         fields["rating"] = None
     await store.upsert_user_media_state(current.user["id"], media_id, fields)
     return await _media_for_user(media, current, store)
+
+
+async def _recommendation_pool(
+    current: AuthContext,
+    store: MediaStore,
+    session_preferences: dict[str, Any],
+) -> list[RecommendationCandidate]:
+    user_id = current.user["id"]
+    medias = await store.fetch_all()
+    states = await store.list_user_media_states(user_id)
+    events = await store.list_recommendation_events(user_id)
+    playback = await store.list_resume_progress(user_id) + await store.list_recently_completed(user_id)
+    now = datetime.now(timezone.utc)
+    profile = build_taste_profile(medias, states, playback, events, now)
+    try:
+        tmdb = TMDBClient()
+        candidates = await tmdb.discover_movies(page=1, min_vote_count=25)
+    except (ValueError, httpx.HTTPError):
+        return []
+    state_by_media = {state.media_id: state for state in states}
+    seen_tmdb_ids = {
+        media.tmdb_id
+        for media in medias
+        if media.tmdb_id and (
+            state_by_media.get(media.id, None) and state_by_media[media.id].status in {"Terminé", "Terminée"}
+            or any(progress.media_id == media.id and (progress.played or progress.percent >= 95) for progress in playback)
+        )
+    }
+    watchlisted_tmdb_ids = {
+        media.tmdb_id
+        for media in medias
+        if media.tmdb_id and state_by_media.get(media.id) and (
+            state_by_media[media.id].status == "À regarder" or state_by_media[media.id].is_favorite
+        )
+    }
+    return [
+        score_candidate(
+            candidate, profile, session_preferences, seen_tmdb_ids,
+            watchlisted_tmdb_ids, now,
+        )
+        for candidate in candidates
+    ]
+
+
+def _serialize_recommendation(candidate: RecommendationCandidate | None) -> dict[str, Any] | None:
+    return candidate.model_dump(mode="json") if candidate else None
+
+
+def _question_from_candidates(candidates: list[RecommendationCandidate]) -> dict[str, Any] | None:
+    options = sorted((item for item in candidates if item.score >= 0), key=lambda item: item.score, reverse=True)[:2]
+    if not options:
+        return None
+    if len(options) == 1:
+        return {"type": "single", "prompt": "Voici une piste pour toi.", "options": [_serialize_recommendation(options[0])]}
+    return {
+        "type": "compare",
+        "prompt": "Tu préfères lequel ?",
+        "options": [_serialize_recommendation(item) for item in options],
+    }
+
+
+@router.post("/recommendations/events")
+async def record_recommendation_event(
+    payload: RecommendationEventRequest,
+    current: AuthContext = Depends(get_current_user),
+    store: MediaStore = Depends(get_store),
+):
+    event = RecommendationEvent(
+        id=str(uuid.uuid4()),
+        backstage_user_id=current.user["id"],
+        session_id=payload.session_id,
+        media_id=payload.media_id,
+        event_type=payload.event_type,
+        value=payload.value,
+        numeric_value=payload.numeric_value,
+        created_at=datetime.now(timezone.utc),
+    )
+    return (await store.record_recommendation_event(event)).model_dump(mode="json")
+
+
+@router.post("/recommendations/sessions")
+async def start_recommendation_session(
+    current: AuthContext = Depends(get_current_user),
+    store: MediaStore = Depends(get_store),
+):
+    session = RecommendationSession(
+        id=str(uuid.uuid4()),
+        backstage_user_id=current.user["id"],
+        created_at=datetime.now(timezone.utc),
+    )
+    await store.create_recommendation_session(session)
+    candidates = await _recommendation_pool(current, store, session.session_preferences)
+    question = _question_from_candidates(candidates)
+    if question is None:
+        return {"session": session.model_dump(mode="json"), "state": "empty", "question": None, "result": None}
+    for option in question["options"]:
+        await store.record_recommendation_event(RecommendationEvent(
+            id=str(uuid.uuid4()), backstage_user_id=current.user["id"],
+            session_id=session.id, event_type="shown", value=str(option["tmdb_id"]),
+            created_at=datetime.now(timezone.utc),
+        ))
+    return {"session": session.model_dump(mode="json"), "state": "question", "question": question, "result": None}
+
+
+@router.post("/recommendations/sessions/{session_id}/answers")
+async def answer_recommendation(
+    session_id: str,
+    payload: RecommendationAnswerRequest,
+    current: AuthContext = Depends(get_current_user),
+    store: MediaStore = Depends(get_store),
+):
+    session = await store.get_recommendation_session(session_id)
+    if not session or session.backstage_user_id != current.user["id"]:
+        raise HTTPException(status_code=404, detail="Session de recommandation introuvable")
+    if session.status != "active":
+        raise HTTPException(status_code=409, detail="Cette session est déjà terminée")
+    if session.question_count >= 10:
+        raise HTTPException(status_code=422, detail="Le nombre maximal de questions est atteint")
+    preferences = dict(session.session_preferences)
+    if payload.answer in {"light", "intense"}:
+        preferences["mood"] = payload.answer
+    if payload.answer.startswith("genre:"):
+        preferences["genre"] = payload.answer.removeprefix("genre:")
+    if payload.value:
+        preferred = list(preferences.get("preferred_tmdb_ids", []))
+        try:
+            preferred.append(int(payload.value))
+        except ValueError:
+            pass
+        preferences["preferred_tmdb_ids"] = preferred[-10:]
+    question_count = session.question_count + 1
+    await store.update_recommendation_session(session_id, {
+        "question_count": question_count,
+        "session_preferences": preferences,
+    })
+    await store.record_recommendation_event(RecommendationEvent(
+        id=str(uuid.uuid4()), backstage_user_id=current.user["id"],
+        session_id=session_id, media_id=payload.media_id,
+        event_type="question_answered", value=payload.answer,
+        created_at=datetime.now(timezone.utc),
+    ))
+    candidates = await _recommendation_pool(current, store, preferences)
+    if payload.answer == "surprise" or question_count >= 5:
+        result = choose_from_top(candidates, Random(session_id), top_n=8)
+        await store.update_recommendation_session(session_id, {
+            "status": "completed", "completed_at": datetime.now(timezone.utc),
+        })
+        await store.record_recommendation_event(RecommendationEvent(
+            id=str(uuid.uuid4()), backstage_user_id=current.user["id"],
+            session_id=session_id, media_id=payload.media_id,
+            event_type="session_completed", value=str(result.tmdb_id) if result else None,
+            created_at=datetime.now(timezone.utc),
+        ))
+        return {"session_id": session_id, "state": "result", "question": None, "result": _serialize_recommendation(result)}
+    question = _question_from_candidates(candidates)
+    return {"session_id": session_id, "state": "question" if question else "empty", "question": question, "result": None}
+
+
+@router.post("/recommendations/sessions/{session_id}/finish")
+async def finish_recommendation(
+    session_id: str,
+    current: AuthContext = Depends(get_current_user),
+    store: MediaStore = Depends(get_store),
+):
+    session = await store.get_recommendation_session(session_id)
+    if not session or session.backstage_user_id != current.user["id"]:
+        raise HTTPException(status_code=404, detail="Session de recommandation introuvable")
+    updated = await store.update_recommendation_session(session_id, {
+        "status": "completed", "completed_at": datetime.now(timezone.utc),
+    })
+    return updated.model_dump(mode="json")
 
 
 @router.get("/medias/{media_id}/episodes")
