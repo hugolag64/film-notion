@@ -5,6 +5,8 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from backend.core.playback import PlaybackProgress
+
 
 AvailabilityState = Literal[
     "requested", "searching", "downloading", "imported", "available", "error",
@@ -180,4 +182,38 @@ class MediaServerService:
         return {
             "items": [availability.model_dump(mode="json") for availability in await self.store.list_availabilities()],
             "disks": disks,
+        }
+
+    async def sync_playback(self, backstage_user_id: str, jellyfin_user_id: str) -> dict[str, int]:
+        if not self.jellyfin:
+            raise RuntimeError("Jellyfin n'est pas configuré")
+        remote_items = await self.jellyfin.user_playback(jellyfin_user_id)
+        synced = 0
+        for item in remote_items:
+            media_id, episode_id = await self.store.resolve_playback_item(item)
+            progress = PlaybackProgress(
+                backstage_user_id=backstage_user_id,
+                jellyfin_id=item["jellyfin_id"],
+                media_id=media_id,
+                episode_id=episode_id,
+                title=item["title"],
+                series_title=item.get("series_title"),
+                season_number=item.get("season_number"),
+                episode_number=item.get("episode_number"),
+                position_ticks=item.get("position_ticks", 0),
+                runtime_ticks=item.get("runtime_ticks", 0),
+                percent=min(100, max(0, float(item.get("percent", 0)))),
+                played=bool(item.get("played")) or float(item.get("percent", 0)) >= 95,
+                last_played_at=item.get("last_played_at"),
+            )
+            await self.store.upsert_playback(progress)
+            synced += 1
+        return {"synced": synced}
+
+    async def playback_summary(self, backstage_user_id: str) -> dict[str, Any]:
+        return {
+            "resume": await self.store.list_resume_progress(backstage_user_id),
+            "next_episodes": await self.store.list_next_episodes(backstage_user_id),
+            "recently_completed": await self.store.list_recently_completed(backstage_user_id),
+            "last_synced_at": await self.store.last_playback_sync(backstage_user_id),
         }

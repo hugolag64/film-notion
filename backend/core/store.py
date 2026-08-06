@@ -440,6 +440,36 @@ class MediaStore:
             ).fetchone()
         return self._row_to_playback(row)
 
+    def _resolve_playback_item_sync(self, item: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+        with sqlite3.connect(self.db_path) as conn:
+            jellyfin_ids = [
+                value for value in (item.get("jellyfin_id"), item.get("series_jellyfin_id"))
+                if value
+            ]
+            media_id = None
+            if jellyfin_ids:
+                placeholders = ", ".join("?" for _ in jellyfin_ids)
+                row = conn.execute(
+                    f"SELECT media_id FROM media_availability WHERE jellyfin_id IN ({placeholders}) LIMIT 1",
+                    jellyfin_ids,
+                ).fetchone()
+                media_id = row[0] if row else None
+            if media_id is None and item.get("tmdb_id") is not None:
+                media_type = "Série" if item.get("item_type") in {"Series", "Episode"} or item.get("series_title") else "Film"
+                row = conn.execute(
+                    "SELECT id FROM media WHERE tmdb_id = ? AND type = ? LIMIT 1",
+                    (item["tmdb_id"], media_type),
+                ).fetchone()
+                media_id = row[0] if row else None
+            episode_id = None
+            if media_id and item.get("season_number") is not None and item.get("episode_number") is not None:
+                row = conn.execute(
+                    "SELECT id FROM episode WHERE media_id = ? AND season_number = ? AND episode_number = ?",
+                    (media_id, item["season_number"], item["episode_number"]),
+                ).fetchone()
+                episode_id = row[0] if row else None
+        return media_id, episode_id
+
     def _list_playback_sync(self, user_id: str, completed: bool) -> List[PlaybackProgress]:
         clause = "(played = 1 OR percent >= 95)" if completed else "played = 0 AND percent < 95"
         with sqlite3.connect(self.db_path) as conn:
@@ -541,6 +571,9 @@ class MediaStore:
 
     async def upsert_playback(self, progress: PlaybackProgress) -> PlaybackProgress:
         return await asyncio.to_thread(self._upsert_playback_sync, progress)
+
+    async def resolve_playback_item(self, item: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+        return await asyncio.to_thread(self._resolve_playback_item_sync, item)
 
     async def list_resume_progress(self, user_id: str) -> List[PlaybackProgress]:
         return await asyncio.to_thread(self._list_playback_sync, user_id, False)

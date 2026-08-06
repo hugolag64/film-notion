@@ -15,7 +15,7 @@ from backend.core.tmdb_relink import build_relink_updates
 from backend.core.arr import RadarrClient, SonarrClient
 from backend.core.jellyfin import JellyfinClient
 from backend.core.media_server import MediaServerService
-from backend.auth_api import get_current_user, require_admin
+from backend.auth_api import AuthContext, get_current_user, require_admin
 from urllib.parse import quote, parse_qsl, urlencode, urlsplit
 
 router = APIRouter(
@@ -513,3 +513,36 @@ async def import_media_server_library(service: MediaServerService = Depends(get_
 @router.get("/media-server/activity")
 async def media_server_activity(service: MediaServerService = Depends(get_media_server_service)):
     return await service.activity()
+
+
+def _serialize_playback_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "resume": [item.model_dump(mode="json") for item in summary["resume"]],
+        "next_episodes": summary["next_episodes"],
+        "recently_completed": [item.model_dump(mode="json") for item in summary["recently_completed"]],
+        "last_synced_at": summary["last_synced_at"].isoformat() if summary["last_synced_at"] else None,
+    }
+
+
+@router.post("/playback/sync")
+async def sync_playback(
+    current: AuthContext = Depends(get_current_user),
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    jellyfin_user_id = current.user.get("jellyfin_user_id")
+    if not jellyfin_user_id:
+        return {"linked": False, "synced": 0}
+    try:
+        result = await service.sync_playback(current.user["id"], jellyfin_user_id)
+    except (httpx.HTTPError, ValueError, RuntimeError) as error:
+        raise HTTPException(status_code=503, detail="Progression Jellyfin indisponible") from error
+    return {"linked": True, **result}
+
+
+@router.get("/playback/summary")
+async def playback_summary(
+    current: AuthContext = Depends(get_current_user),
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    summary = _serialize_playback_summary(await service.playback_summary(current.user["id"]))
+    return {"linked": bool(current.user.get("jellyfin_user_id")), **summary}

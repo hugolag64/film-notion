@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 from urllib.parse import parse_qs, urlparse
 
 import backend.auth_api as auth_module
+import backend.api as api_module
 from backend.api import router as media_router
 from backend.auth_api import auth_router
 from backend.config import Config
@@ -220,6 +221,35 @@ def test_jellyfin_errors_do_not_erase_existing_links(tmp_path, monkeypatch):
         if user["id"] == user_id
     )
     assert stored["jellyfin_user_id"] == "jf-ophelie"
+
+
+def test_playback_routes_use_the_current_users_jellyfin_mapping(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    admin = client.get("/api/auth/me").json()["user"]
+    AuthStore(Config.DB_PATH).set_jellyfin_user_id(admin["id"], "jf-hugo")
+
+    class FakePlaybackService:
+        async def sync_playback(self, backstage_user_id, jellyfin_user_id):
+            assert backstage_user_id == admin["id"]
+            assert jellyfin_user_id == "jf-hugo"
+            return {"synced": 1}
+
+        async def playback_summary(self, backstage_user_id):
+            assert backstage_user_id == admin["id"]
+            return {"resume": [], "next_episodes": [], "recently_completed": [], "last_synced_at": None}
+
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: FakePlaybackService()
+    sync = client.post("/api/playback/sync")
+    summary = client.get("/api/playback/summary")
+
+    assert sync.status_code == 200
+    assert sync.json() == {"linked": True, "synced": 1}
+    assert summary.status_code == 200
+    assert summary.json() == {
+        "linked": True, "resume": [], "next_episodes": [],
+        "recently_completed": [], "last_synced_at": None,
+    }
 
 
 def test_media_catalog_requires_authentication(tmp_path, monkeypatch):
