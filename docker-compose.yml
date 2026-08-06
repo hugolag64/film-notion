@@ -3,6 +3,7 @@ services:
     build:
       context: .
     image: backstage:local
+    pull_policy: build
     environment:
       DB_PATH: /data/backstage.db
       PORT: 8090
