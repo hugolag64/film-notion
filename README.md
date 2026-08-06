@@ -83,6 +83,12 @@ python main.py
 
 Ouvre http://localhost:8090 (port configurable via la variable d'environnement `PORT`).
 
+## Authentification Backstage
+
+Au premier lancement, Backstage affiche un assistant pour créer le compte administrateur. Les comptes suivants sont créés depuis le menu du compte administrateur. La case **Se souvenir de cet appareil** conserve une session pendant 30 jours ; les sessions peuvent être révoquées depuis ce même menu.
+
+La base SQLite doit rester dans le volume persistant Docker. Sur le home server, elle se trouve dans `/srv/data/backstage/backstage.db`. Voir [la procédure d’authentification et de déploiement](docs/backstage-authentication.md).
+
 ## Architecture
 
 ```
