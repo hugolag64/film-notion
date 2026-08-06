@@ -6,7 +6,7 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from backend.core.models import Media, Notification, Rental
+from backend.core.models import Media, Notification, Rental, UserMediaState
 from backend.core.media_server import Availability
 from backend.core.playback import PlaybackProgress
 
@@ -162,6 +162,27 @@ class MediaStore:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS user_media_state (
+                    backstage_user_id TEXT NOT NULL,
+                    media_id TEXT NOT NULL,
+                    status TEXT,
+                    rating TEXT,
+                    review TEXT,
+                    is_favorite INTEGER NOT NULL DEFAULT 0,
+                    added_to_watchlist_at TEXT,
+                    first_started_at TEXT,
+                    last_interacted_at TEXT NOT NULL,
+                    PRIMARY KEY (backstage_user_id, media_id),
+                    FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_media_state_user_status "
+                "ON user_media_state(backstage_user_id, status)"
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS playback_progress (
                     backstage_user_id TEXT NOT NULL,
                     jellyfin_id TEXT NOT NULL,
@@ -243,6 +264,70 @@ class MediaStore:
             if data.get(field):
                 data[field] = datetime.fromisoformat(data[field])
         return Notification(**data)
+
+    @staticmethod
+    def _row_to_user_media_state(row: sqlite3.Row) -> UserMediaState:
+        data = dict(row)
+        for field in ("added_to_watchlist_at", "first_started_at", "last_interacted_at"):
+            if data.get(field):
+                data[field] = datetime.fromisoformat(data[field])
+        data["is_favorite"] = bool(data.get("is_favorite", 0))
+        return UserMediaState(**data)
+
+    def _get_user_media_state_sync(self, user_id: str, media_id: str) -> Optional[UserMediaState]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM user_media_state WHERE backstage_user_id = ? AND media_id = ?",
+                (user_id, media_id),
+            ).fetchone()
+        return self._row_to_user_media_state(row) if row else None
+
+    def _list_user_media_states_sync(self, user_id: str) -> List[UserMediaState]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM user_media_state WHERE backstage_user_id = ? ORDER BY last_interacted_at DESC",
+                (user_id,),
+            ).fetchall()
+        return [self._row_to_user_media_state(row) for row in rows]
+
+    def _upsert_user_media_state_sync(
+        self, user_id: str, media_id: str, fields: Dict[str, Any],
+    ) -> UserMediaState:
+        allowed = {
+            "status", "rating", "review", "is_favorite",
+            "added_to_watchlist_at", "first_started_at",
+        }
+        updates = {key: value for key, value in fields.items() if key in allowed}
+        now = datetime.now(timezone.utc)
+        if "status" in updates and updates["status"] == "À regarder" and "added_to_watchlist_at" not in updates:
+            updates["added_to_watchlist_at"] = now
+        encoded = {}
+        for key, value in updates.items():
+            if key in {"added_to_watchlist_at", "first_started_at"} and value is not None:
+                encoded[key] = value.isoformat() if isinstance(value, datetime) else value
+            elif key == "is_favorite":
+                encoded[key] = int(bool(value))
+            else:
+                encoded[key] = value
+        encoded["last_interacted_at"] = now.isoformat()
+        columns = ["backstage_user_id", "media_id", *encoded.keys()]
+        values = [user_id, media_id, *encoded.values()]
+        assignments = ", ".join(f"{column} = excluded.{column}" for column in encoded)
+        placeholders = ", ".join("?" for _ in columns)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute(
+                f"INSERT INTO user_media_state ({', '.join(columns)}) VALUES ({placeholders}) "
+                f"ON CONFLICT(backstage_user_id, media_id) DO UPDATE SET {assignments}",
+                values,
+            )
+            row = conn.execute(
+                "SELECT * FROM user_media_state WHERE backstage_user_id = ? AND media_id = ?",
+                (user_id, media_id),
+            ).fetchone()
+        return self._row_to_user_media_state(row)
 
     @staticmethod
     def _encode(field: str, value: Any) -> Any:
@@ -891,6 +976,17 @@ class MediaStore:
 
     async def fetch_one(self, media_id: str) -> Optional[Media]:
         return await asyncio.to_thread(self._fetch_one_sync, media_id)
+
+    async def get_user_media_state(self, user_id: str, media_id: str) -> Optional[UserMediaState]:
+        return await asyncio.to_thread(self._get_user_media_state_sync, user_id, media_id)
+
+    async def list_user_media_states(self, user_id: str) -> List[UserMediaState]:
+        return await asyncio.to_thread(self._list_user_media_states_sync, user_id)
+
+    async def upsert_user_media_state(
+        self, user_id: str, media_id: str, fields: Dict[str, Any],
+    ) -> UserMediaState:
+        return await asyncio.to_thread(self._upsert_user_media_state_sync, user_id, media_id, fields)
 
     async def create(self, fields: Dict[str, Any]) -> Media:
         return await asyncio.to_thread(self._create_sync, fields)

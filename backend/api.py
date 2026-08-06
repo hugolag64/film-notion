@@ -82,6 +82,13 @@ class UpdateMediaRequest(BaseModel):
     categories: Optional[List[str]] = None
 
 
+class UpdatePersonalMediaRequest(BaseModel):
+    rating: Optional[str] = None
+    review: Optional[str] = None
+    status: Optional[str] = None
+    is_favorite: Optional[bool] = None
+
+
 class RelinkTMDBRequest(BaseModel):
     tmdb_id: int
 
@@ -197,17 +204,62 @@ async def relink_tmdb(
     return refreshed
 
 
+async def _media_for_user(media: Media, current: AuthContext, store: MediaStore) -> Media:
+    state = await store.get_user_media_state(current.user["id"], media.id)
+    if state is None and current.user["role"] == "admin":
+        return media
+    tags = [tag for tag in media.tags if tag != "Favoris"]
+    if state and state.is_favorite:
+        tags.append("Favoris")
+    updates = {
+        "status": state.status if state else None,
+        "rating": state.rating if state else None,
+        "review": state.review if state else None,
+        "tags": tags,
+    }
+    return media.model_copy(update=updates)
+
+
 @router.get("/medias", response_model=List[Media])
-async def list_medias(store: MediaStore = Depends(get_store)):
-    return await store.fetch_all()
+async def list_medias(
+    current: AuthContext = Depends(get_current_user),
+    store: MediaStore = Depends(get_store),
+):
+    medias = await store.fetch_all()
+    return [await _media_for_user(media, current, store) for media in medias]
 
 
 @router.get("/medias/{media_id}", response_model=Media)
-async def get_media(media_id: str, store: MediaStore = Depends(get_store)):
+async def get_media(
+    media_id: str,
+    current: AuthContext = Depends(get_current_user),
+    store: MediaStore = Depends(get_store),
+):
     media = await store.fetch_one(media_id)
     if not media:
         raise HTTPException(status_code=404, detail="Média non trouvé")
-    return media
+    return await _media_for_user(media, current, store)
+
+
+@router.patch("/medias/{media_id}/personal", response_model=Media)
+async def update_personal_media(
+    media_id: str,
+    payload: UpdatePersonalMediaRequest,
+    current: AuthContext = Depends(get_current_user),
+    store: MediaStore = Depends(get_store),
+):
+    media = await store.fetch_one(media_id)
+    if not media:
+        raise HTTPException(status_code=404, detail="Média non trouvé")
+    fields = payload.model_dump(exclude_none=True)
+    if fields.get("status") == "watched":
+        fields["status"] = "Terminé"
+    elif fields.get("status") == "watchlist":
+        fields["status"] = "À regarder"
+    if fields.get("status") == "À regarder":
+        fields["rating"] = None
+    await store.upsert_user_media_state(current.user["id"], media_id, fields)
+    return await _media_for_user(media, current, store)
 
 
 @router.get("/medias/{media_id}/episodes")

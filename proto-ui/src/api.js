@@ -141,6 +141,19 @@ export async function updateMedia(mediaId, payload) {
     }
 }
 
+export async function updatePersonalMedia(mediaId, payload) {
+    const response = await fetch(`${API_BASE_URL}/medias/${encodeURIComponent(mediaId)}/personal`, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        throw new Error(detail.detail || `Failed to update personal media: ${response.statusText}`);
+    }
+    return response.json();
+}
+
 export async function fetchAvailability(mediaId) {
     const response = await fetch(`${API_BASE_URL}/medias/${mediaId}/availability`);
     if (!response.ok) throw new Error(`Disponibilité impossible: ${response.statusText}`);

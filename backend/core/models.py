@@ -67,3 +67,15 @@ class Notification(BaseModel):
     dedupe_key: Optional[str] = None
     read_at: Optional[datetime] = None
     created_at: datetime
+
+
+class UserMediaState(BaseModel):
+    backstage_user_id: str
+    media_id: str
+    status: Optional[str] = None
+    rating: Optional[str] = None
+    review: Optional[str] = None
+    is_favorite: bool = False
+    added_to_watchlist_at: Optional[datetime] = None
+    first_started_at: Optional[datetime] = None
+    last_interacted_at: datetime

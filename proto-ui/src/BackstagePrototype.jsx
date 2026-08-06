@@ -3,7 +3,7 @@ import Hls from 'hls.js';
 import AccountPanel from './AccountPanel';
 import AdminCenter from './components/AdminCenter';
 import { useAuth } from './auth-context';
-import { fetchMedias, updateMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncMediaServer, importMediaServerLibrary, syncPlayback } from './api';
+import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncMediaServer, importMediaServerLibrary, syncPlayback } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
 
@@ -540,7 +540,7 @@ export default function BackstagePrototype() {
         }
 
         try {
-            await updateMedia(id, { is_favorite: newFav });
+            await updatePersonalMedia(id, { is_favorite: newFav });
         } catch (err) {
             console.error('API update failed:', err);
         }
@@ -556,7 +556,7 @@ export default function BackstagePrototype() {
         }
 
         try {
-            await updateMedia(id, { rating: String(rating), status: 'Terminé' });
+            await updatePersonalMedia(id, { rating: String(rating), status: 'Terminé' });
         } catch (err) {
             console.error('API update failed:', err);
         }
@@ -608,7 +608,7 @@ export default function BackstagePrototype() {
         }
 
         try {
-            await updateMedia(id, { status: newStatus });
+            await updatePersonalMedia(id, { status: newStatus });
         } catch (err) {
             console.error('API update status failed:', err);
         }
@@ -656,7 +656,7 @@ export default function BackstagePrototype() {
         }
 
         try {
-            await updateMedia(id, { review: notes });
+            await updatePersonalMedia(id, { review: notes });
         } catch (err) {
             console.error('API update failed:', err);
         }
