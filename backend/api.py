@@ -30,6 +30,7 @@ from backend.core.recommendations import (
     RecommendationCandidate, build_adaptive_question, build_taste_profile, choose_from_top,
     score_candidate, score_recommendation_candidate,
 )
+from backend.core.gemini_recommendations import GeminiRecommendationGateway
 from backend.auth_api import AuthContext, get_auth_store, get_current_user, require_admin
 from backend.core.auth import AuthStore
 from urllib.parse import quote, parse_qsl, urlencode, urlsplit
@@ -94,6 +95,39 @@ def _recommendation_quota(
         "remaining": max(0, limit - used),
         "unlimited": False,
     }
+
+
+def _gemini_gateway() -> GeminiRecommendationGateway:
+    return GeminiRecommendationGateway(
+        api_key=Config.GEMINI_API_KEY,
+        model=Config.GEMINI_MODEL,
+        max_output_tokens=Config.GEMINI_MAX_OUTPUT_TOKENS,
+    )
+
+
+def _gemini_cost_estimate(usage: dict[str, int]) -> float:
+    return round(
+        usage.get("input_tokens", 0) * 0.0000005
+        + usage.get("output_tokens", 0) * 0.000003,
+        8,
+    )
+
+
+async def _record_gemini_usage(
+    store: MediaStore,
+    current: AuthContext,
+    session_id: str,
+    usage: dict[str, int],
+) -> None:
+    await store.record_recommendation_usage({
+        "backstage_user_id": current.user["id"],
+        "session_id": session_id,
+        "model": Config.GEMINI_MODEL,
+        "input_tokens": usage.get("input_tokens", 0),
+        "output_tokens": usage.get("output_tokens", 0),
+        "cost_estimate_usd": _gemini_cost_estimate(usage),
+        "created_at": datetime.now(timezone.utc),
+    })
 
 
 class UpdateMediaRequest(BaseModel):
@@ -446,6 +480,22 @@ async def start_recommendation_session(
         created_at=datetime.now(timezone.utc),
     )
     candidates = await _recommendation_pool(current, store, session.session_preferences)
+    gateway = _gemini_gateway()
+    if gateway.enabled and candidates:
+        try:
+            shortlist = gateway.select_shortlist(
+                {"session_preferences": session.session_preferences},
+                [item.model_dump(mode="json") for item in candidates if item.score >= 0],
+            )
+            if shortlist:
+                allowed_ids = set(shortlist.tmdb_ids)
+                candidates = [item for item in candidates if item.tmdb_id in allowed_ids]
+                session.session_preferences["gemini_shortlist_used"] = True
+                if shortlist.usage:
+                    await _record_gemini_usage(store, current, session.id, shortlist.usage)
+        except (RuntimeError, ValueError, TypeError):
+            # Local scoring remains the authoritative fallback.
+            pass
     question = _adaptive_question_from_candidates(candidates, session.session_preferences)
     if question is None:
         return {"session": session.model_dump(mode="json"), "state": "empty", "question": None, "result": None, "quota": quota}
@@ -507,7 +557,22 @@ async def answer_recommendation(
     ))
     candidates = await _recommendation_pool(current, store, preferences)
     if payload.answer == "surprise" or question_count >= 5:
-        result = choose_from_top(candidates, Random(session_id), top_n=8)
+        result = None
+        gateway = _gemini_gateway()
+        if gateway.enabled and candidates:
+            try:
+                selection = gateway.select_final(
+                    {"session_preferences": preferences},
+                    [{"answer": payload.answer, "value": payload.value}],
+                    [item.model_dump(mode="json") for item in candidates if item.score >= 0],
+                )
+                if selection:
+                    result = next((item for item in candidates if item.tmdb_id == selection.tmdb_id), None)
+                    if selection.usage:
+                        await _record_gemini_usage(store, current, session_id, selection.usage)
+            except (RuntimeError, ValueError, TypeError):
+                pass
+        result = result or choose_from_top(candidates, Random(session_id), top_n=8)
         await store.update_recommendation_session(session_id, {
             "status": "completed", "completed_at": datetime.now(timezone.utc),
         })
