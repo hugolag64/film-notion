@@ -14,9 +14,12 @@ Variables :
 ```dotenv
 RECOMMENDATION_DAILY_LIMIT=2
 RECOMMENDATION_TIMEZONE=Europe/Paris
+RECOMMENDATION_RECENT_DAYS=30
 GEMINI_API_KEY=
 GEMINI_MODEL=gemini-3.5-flash-lite
 GEMINI_MAX_OUTPUT_TOKENS=256
 ```
 
 SQLite conserve les evenements, les preferences par utilisateur et les compteurs de tokens/couts. Les sauvegardes restent volontairement reportees jusqu'a la reception du disque dedie.
+
+Les films deja proposes sont memorises par utilisateur pendant `RECOMMENDATION_RECENT_DAYS` jours. Cette memoire evite de reproposer les memes choix entre deux sessions, y compris pour les questions suivantes d'une meme session. Si le catalogue restant est trop petit, le moteur relache uniquement ce delai pour eviter un ecran vide ; les films notes, vus ou explicitement rejetes restent exclus.

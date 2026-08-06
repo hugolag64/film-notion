@@ -405,6 +405,14 @@ async def _recommendation_pool(
         )
     }
     seen_tmdb_ids.update(shown_tmdb_ids)
+    hard_seen_tmdb_ids = set(seen_tmdb_ids)
+    recent_cutoff = now - timedelta(days=max(0, Config.RECOMMENDATION_RECENT_DAYS))
+    recent_shown_tmdb_ids = {
+        int(event.value) for event in events
+        if event.event_type == "shown"
+        and event.created_at >= recent_cutoff
+        and str(event.value or "").isdigit()
+    }
     hard_reject_media_ids = {event.media_id for event in events if event.event_type == "hard_reject" and event.media_id}
     hard_reject_tmdb_ids = {
         media.tmdb_id for media in medias if media.id in hard_reject_media_ids and media.tmdb_id
@@ -418,6 +426,8 @@ async def _recommendation_pool(
         if event.event_type == "already_seen" and str(event.value or "").isdigit()
     }
     seen_tmdb_ids.update(already_seen_tmdb_ids)
+    hard_seen_tmdb_ids.update(already_seen_tmdb_ids)
+    seen_tmdb_ids.update(recent_shown_tmdb_ids)
     temporary_negative_tmdb_ids: dict[int, float] = {}
     for event in events:
         if event.event_type not in {"not_now", "less_like_this"} or not str(event.value or "").isdigit():
@@ -436,15 +446,22 @@ async def _recommendation_pool(
             state_by_media[media.id].is_watchlist or state_by_media[media.id].is_favorite
         )
     }
-    return [
-        score_recommendation_candidate(
-            candidate, profile, session_preferences,
-            {"seen_tmdb_ids": seen_tmdb_ids, "watchlisted_tmdb_ids": watchlisted_tmdb_ids,
-             "hard_reject_tmdb_ids": hard_reject_tmdb_ids,
-             "temporary_negative_tmdb_ids": temporary_negative_tmdb_ids}, now,
-        )
-        for candidate in candidates
-    ]
+    def score_pool(excluded_ids: set[int]) -> list[RecommendationCandidate]:
+        return [
+            score_recommendation_candidate(
+                candidate, profile, session_preferences,
+                {"seen_tmdb_ids": excluded_ids, "watchlisted_tmdb_ids": watchlisted_tmdb_ids,
+                 "hard_reject_tmdb_ids": hard_reject_tmdb_ids,
+                 "temporary_negative_tmdb_ids": temporary_negative_tmdb_ids}, now,
+            )
+            for candidate in candidates
+        ]
+
+    scored = score_pool(seen_tmdb_ids)
+    if recent_shown_tmdb_ids and sum(item.score >= 0 for item in scored) < 2:
+        # A cooldown is a soft memory, never a reason to show an empty screen.
+        scored = score_pool(hard_seen_tmdb_ids)
+    return scored
 
 
 def _serialize_recommendation(candidate: RecommendationCandidate | None) -> dict[str, Any] | None:
@@ -477,12 +494,22 @@ async def _remember_question_options(
     question: dict[str, Any],
     store: MediaStore,
 ) -> None:
+    options = question.get("options") or []
     shown_ids = list(session.session_preferences.get("shown_tmdb_ids", []))
-    shown_ids.extend(str(option["tmdb_id"]) for option in question["options"])
+    shown_ids.extend(str(option["tmdb_id"]) for option in options if option.get("tmdb_id") is not None)
     session.session_preferences["shown_tmdb_ids"] = list(dict.fromkeys(shown_ids))[-20:]
     await store.update_recommendation_session(session.id, {
         "session_preferences": session.session_preferences,
     })
+    now = datetime.now(timezone.utc)
+    for option in options:
+        tmdb_id = option.get("tmdb_id")
+        if tmdb_id is None:
+            continue
+        await store.record_recommendation_event(RecommendationEvent(
+            id=str(uuid.uuid4()), backstage_user_id=session.backstage_user_id,
+            session_id=session.id, event_type="shown", value=str(tmdb_id), created_at=now,
+        ))
 
 
 @router.post("/recommendations/events")
@@ -530,8 +557,14 @@ async def start_recommendation_session(
             )
             if shortlist:
                 allowed_ids = set(shortlist.tmdb_ids)
-                if allowed_ids:
-                    candidates = [item for item in candidates if item.tmdb_id in allowed_ids]
+                shortlisted = [
+                    item for item in candidates
+                    if item.score >= 0 and item.tmdb_id in allowed_ids
+                ]
+                # Gemini may return stale/rejected IDs. Keep the local pool when
+                # its shortlist would make the next question too small.
+                if len(shortlisted) >= 2:
+                    candidates = shortlisted
                 session.session_preferences["gemini_shortlist_used"] = True
                 if shortlist.usage:
                     await _record_gemini_usage(store, current, session.id, shortlist.usage)
@@ -555,12 +588,6 @@ async def start_recommendation_session(
         quota["used"] += 1
         quota["remaining"] = max(0, quota["limit"] - quota["used"])
     await _remember_question_options(session, question, store)
-    for option in question["options"]:
-        await store.record_recommendation_event(RecommendationEvent(
-            id=str(uuid.uuid4()), backstage_user_id=current.user["id"],
-            session_id=session.id, event_type="shown", value=str(option["tmdb_id"]),
-            created_at=datetime.now(timezone.utc),
-        ))
     return {"session": session.model_dump(mode="json"), "state": "question", "question": question, "result": None, "quota": quota}
 
 

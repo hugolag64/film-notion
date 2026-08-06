@@ -9,6 +9,7 @@ class Config:
     PORT = int(os.getenv("PORT", "8090"))
     RECOMMENDATION_DAILY_LIMIT = int(os.getenv("RECOMMENDATION_DAILY_LIMIT", "2") or "2")
     RECOMMENDATION_TIMEZONE = os.getenv("RECOMMENDATION_TIMEZONE", "Europe/Paris")
+    RECOMMENDATION_RECENT_DAYS = int(os.getenv("RECOMMENDATION_RECENT_DAYS", "30") or "30")
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
     GEMINI_MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "256") or "256")
