@@ -229,12 +229,17 @@ async def relink_tmdb(
 async def _media_for_user(media: Media, current: AuthContext, store: MediaStore) -> Media:
     state = await store.get_user_media_state(current.user["id"], media.id)
     if state is None and current.user["role"] == "admin":
+        if media.rating and str(media.rating).strip():
+            return media.model_copy(update={"status": "Terminé"})
         return media
     tags = [tag for tag in media.tags if tag != "Favoris"]
     if state and state.is_favorite:
         tags.append("Favoris")
+    status = state.status if state else None
+    if state and state.rating and str(state.rating).strip():
+        status = "Terminé"
     updates = {
-        "status": state.status if state else None,
+        "status": status,
         "rating": state.rating if state else None,
         "review": state.review if state else None,
         "tags": tags,
@@ -278,7 +283,9 @@ async def update_personal_media(
         fields["status"] = "Terminé"
     elif fields.get("status") == "watchlist":
         fields["status"] = "À regarder"
-    if fields.get("status") == "À regarder":
+    if fields.get("rating") is not None and str(fields["rating"]).strip():
+        fields["status"] = "Terminé"
+    elif fields.get("status") == "À regarder":
         fields["rating"] = None
     await store.upsert_user_media_state(current.user["id"], media_id, fields)
     return await _media_for_user(media, current, store)
@@ -651,6 +658,8 @@ async def update_media(
         update_fields["status"] = status
         if status == "À regarder":
             update_fields["rating"] = None
+    if payload.rating is not None and str(payload.rating).strip():
+        update_fields["status"] = "Terminé"
     if payload.support is not None:
         update_fields["support"] = payload.support
     if payload.backdrop_url is not None:

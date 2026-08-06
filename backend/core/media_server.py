@@ -117,7 +117,7 @@ class MediaServerService:
                     media.id, available_at, available_at + timedelta(days=21),
                     int(size_bytes) if size_bytes is not None else None,
                 )
-            if remote.get("hasFile") and not media.support:
+            if remote.get("hasFile") or availability.jellyfin_id:
                 await self.store.update(media.id, {"support": "Serveur"})
             return saved
         except Exception:

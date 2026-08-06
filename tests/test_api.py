@@ -1,7 +1,15 @@
 import asyncio
 
-from backend.api import UpdateMediaRequest, health_router, update_media
+from backend.api import (
+    UpdateMediaRequest,
+    UpdatePersonalMediaRequest,
+    health_router,
+    update_media,
+    update_personal_media,
+)
+from backend.auth_api import AuthContext
 from backend.core.models import Media
+from backend.core.store import MediaStore
 
 
 class FakeStore:
@@ -25,6 +33,20 @@ def test_watching_later_clears_rating():
     assert result.status == "À regarder"
     assert result.rating is None
     assert store.updates == {"status": "À regarder", "rating": None}
+
+
+def test_personal_rating_marks_media_as_watched(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film"}))
+    current = AuthContext(user={"id": "hugo", "role": "user"}, session_id="session", token="token")
+
+    result = asyncio.run(update_personal_media(
+        "dune", UpdatePersonalMediaRequest(rating="4"), current, store,
+    ))
+
+    assert result.rating == "4"
+    assert result.status == "Terminé"
 from urllib.parse import parse_qs, urlsplit
 
 import backend.api as api

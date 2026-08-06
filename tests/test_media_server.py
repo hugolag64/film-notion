@@ -77,13 +77,17 @@ class FakePlaybackJellyfin(FakeJellyfin):
 def test_imported_arr_item_becomes_available_when_jellyfin_matches(tmp_path):
     store = MediaStore(str(tmp_path / "test.db"))
     store.init_schema()
-    media = asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    media = asyncio.run(store.create({
+        "id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631,
+        "support": "Streaming",
+    }))
     service = MediaServerService(store, radarr=FakeRadarr(), jellyfin=FakeJellyfin())
 
     availability = asyncio.run(service.sync_media(media.id))
 
     assert availability.state == "available"
     assert availability.jellyfin_id == "jelly-dune"
+    assert asyncio.run(store.fetch_one(media.id)).support == "Serveur"
 
 
 def test_sync_media_starts_a_rental_when_jellyfin_has_the_film(tmp_path):

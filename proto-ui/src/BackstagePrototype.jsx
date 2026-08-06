@@ -235,7 +235,21 @@ export default function BackstagePrototype() {
         if (!selectedMedia?.id) return;
         let cancelled = false;
         const loadAvailability = () => fetchAvailability(selectedMedia.id)
-            .then((result) => { if (!cancelled) setMediaAvailability(result); })
+            .then((result) => {
+                if (cancelled) return;
+                setMediaAvailability(result);
+                const availability = result?.availability;
+                const onServer = Boolean(availability?.jellyfin_id)
+                    || ['imported', 'available'].includes(availability?.state);
+                if (onServer) {
+                    setMovies((current) => current.map((movie) => movie.id === selectedMedia.id
+                        ? { ...movie, supports: ['Serveur'], support: 'Serveur' }
+                        : movie));
+                    setSelectedMovie((current) => current?.id === selectedMedia.id
+                        ? { ...current, supports: ['Serveur'], support: 'Serveur' }
+                        : current);
+                }
+            })
             .catch(() => { if (!cancelled) setMediaAvailability(null); });
         setMediaAvailability(null);
         loadAvailability();
@@ -491,7 +505,7 @@ export default function BackstagePrototype() {
                         cast: castList.length > 0 ? castList : ['Acteur principal'],
                         rating: numericRating,
                         userNotes: m.review || '',
-                        status: normalizeStatus(m.status || (numericRating > 0 ? 'Terminé' : 'À regarder')),
+                        status: numericRating > 0 ? 'Terminé' : normalizeStatus(m.status || 'À regarder'),
                         isFavorite: isFav,
                         runtime: '120 min',
                         supports: (m.support ? (m.support.startsWith('[') ? JSON.parse(m.support) : [m.support]) : []),
@@ -1027,7 +1041,7 @@ export default function BackstagePrototype() {
                             {[
                                 { id: 'all', label: collection === 'Séries' ? 'Toutes les séries' : 'Tous les films', icon: '🎬', count: collectionMedias.length },
                                 { id: 'watched', label: collection === 'Séries' ? 'Séries terminées' : 'Films vus', icon: '👁️', count: collectionMedias.filter(m => ['Terminé', 'Terminée'].includes(m.status)).length },
-                                { id: 'watchlist', label: 'À regarder', icon: '🔖', count: collectionMedias.filter(m => m.status === 'À regarder').length },
+                                { id: 'watchlist', label: 'Watchlist', icon: '📌', count: collectionMedias.filter(m => m.status === 'À regarder').length },
                                 { id: 'favorite', label: 'Favoris', icon: '❤️', count: collectionMedias.filter(m => m.isFavorite).length },
                             ].map((item) => (
                                 <button
@@ -1110,7 +1124,7 @@ export default function BackstagePrototype() {
                             </span>
                             <h1 className={`text-3xl font-serif font-bold tracking-tight mt-1 ${isDarkMode ? 'text-white' : 'text-[#0a2540]'
                                 }`}>
-                                {collection === 'Séries' && (activeFilter === 'all' ? 'Toutes les séries' : activeFilter === 'watched' ? 'Séries terminées' : activeFilter === 'watchlist' ? 'Séries à regarder' : 'Favoris')}
+                                {collection === 'Séries' && (activeFilter === 'all' ? 'Toutes les séries' : activeFilter === 'watched' ? 'Séries terminées' : activeFilter === 'watchlist' ? 'Watchlist' : 'Favoris')}
                                 {collection === 'Films' && <>
                                 {activeFilter === 'all' && 'Tous les Films'}
                                 {activeFilter === 'watched' && 'Films Vus'}
@@ -1924,11 +1938,11 @@ export default function BackstagePrototype() {
                         {/* TMDB Candidates List */}
                         <div className="p-4 overflow-y-auto space-y-3 flex-1">
                             {tmdbLoading ? (
-                                <div className="text-center py-8 text-xs font-mono text-white/50">
+                                <div className={`text-center py-8 text-xs font-mono ${isDarkMode ? 'text-white/50' : 'text-[#425466]/70'}`}>
                                     Recherche des correspondances TMDB en cours...
                                 </div>
                             ) : tmdbResults.length === 0 ? (
-                                <div className="text-center py-8 text-xs font-mono text-white/50">
+                                <div className={`text-center py-8 text-xs font-mono ${isDarkMode ? 'text-white/50' : 'text-[#425466]/70'}`}>
                                     Aucun film trouvé sur TMDB pour "{tmdbSearchQuery}". Essayez un autre mot-clé.
                                 </div>
                             ) : (
@@ -1951,14 +1965,14 @@ export default function BackstagePrototype() {
 
                                         <div className="flex-1 min-w-0">
                                             <div className="flex items-center justify-between">
-                                                <h4 className="text-sm font-bold text-white group-hover:text-[#635bff] transition-colors truncate">
+                                                <h4 className={`text-sm font-bold ${isDarkMode ? 'text-white' : 'text-[#0a2540]'} group-hover:text-[#635bff] transition-colors truncate`}>
                                                     {r.title}
                                                 </h4>
-                                                <span className="text-[10px] font-mono bg-white/10 text-white/70 px-2 py-0.5 rounded shrink-0">
+                                                <span className={`text-[10px] font-mono px-2 py-0.5 rounded shrink-0 ${isDarkMode ? 'bg-white/10 text-white/70' : 'bg-[#0a2540]/5 text-[#425466]'}`}>
                                                     {r.release_date ? new Date(r.release_date).getFullYear() : '—'}
                                                 </span>
                                             </div>
-                                            <p className="text-xs text-white/70 mt-1 line-clamp-2 leading-relaxed">
+                                            <p className={`text-xs mt-1 line-clamp-2 leading-relaxed ${isDarkMode ? 'text-white/70' : 'text-[#425466]'}`}>
                                                 {r.overview || 'Aucun synopsis.'}
                                             </p>
                                             <div className="mt-2 text-[10px] font-mono text-[#635bff] font-bold">
