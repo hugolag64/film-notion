@@ -1,5 +1,5 @@
 import asyncio
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from backend.core.store import MediaStore
 from backend.core.media_server import Availability
@@ -224,3 +224,33 @@ def test_rental_refusal_and_extension_keep_the_file_temporary(tmp_path):
     assert refused.keep_requested_at is None
     extended = asyncio.run(store.extend_rental("rental-2", now))
     assert extended.expires_at > now
+
+
+def test_cleanup_preview_only_marks_unprotected_expired_rentals(tmp_path):
+    store = _store(tmp_path)
+    expired = datetime.now(timezone.utc) - timedelta(days=1)
+    for media_id, title in (("delete", "Delete me"), ("kept", "Keep me"), ("pending", "Pending")):
+        asyncio.run(store.create({"id": media_id, "title": title, "type": "Film"}))
+    asyncio.run(store.create_rental(Rental(
+        id="delete-rental", media_id="delete", backstage_user_id="hugo", status="available",
+        requested_at=expired, expires_at=expired, created_at=expired, updated_at=expired,
+    )))
+    asyncio.run(store.create_rental(Rental(
+        id="kept-rental", media_id="kept", backstage_user_id="hugo", status="kept",
+        storage_policy="permanent", requested_at=expired, expires_at=None,
+        created_at=expired, updated_at=expired,
+    )))
+    asyncio.run(store.create_rental(Rental(
+        id="pending-rental", media_id="pending", backstage_user_id="hugo", status="keep_requested",
+        requested_at=expired, expires_at=expired, keep_requested_at=expired,
+        created_at=expired, updated_at=expired,
+    )))
+
+    preview = asyncio.run(store.cleanup_preview(datetime.now(timezone.utc)))
+    actions = {item["rental_id"]: item["action"] for item in preview}
+    reasons = {item["rental_id"]: item["reason"] for item in preview}
+    assert actions["delete-rental"] == "would_delete"
+    assert actions["kept-rental"] == "protected"
+    assert reasons["kept-rental"] == "permanent"
+    assert actions["pending-rental"] == "protected"
+    assert reasons["pending-rental"] == "conservation_pending"

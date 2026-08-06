@@ -642,6 +642,48 @@ class MediaStore:
             )
         return cursor.rowcount > 0
 
+    def _cleanup_preview_sync(self, now: datetime) -> List[Dict[str, Any]]:
+        active_states = ("requested", "downloading", "available", "keep_requested")
+        placeholders = ", ".join("?" for _ in active_states)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT media_rentals.*, media.title AS media_title FROM media_rentals "
+                "JOIN media ON media.id = media_rentals.media_id "
+                "WHERE media_rentals.status IN ('available', 'keep_requested', 'kept') "
+                "AND (media_rentals.expires_at IS NULL OR media_rentals.expires_at <= ?) "
+                "ORDER BY media_rentals.expires_at IS NULL, media_rentals.expires_at",
+                (now.isoformat(),),
+            ).fetchall()
+            preview = []
+            for row in rows:
+                reason = None
+                if row["storage_policy"] == "permanent" or row["status"] == "kept":
+                    reason = "permanent"
+                elif row["status"] == "keep_requested":
+                    reason = "conservation_pending"
+                else:
+                    other_active = conn.execute(
+                        f"SELECT 1 FROM media_rentals WHERE media_id = ? AND id != ? AND status IN ({placeholders}) LIMIT 1",
+                        (row["media_id"], row["id"], *active_states),
+                    ).fetchone()
+                    if other_active:
+                        reason = "other_active_rental"
+                    else:
+                        playing = conn.execute(
+                            "SELECT 1 FROM playback_progress WHERE media_id = ? AND played = 0 AND percent > 0 LIMIT 1",
+                            (row["media_id"],),
+                        ).fetchone()
+                        if playing:
+                            reason = "playback_in_progress"
+                preview.append({
+                    "rental_id": row["id"], "media_id": row["media_id"],
+                    "media_title": row["media_title"], "status": row["status"],
+                    "storage_policy": row["storage_policy"], "expires_at": row["expires_at"],
+                    "action": "protected" if reason else "would_delete", "reason": reason,
+                })
+        return preview
+
     def _upsert_availability_sync(self, availability: Availability) -> Availability:
         values = availability.model_dump()
         if values["last_synced_at"] is not None:
@@ -866,6 +908,9 @@ class MediaStore:
         self, user_id: str, media_id: str, first_played_at: datetime, expires_at: datetime,
     ) -> bool:
         return await asyncio.to_thread(self._mark_rental_first_played_sync, user_id, media_id, first_played_at, expires_at)
+
+    async def cleanup_preview(self, now: datetime) -> List[Dict[str, Any]]:
+        return await asyncio.to_thread(self._cleanup_preview_sync, now)
 
     async def upsert_availability(self, availability: Availability) -> Availability:
         return await asyncio.to_thread(self._upsert_availability_sync, availability)
