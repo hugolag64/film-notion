@@ -3,6 +3,7 @@ import Hls from 'hls.js';
 import AccountPanel from './AccountPanel';
 import AdminCenter from './components/AdminCenter';
 import RecommendationFlow from './components/RecommendationFlow';
+import FilmDetailView from './components/FilmDetailView';
 import { useAuth } from './auth-context';
 import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncMediaServer, importMediaServerLibrary, syncPlayback } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
@@ -1326,10 +1327,7 @@ export default function BackstagePrototype() {
 
             {/* Centered cinematic film detail */}
             {selectedMovie && (
-                <div
-                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 backdrop-blur-md animate-fade-in-smooth cursor-pointer sm:p-6"
-                    onClick={closeMovie}
-                >
+                <FilmDetailView media={selectedMovie} isDarkMode={isDarkMode} onClose={closeMovie}>
                     <div
                         className={`flex h-[min(94vh,980px)] w-full max-w-5xl flex-col overflow-y-auto rounded-2xl border shadow-2xl animate-fade-in-smooth cursor-default ${isDarkMode
                             ? 'bg-[#0a0a0a] text-white border-white/10'
@@ -1817,7 +1815,7 @@ export default function BackstagePrototype() {
                             </div>
 
                             <button
-                                onClick={() => setSelectedMovie(null)}
+                                onClick={closeMovie}
                                 className={`text-xs font-semibold px-4 py-2 rounded-lg transition-all cursor-pointer shadow ${isDarkMode
                                     ? 'bg-white/10 hover:bg-white/20 border border-white/20 text-white'
                                     : 'bg-[#0a2540] hover:bg-black text-white'
@@ -1827,7 +1825,7 @@ export default function BackstagePrototype() {
                             </button>
                         </div>
                     </div>
-                </div>
+                </FilmDetailView>
             )}
 
             {/* TMDB Search & Relink Modal */}
