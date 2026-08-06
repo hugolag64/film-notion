@@ -1230,7 +1230,7 @@ export default function BackstagePrototype() {
                                     </button>
                                     {selectedRental && (
                                         <div className="mt-3 rounded-lg border border-[#635bff]/30 bg-[#635bff]/5 p-3 text-xs">
-                                            <div>Location : <strong>{selectedRental.status === 'keep_requested' ? 'conservation demandée' : selectedRental.status}</strong></div>
+                                            <div>Location : <strong>{selectedRental.status === 'keep_requested' ? 'conservation demandée' : selectedRental.status === 'kept' ? 'Conservé définitivement' : selectedRental.status}</strong></div>
                                             {selectedRental.expires_at && <div className="mt-1 opacity-70">Expire le {new Date(selectedRental.expires_at).toLocaleDateString('fr-FR')}</div>}
                                             {selectedRental.status === 'available' && <button onClick={keepRental} className="mt-2 rounded border border-[#635bff] px-2 py-1 font-semibold text-[#635bff]">Demander à conserver</button>}
                                         </div>
@@ -1532,7 +1532,7 @@ export default function BackstagePrototype() {
 
                             {selectedRental && (
                                 <div className={`mt-4 rounded-xl border p-4 text-xs ${isDarkMode ? 'border-[#635bff]/30 bg-[#635bff]/10' : 'border-[#635bff]/30 bg-[#635bff]/5'}`}>
-                                    <div>Location : <strong>{selectedRental.status === 'keep_requested' ? 'conservation demandée' : selectedRental.status}</strong></div>
+                                    <div>Location : <strong>{selectedRental.status === 'keep_requested' ? 'conservation demandée' : selectedRental.status === 'kept' ? 'Conservé définitivement' : selectedRental.status}</strong></div>
                                     {selectedRental.expires_at && <div className="mt-1 opacity-70">Expire le {new Date(selectedRental.expires_at).toLocaleDateString('fr-FR')}</div>}
                                     {selectedRental.status === 'available' && <button onClick={keepRental} className="mt-2 rounded border border-[#635bff] px-2 py-1 font-semibold text-[#635bff]">Demander à conserver</button>}
                                 </div>

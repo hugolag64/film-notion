@@ -177,6 +177,34 @@ export async function requestRentalKeep(rentalId) {
     return response.json();
 }
 
+export async function fetchKeepRequests() {
+    const response = await fetch(`${API_BASE_URL}/admin/rentals/keep-requests`);
+    if (!response.ok) throw new Error((await response.json()).detail || 'Demandes indisponibles');
+    return (await response.json()).requests;
+}
+
+async function rentalDecision(rentalId, action) {
+    const response = await fetch(`${API_BASE_URL}/admin/rentals/${rentalId}/${action}`, {method: 'POST'});
+    if (!response.ok) throw new Error((await response.json()).detail || 'Action impossible');
+    return response.json();
+}
+
+export const acceptKeepRequest = (rentalId) => rentalDecision(rentalId, 'keep');
+export const refuseKeepRequest = (rentalId) => rentalDecision(rentalId, 'refuse');
+export const extendRental = (rentalId) => rentalDecision(rentalId, 'extend');
+
+export async function fetchNotifications() {
+    const response = await fetch(`${API_BASE_URL}/notifications`);
+    if (!response.ok) throw new Error((await response.json()).detail || 'Notifications indisponibles');
+    return (await response.json()).notifications;
+}
+
+export async function markNotificationRead(notificationId) {
+    const response = await fetch(`${API_BASE_URL}/notifications/${notificationId}/read`, {method: 'POST'});
+    if (!response.ok) throw new Error((await response.json()).detail || 'Notification indisponible');
+    return response.json();
+}
+
 export async function fetchMediaServerStatus() {
     const response = await fetch(`${API_BASE_URL}/media-server/status`);
     if (!response.ok) throw new Error('État des services indisponible');

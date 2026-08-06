@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { changePassword, createUser, deleteUser, fetchDevices, fetchJellyfinUsers, fetchUsers, linkJellyfinUser, revokeDevice, revokeOtherDevices, updateUser } from './api';
+import { acceptKeepRequest, changePassword, createUser, deleteUser, extendRental, fetchDevices, fetchJellyfinUsers, fetchKeepRequests, fetchNotifications, fetchUsers, linkJellyfinUser, markNotificationRead, refuseKeepRequest, revokeDevice, revokeOtherDevices, updateUser } from './api';
 import { useAuth } from './auth-context';
 
 export default function AccountPanel({isDarkMode, onClose}) {
@@ -13,6 +13,8 @@ export default function AccountPanel({isDarkMode, onClose}) {
     const [newUser, setNewUser] = useState({display_name: '', email: '', password: ''});
     const [passwordForm, setPasswordForm] = useState({current_password: '', new_password: '', password_confirmation: ''});
     const [adminPasswords, setAdminPasswords] = useState({});
+    const [keepRequests, setKeepRequests] = useState([]);
+    const [notifications, setNotifications] = useState([]);
     const [error, setError] = useState('');
     const [notice, setNotice] = useState('');
     const [savingName, setSavingName] = useState(false);
@@ -21,7 +23,11 @@ export default function AccountPanel({isDarkMode, onClose}) {
         try {
             setError('');
             setDevices(await fetchDevices());
-            if (user.role === 'admin') setUsers(await fetchUsers());
+            setNotifications(await fetchNotifications());
+            if (user.role === 'admin') {
+                setUsers(await fetchUsers());
+                setKeepRequests(await fetchKeepRequests());
+            }
         } catch (requestError) {
             setError(requestError.message);
         }
@@ -142,6 +148,17 @@ export default function AccountPanel({isDarkMode, onClose}) {
         }
     };
 
+    const handleRetentionAction = async (rentalId, action, noticeText) => {
+        try {
+            setError('');
+            await action(rentalId);
+            setNotice(noticeText);
+            await refresh();
+        } catch (requestError) {
+            setError(requestError.message);
+        }
+    };
+
     const text = isDarkMode ? 'text-white' : 'text-[#0a2540]';
     const muted = isDarkMode ? 'text-white/60' : 'text-[#425466]';
     const panel = isDarkMode ? 'bg-[#111111] border-white/10' : 'bg-white border-[#e3e8ee]';
@@ -160,6 +177,20 @@ export default function AccountPanel({isDarkMode, onClose}) {
 
                 {error && <p className="mb-4 rounded-lg bg-rose-500/10 p-3 text-sm text-rose-500" role="alert">{error}</p>}
                 {notice && <p className="mb-4 rounded-lg bg-emerald-500/10 p-3 text-sm text-emerald-500" role="status">{notice}</p>}
+
+                {notifications.length > 0 && (
+                    <div className="mb-8">
+                        <h3 className="mb-3 font-semibold">Notifications</h3>
+                        <div className="space-y-2">
+                            {notifications.map((notification) => (
+                                <button key={notification.id} type="button" onClick={async () => { if (!notification.read_at) { await markNotificationRead(notification.id); await refresh(); } }} className={`block w-full rounded-lg border p-3 text-left text-sm ${notification.read_at ? 'opacity-60' : 'border-[#635bff]'}`}>
+                                    <p>{notification.message}</p>
+                                    <p className={`mt-1 text-xs ${muted}`}>{new Date(notification.created_at).toLocaleString()}</p>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
 
                 <form className="mb-8 flex flex-wrap items-end gap-2" onSubmit={handleNameSave}>
                     <label className="grid min-w-56 flex-1 gap-1 text-sm">
@@ -199,6 +230,28 @@ export default function AccountPanel({isDarkMode, onClose}) {
 
                 {user.role === 'admin' && (
                     <div>
+                        <div className="mb-8">
+                            <h3 className="mb-3 font-semibold">Demandes de conservation</h3>
+                            <div className="space-y-2">
+                                {keepRequests.length === 0 && <p className={`rounded-lg border p-3 text-sm ${muted}`}>Aucune demande en attente.</p>}
+                                {keepRequests.map((item) => (
+                                    <div key={item.rental.id} className="rounded-lg border p-3 text-sm">
+                                        <div className="flex flex-wrap items-start justify-between gap-3">
+                                            <div>
+                                                <p className="font-semibold">{item.media_title}</p>
+                                                <p className={`text-xs ${muted}`}>{item.requester_name}</p>
+                                                <p className={`text-xs ${muted}`}>Expire le {item.rental.expires_at ? new Date(item.rental.expires_at).toLocaleDateString() : '—'}</p>
+                                            </div>
+                                            <div className="flex flex-wrap gap-2">
+                                                <button type="button" className="rounded bg-emerald-600 px-2 py-1 text-xs font-semibold text-white" onClick={() => handleRetentionAction(item.rental.id, acceptKeepRequest, 'Film conservé définitivement.')}>Conserver définitivement</button>
+                                                <button type="button" className="rounded border border-rose-500 px-2 py-1 text-xs text-rose-500" onClick={() => handleRetentionAction(item.rental.id, refuseKeepRequest, 'Demande refusée.')}>Refuser</button>
+                                                <button type="button" className="rounded border border-[#635bff] px-2 py-1 text-xs text-[#635bff]" onClick={() => handleRetentionAction(item.rental.id, extendRental, 'Location prolongée de 7 jours.')}>Prolonger de 7 jours</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
                         <h3 className="mb-3 font-semibold">Utilisateurs</h3>
                         <div className="mb-4 space-y-2">
                             {users.map((target) => (
