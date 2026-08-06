@@ -5,6 +5,7 @@ import sqlite3
 import uuid
 from random import Random
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 import httpx
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import Response
@@ -73,6 +74,26 @@ def _rewrite_hls_manifest(manifest: str, media_id: str) -> str:
 
 def get_store() -> MediaStore:
     return MediaStore(Config.DB_PATH)
+
+
+def _recommendation_quota(
+    current: AuthContext,
+    store: MediaStore,
+    now: datetime,
+) -> dict[str, Any]:
+    if current.user.get("role") == "admin":
+        return {"limit": None, "used": 0, "remaining": None, "unlimited": True}
+    timezone_name = getattr(Config, "RECOMMENDATION_TIMEZONE", "Europe/Paris")
+    local_now = now.astimezone(ZoneInfo(timezone_name))
+    day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    limit = max(0, int(getattr(Config, "RECOMMENDATION_DAILY_LIMIT", 2)))
+    used = store.count_recommendation_sessions_sync(current.user["id"], day_start)
+    return {
+        "limit": limit,
+        "used": used,
+        "remaining": max(0, limit - used),
+        "unlimited": False,
+    }
 
 
 class UpdateMediaRequest(BaseModel):
@@ -413,16 +434,25 @@ async def start_recommendation_session(
     current: AuthContext = Depends(get_current_user),
     store: MediaStore = Depends(get_store),
 ):
+    quota = _recommendation_quota(current, store, datetime.now(timezone.utc))
+    if not quota["unlimited"] and quota["remaining"] <= 0:
+        raise HTTPException(
+            status_code=429,
+            detail="Limite quotidienne atteinte : 2 sessions de sélection par jour.",
+        )
     session = RecommendationSession(
         id=str(uuid.uuid4()),
         backstage_user_id=current.user["id"],
         created_at=datetime.now(timezone.utc),
     )
-    await store.create_recommendation_session(session)
     candidates = await _recommendation_pool(current, store, session.session_preferences)
     question = _adaptive_question_from_candidates(candidates, session.session_preferences)
     if question is None:
-        return {"session": session.model_dump(mode="json"), "state": "empty", "question": None, "result": None}
+        return {"session": session.model_dump(mode="json"), "state": "empty", "question": None, "result": None, "quota": quota}
+    await store.create_recommendation_session(session)
+    if not quota["unlimited"]:
+        quota["used"] += 1
+        quota["remaining"] = max(0, quota["limit"] - quota["used"])
     await _remember_question_options(session, question, store)
     for option in question["options"]:
         await store.record_recommendation_event(RecommendationEvent(
@@ -430,7 +460,7 @@ async def start_recommendation_session(
             session_id=session.id, event_type="shown", value=str(option["tmdb_id"]),
             created_at=datetime.now(timezone.utc),
         ))
-    return {"session": session.model_dump(mode="json"), "state": "question", "question": question, "result": None}
+    return {"session": session.model_dump(mode="json"), "state": "question", "question": question, "result": None, "quota": quota}
 
 
 @router.post("/recommendations/sessions/{session_id}/answers")

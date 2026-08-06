@@ -476,7 +476,7 @@ class MediaStore:
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute(
                 "SELECT COUNT(*) FROM recommendation_sessions "
-                "WHERE backstage_user_id = ? AND created_at >= ?",
+                "WHERE backstage_user_id = ? AND created_at >= ? AND status != 'cancelled'",
                 (user_id, day_start_iso),
             ).fetchone()
         return int(row[0] or 0)
