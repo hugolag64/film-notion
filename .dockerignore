@@ -1,0 +1,17 @@
+.git
+.gitignore
+.env
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+backstage.db
+backstage.db.*
+history.jsonl
+cache.json
+tmdb-a-verifier.csv
+tests
+docs
+legacy
+proto-ui/node_modules
+proto-ui/dist

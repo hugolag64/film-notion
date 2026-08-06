@@ -1,6 +1,6 @@
 // API Client module for Backstage Python Backend
 
-const API_BASE_URL = 'http://localhost:8090/api';
+const API_BASE_URL = '/api';
 
 /**
  * Fetch all media items from SQLite database via FastAPI.
