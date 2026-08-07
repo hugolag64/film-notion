@@ -124,6 +124,26 @@ def test_regular_user_cannot_list_users(tmp_path, monkeypatch):
     assert client.get("/api/auth/users").status_code == 403
 
 
+def test_regular_user_cannot_mutate_shared_catalog(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    client.post("/api/auth/users", json={
+        "display_name": "Paul", "email": "paul@example.com", "password": "12345678",
+    })
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={
+        "email": "paul@example.com", "password": "12345678", "remember_device": False,
+    })
+
+    assert client.patch("/api/medias/media-1", json={"title": "Modifié"}).status_code == 403
+    assert client.post("/api/medias/from_tmdb", json={"tmdb_id": 1}).status_code == 403
+    assert client.post(
+        "/api/medias/media-1/relink_tmdb", json={"tmdb_id": 1}
+    ).status_code == 403
+    assert client.post("/api/series/from_tmdb", json={"tmdb_id": 1}).status_code == 403
+    assert client.post("/api/series/media-1/refresh").status_code == 403
+
+
 def test_admin_can_list_and_link_jellyfin_accounts(tmp_path, monkeypatch):
     monkeypatch.setattr(auth_module, "JellyfinClient", FakeJellyfinClient)
     monkeypatch.setattr(Config, "JELLYFIN_API_KEY", "secret")

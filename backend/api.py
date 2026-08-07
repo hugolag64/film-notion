@@ -361,7 +361,7 @@ async def search_tmdb_person_endpoint(query: str):
     } for result in results if result.get("id") and result.get("name")]
 
 
-@router.post("/medias/{media_id}/relink_tmdb", response_model=Media)
+@router.post("/medias/{media_id}/relink_tmdb", response_model=Media, dependencies=[Depends(require_admin)])
 async def relink_tmdb(
     media_id: str,
     payload: RelinkTMDBRequest,
@@ -886,7 +886,7 @@ async def update_episode(
     }
 
 
-@router.post("/medias/from_tmdb", response_model=Media)
+@router.post("/medias/from_tmdb", response_model=Media, dependencies=[Depends(require_admin)])
 async def create_media_from_tmdb(
     payload: CreateFromTMDBRequest,
     store: MediaStore = Depends(get_store),
@@ -1010,7 +1010,7 @@ async def refresh_series_from_tmdb(media_id: str, store: MediaStore, tmdb: TMDBC
     return await store.fetch_one(media_id)
 
 
-@router.post("/series/from_tmdb", response_model=Media)
+@router.post("/series/from_tmdb", response_model=Media, dependencies=[Depends(require_admin)])
 async def create_series_from_tmdb_endpoint(
     payload: CreateFromTMDBRequest,
     store: MediaStore = Depends(get_store),
@@ -1018,7 +1018,7 @@ async def create_series_from_tmdb_endpoint(
     return await create_series_from_tmdb(payload, store, TMDBClient())
 
 
-@router.post("/series/{media_id}/refresh", response_model=Media)
+@router.post("/series/{media_id}/refresh", response_model=Media, dependencies=[Depends(require_admin)])
 async def refresh_series_from_tmdb_endpoint(
     media_id: str,
     store: MediaStore = Depends(get_store),
@@ -1026,7 +1026,7 @@ async def refresh_series_from_tmdb_endpoint(
     return await refresh_series_from_tmdb(media_id, store, TMDBClient())
 
 
-@router.patch("/medias/{media_id}", response_model=Media)
+@router.patch("/medias/{media_id}", response_model=Media, dependencies=[Depends(require_admin)])
 async def update_media(
     media_id: str,
     payload: UpdateMediaRequest,
