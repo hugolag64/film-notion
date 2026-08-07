@@ -1,120 +1,74 @@
-# Backstage — Enrichisseur de vidéothèque Notion
+# Backstage
 
-Application web locale (NiceGUI) qui enrichit automatiquement une base de données
-Notion de films à partir de l'API [TMDB](https://www.themoviedb.org/) :
-réalisateur, synopsis, genres → catégories, tags, date de sortie, statut/support,
-et affiche en couverture.
+Backstage est une application web personnelle et familiale pour gerer un catalogue de films et series, suivre les preferences de chaque utilisateur, trouver quoi regarder et piloter un serveur media local.
 
-## Prérequis
+## Stack
 
-- Python 3.10+
-- Une intégration Notion (token) avec accès à la base films
-- Une clé API TMDB (v3)
+- FastAPI + SQLite pour l'API et la persistance ;
+- React + Vite pour l'interface ;
+- TMDB pour les metadonnees ;
+- Jellyfin pour la lecture et la progression ;
+- Jellyseerr/Seerr, Radarr et Sonarr pour les demandes et telechargements ;
+- Docker Compose pour le deploiement.
 
-## Installation
+## Fonctionnalites
 
-```bash
-python -m venv .venv
-.venv\Scripts\activate        # Windows
-# source .venv/bin/activate   # macOS / Linux
-pip install -r requirements.txt
-```
+- catalogue partage et etats personnels ;
+- favoris, watchlist, historique et notes ;
+- fiche media avec note TMDB ;
+- recommandations interactives ;
+- disponibilite, locations temporaires et quotas ;
+- demandes de films/series, lecture Jellyfin et reprise ;
+- suivi des episodes par utilisateur ;
+- notifications, administration, sauvegardes et supervision.
 
-## Serveur média local
+## Installation locale
 
-Ajoute les variables de `.env.example` pour activer Radarr, Sonarr et Jellyfin.
-Backstage garde les clés API côté serveur, synchronise les états régulièrement et
-ouvre Jellyfin pour la lecture. Garde les API *arr locales ; pour l'accès extérieur,
-protège Backstage et Jellyfin avec une couche privée ou un reverse proxy authentifié.
+    python -m venv .venv
+    .venv\Scripts\activate
+    pip install -r requirements.txt
+    python main.py
+
+Pour le frontend :
+
+    cd proto-ui
+    npm install
+    npm run dev
+
+En production, construire le frontend puis lancer le serveur avec Docker Compose.
 
 ## Configuration
 
-Crée un fichier `.env` à la racine :
+Copier .env.example vers .env et renseigner au minimum :
 
-```dotenv
-NOTION_TOKEN=secret_xxx
-DATABASE_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TMDB_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    TMDB_API_KEY=
+    DB_PATH=backstage.db
+    BACKSTAGE_PUBLIC_URL=http://localhost:8090
+    BACKSTAGE_COOKIE_SECURE=0
 
-# Optionnels
-ANTHROPIC_API_KEY=sk-ant-...   # active l'onglet « Reco IA » (Claude)
-OMDB_API_KEY=xxxxxxxx          # ajoute note IMDb + classification d'âge aux candidats
-SYNC_INTERVAL_MIN=0            # >0 : synchronisation auto toutes les N minutes
-BACKSTAGE_DEV=0               # 1 : recharge à chaud (dev)
-```
+Les integrations media sont optionnelles. Les secrets restent cote serveur et ne doivent jamais etre commites.
 
-## Fonctionnalités
+Les quotas de recommandation et de rate limiting sont configurables avec :
 
-- **Enrichissement automatique** concurrent (films **et séries**) + résolution manuelle des ambiguïtés (wizard avec affiches, réalisateur, synopsis, note IMDb).
-- **Recherche manuelle libre** (titre + année) dans le wizard.
-- **Dry-run** : prévisualiser les changements avant toute écriture Notion.
-- **Statistiques** : taux d'enrichissement, top genres, répartition, **détection de doublons**.
-- **Historique** des modifications (auto/manuel) dans `history.jsonl`.
-- **Reco IA** (Claude) : suggestions à partir des films notés (si `ANTHROPIC_API_KEY`).
-- **Sync auto** périodique optionnelle (`SYNC_INTERVAL_MIN`).
+    RECOMMENDATION_DAILY_LIMIT=2
+    RECOMMENDATION_TIMEZONE=Europe/Paris
+    AUTH_RATE_LIMIT_WINDOW_SEC=300
+    AUTH_RATE_LIMIT_MAX_ATTEMPTS=5
+    AUTH_RATE_LIMIT_BLOCK_SEC=900
 
-## Schéma Notion attendu
+## Deploiement securise
 
-La base Notion doit contenir les propriétés suivantes (noms exacts) :
+Lire [docs/SECURE_DEPLOYMENT.md](docs/SECURE_DEPLOYMENT.md) avant toute exposition hors LAN. Le profil de production requiert HTTPS, VPN ou reverse proxy, BACKSTAGE_COOKIE_SECURE=1, des secrets hors Git, une sauvegarde hors volume et un exercice de restauration.
 
-| Propriété        | Type Notion   | Rôle                                   |
-|------------------|---------------|----------------------------------------|
-| `Nom`            | Title         | Titre du film (clé de recherche TMDB)  |
-| `Type`           | Select        | Film, Série…                           |
-| `Statut`         | Select        | « À regarder », « Terminé »…           |
-| `Support`        | Select        | « Cinéma », « À télécharger », « NAS »…|
-| `Note /10`       | Select        | Note                                   |
-| `Date de sortie` | Date          | Date de sortie                         |
-| `Réalisateur`    | Rich text     | Réalisateur                            |
-| `Catégorie`      | Multi-select  | Genres                                 |
-| `Synopsis`       | Rich text     | Synopsis                               |
-| `Tags`           | Multi-select  | Tags dérivés des genres                |
-| `Avis`           | Rich text     | Avis personnel                         |
-| `TMDB_OK`        | Checkbox      | Marque les fiches enrichies            |
+## Verification
 
-> ⚠️ Les noms de propriétés sont codés en dur dans `backend/core/notion.py`.
-> Un renommage côté Notion casse le mapping.
+    .venv\Scripts\python.exe -m pytest
 
-## Lancement
+    cd proto-ui
+    npm run lint
+    npm run build
 
-```bash
-python main.py
-```
+## Documentation produit
 
-Ouvre http://localhost:8090 (port configurable via la variable d'environnement `PORT`).
-
-## Authentification Backstage
-
-Au premier lancement, Backstage affiche un assistant pour créer le compte administrateur. Les comptes suivants sont créés depuis le menu du compte administrateur. La case **Se souvenir de cet appareil** conserve une session pendant 30 jours ; les sessions peuvent être révoquées depuis ce même menu.
-
-La base SQLite doit rester dans le volume persistant Docker. Sur le home server, elle se trouve dans `/srv/data/backstage/backstage.db`. Voir [la procédure d’authentification et de déploiement](docs/backstage-authentication.md).
-
-## Architecture
-
-```
-main.py                → bootstrap NiceGUI
-backend/config.py      → variables d'environnement
-backend/core/
-  models.py            → modèle pydantic Media
-  notion.py            → client Notion (httpx async)
-  tmdb.py              → client TMDB (httpx async)
-  processor.py         → matching + règles + orchestration
-  cache_service.py      → cache « déjà traité » (avec hash de contenu)
-  stats.py             → agrégats stats + détection de doublons + progression
-  history.py           → journal d'audit (history.jsonl)
-  ai.py                → recommandations Claude (optionnel)
-frontend/
-  theme.py             → design tokens (Ivoire & Bordeaux) + injection CSS
-  format_utils.py       → formatage de timestamps relatifs
-  components.py        → éléments partagés (poster/placeholder, badge source)
-  context.py           → AppState / AppContext partagés entre les pages
-  ui.py                → orchestrateur : top bar + routing des sections
-  pages/
-    dashboard.py       → section "À traiter" (bandeau + grille de cards)
-    wizard.py          → résolution d'ambiguïté (page plein écran)
-    stats.py           → tableau de bord (donut / courbe / barres)
-    history.py         → timeline chronologique
-    ai.py              → reco IA (restyle léger)
-scripts/                → scripts de debug manuels
-```
-Les utilisateurs peuvent changer leur mot de passe ou demander un lien de récupération par e-mail. La récupération nécessite la configuration Gmail SMTP décrite dans la procédure d’authentification.
+- [Guide de deploiement securise](docs/SECURE_DEPLOYMENT.md)
+- [Plan Sprint 1](docs/superpowers/plans/2026-08-07-sprint-1-hardening.md)
