@@ -4,8 +4,9 @@ import AccountPanel from './AccountPanel';
 import AdminCenter from './components/AdminCenter';
 import RecommendationFlow from './components/RecommendationFlow';
 import FilmDetailView from './components/FilmDetailView';
+import DashboardHome from './components/DashboardHome';
 import { useAuth } from './auth-context';
-import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncPlayback, fetchTMDBRating } from './api';
+import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncPlayback, fetchTMDBRating, fetchDashboard, addRecommendationToWatchlist } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
 
@@ -127,6 +128,10 @@ const mapMediaToMovie = (media, index = 0) => {
 export default function BackstagePrototype() {
     const {user} = useAuth();
     const [movies, setMovies] = useState(INITIAL_MOVIES);
+    const [activeView, setActiveView] = useState('dashboard');
+    const [dashboardData, setDashboardData] = useState(null);
+    const [dashboardLoading, setDashboardLoading] = useState(true);
+    const [dashboardError, setDashboardError] = useState(null);
     const [collection, setCollection] = useState('Films');
     const [, setLoading] = useState(true);
     const [, setError] = useState(null);
@@ -180,6 +185,20 @@ export default function BackstagePrototype() {
     const [tmdbResults, setTmdbResults] = useState([]);
     const [tmdbLoading, setTmdbLoading] = useState(false);
     const [tmdbError, setTmdbError] = useState(null);
+
+    const loadDashboard = async () => {
+        try {
+            setDashboardLoading(true);
+            const data = await fetchDashboard();
+            setDashboardData(data);
+            setDashboardError(null);
+        } catch (error) {
+            console.error('Erreur de chargement du dashboard:', error);
+            setDashboardError(error.message || 'Dashboard indisponible.');
+        } finally {
+            setDashboardLoading(false);
+        }
+    };
 
     const handleSearchTMDB = async (query) => {
         if (!query || !query.trim()) return;
@@ -376,6 +395,7 @@ export default function BackstagePrototype() {
     useEffect(() => {
         if (!user?.id) return;
         loadRentals();
+        loadDashboard();
         syncPlayback().catch((error) => {
             console.error('Erreur synchronisation progression Jellyfin:', error);
         });
@@ -497,6 +517,44 @@ export default function BackstagePrototype() {
         } finally {
             setLoading(false);
         }
+    };
+
+    const openDashboardMedia = (media) => {
+        if (!media) return;
+        const local = movies.find((movie) => movie.id === media.id);
+        const resolved = local || (media.poster ? media : mapMediaToMovie(media));
+        if (!resolved) return;
+        if (resolved.type === 'Série') openSeries(resolved);
+        else openMovie(resolved);
+    };
+
+    const resumeDashboardItem = (item) => {
+        const media = item.media;
+        const local = movies.find((movie) => movie.id === media?.id);
+        const availability = media?.id ? availabilityByMedia[media.id] : null;
+        if (local && availability?.jellyfin_id) {
+            setMediaAvailability({availability});
+            setPlayerError(null);
+            setPlayerLoading(true);
+            setPlayerMedia({title: local.title, manifestUrl: getPlaybackManifest(local.id)});
+            return;
+        }
+        openDashboardMedia(media);
+        showToast('La lecture directe sera disponible après la synchronisation du serveur.', 'error');
+    };
+
+    const addDashboardRecommendationToWatchlist = async (recommendation) => {
+        try {
+            await addRecommendationToWatchlist(recommendation.tmdb_id);
+            await Promise.all([loadRealMedias(), loadDashboard()]);
+            showToast(`« ${recommendation.title} » a été ajouté à ta watchlist.`);
+        } catch (error) {
+            showToast(error.message || 'Ajout à la watchlist impossible.', 'error');
+        }
+    };
+
+    const explainDashboardRecommendation = (recommendation) => {
+        showToast(recommendation.reasons?.[0] || 'Ce film correspond à ton profil de visionnage.');
     };
 
 
@@ -916,9 +974,16 @@ export default function BackstagePrototype() {
                     </div>
 
                     <div className="flex items-center gap-4">
+                        <div className={`flex rounded-lg border p-1 text-xs font-semibold ${isDarkMode ? 'border-white/15 bg-white/5' : 'border-[#e3e8ee] bg-[#f6f9fc]'}`} aria-label="Accueil | Bibliothèque">
+                            {[['dashboard', 'Accueil'], ['library', 'Bibliothèque']].map(([view, label]) => (
+                                <button key={view} type="button" onClick={() => setActiveView(view)} className={`rounded-md px-3 py-1.5 transition-all ${activeView === view ? 'bg-[#635bff] text-white shadow-sm' : isDarkMode ? 'text-white/60 hover:text-white' : 'text-[#425466] hover:text-[#0a2540]'}`}>
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
                         <div className={`flex rounded-lg border p-1 text-xs font-semibold ${isDarkMode ? 'border-white/15 bg-white/5' : 'border-[#e3e8ee] bg-[#f6f9fc]'}`} aria-label="Films | Séries">
                             {['Films', 'Séries'].map((item) => (
-                                <button key={item} onClick={() => changeCollection(item)} className={`rounded-md px-3 py-1.5 transition-all ${collection === item ? 'bg-[#635bff] text-white shadow-sm' : isDarkMode ? 'text-white/60 hover:text-white' : 'text-[#425466] hover:text-[#0a2540]'}`}>
+                                <button key={item} onClick={() => { setActiveView('library'); changeCollection(item); }} className={`rounded-md px-3 py-1.5 transition-all ${collection === item ? 'bg-[#635bff] text-white shadow-sm' : isDarkMode ? 'text-white/60 hover:text-white' : 'text-[#425466] hover:text-[#0a2540]'}`}>
                                     {item}
                                 </button>
                             ))}
@@ -969,7 +1034,7 @@ export default function BackstagePrototype() {
             {/* Main App Layout with Dynamic Floating Sidebar */}
             <div className="flex-1 max-w-[1536px] w-full mx-auto flex p-6 gap-8">
                 {/* Floating Sidebar */}
-                <aside className="w-64 shrink-0 flex flex-col gap-6 sticky top-22 h-[calc(100vh-7rem)]">
+                {activeView === 'library' && <aside className="w-64 shrink-0 flex flex-col gap-6 sticky top-22 h-[calc(100vh-7rem)]">
                     {/* Filter Card */}
                     <div className={`rounded-2xl p-4 flex flex-col gap-4 transition-colors duration-300 border ${isDarkMode
                         ? 'bg-[#0a0a0a]/90 backdrop-blur-md border-white/10 shadow-2xl'
@@ -1074,10 +1139,23 @@ export default function BackstagePrototype() {
                             Chef-d'œuvres notés 5 étoiles dans votre bibliothèque.
                         </p>
                     </div>
-                </aside>
+                </aside>}
 
                 {/* Main Content Area */}
                 <main key={collection} className="series-portal flex-1 min-w-0">
+                    {activeView === 'dashboard' ? <DashboardHome
+                        data={dashboardData}
+                        isDarkMode={isDarkMode}
+                        loading={dashboardLoading}
+                        error={dashboardError}
+                        onRetry={loadDashboard}
+                        onOpenMedia={openDashboardMedia}
+                        onResume={resumeDashboardItem}
+                        onAddWatchlist={addDashboardRecommendationToWatchlist}
+                        onWhyRecommendation={explainDashboardRecommendation}
+                        onOpenLibrary={() => setActiveView('library')}
+                        onOpenRecommendations={() => setShowRecommendationFlow(true)}
+                    /> : <>
                     {/* Header Section */}
                     <div className={`flex items-end justify-between mb-6 pb-4 border-b ${isDarkMode ? 'border-white/10' : 'border-[#e3e8ee]'
                         }`}>
@@ -1205,6 +1283,7 @@ export default function BackstagePrototype() {
                             Aucun film ne correspond à ce filtre.
                         </div>
                     )}
+                    </>}
                 </main>
             </div>
 

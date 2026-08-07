@@ -1,7 +1,7 @@
 """Pure data shaping for the authenticated home dashboard."""
 
 from datetime import datetime
-from typing import Any, Iterable
+from typing import Any
 
 from backend.core.media_server import Availability
 from backend.core.models import Media, Notification, Rental, UserMediaState
@@ -19,7 +19,7 @@ def _media_card(media: Media) -> dict[str, Any]:
         "type": media.type,
         "cover_url": media.cover_url,
         "backdrop_url": media.backdrop_url,
-        "release_date": _iso(datetime.combine(media.release_date, datetime.min.time())) if media.release_date else None,
+        "release_date": media.release_date.isoformat() if media.release_date else None,
     }
 
 
