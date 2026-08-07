@@ -3,6 +3,7 @@ import asyncio
 import httpx
 from datetime import datetime, timedelta, timezone
 
+import backend.core.media_server as media_server_module
 from backend.core.media_server import Availability, MediaServerService
 from backend.core.models import Rental
 from backend.core.models import Notification
@@ -232,6 +233,52 @@ def test_import_creates_missing_film_from_remote_tmdb_id(tmp_path):
     medias = asyncio.run(store.fetch_all())
     assert summary["created"] == 1
     assert medias[0].tmdb_id == 438631
+
+
+def test_import_creates_missing_film_with_tmdb_poster_and_metadata(tmp_path, monkeypatch):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    radarr = FakeRadarr()
+    radarr.list_library = lambda: _async_result([{"id": 42, "tmdbId": 438631, "title": "Dune", "hasFile": True}])
+
+    class FakeTMDB:
+        async def get_details(self, tmdb_id, is_series=False):
+            return {"title": "Dune", "poster_path": "/dune.jpg", "overview": "Une histoire de sable."}
+
+        def get_poster_url(self, details):
+            return f"https://image.tmdb.org/t/p/w500{details['poster_path']}"
+
+        def get_backdrop_url(self, details):
+            return None
+
+        def get_genres(self, details):
+            return ["Science-Fiction"]
+
+        def get_cast(self, details, limit=5):
+            return ["Paul"]
+
+        def get_director(self, details):
+            return "Denis Villeneuve"
+
+    monkeypatch.setattr(media_server_module, "TMDBClient", FakeTMDB)
+    service = MediaServerService(store, radarr=radarr)
+
+    asyncio.run(service.import_existing_libraries())
+
+    imported = asyncio.run(store.fetch_all())[0]
+    assert imported.cover_url == "https://image.tmdb.org/t/p/w500/dune.jpg"
+    assert imported.synopsis == "Une histoire de sable."
+
+
+def test_sync_all_imports_remote_library_items_before_syncing(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    service = MediaServerService(store, radarr=FakeRadarr())
+
+    result = asyncio.run(service.sync_all())
+
+    assert result["synced"] == 1
+    assert asyncio.run(store.fetch_all())[0].tmdb_id == 438631
 
 
 async def _async_result(value):

@@ -125,6 +125,26 @@ def test_seerr_request_cards_are_hydrated_with_tmdb_metadata(monkeypatch):
     assert hydrated[0]["media"]["posterPath"] == "/dune.jpg"
 
 
+def test_available_seerr_requests_are_removed_from_the_active_queue():
+    class FakeSeerr:
+        def __init__(self):
+            self.cancelled = []
+
+        async def cancel_request(self, request_id):
+            self.cancelled.append(request_id)
+
+    seerr = FakeSeerr()
+    requests = [
+        {"id": 8, "media": {"status": 5}},
+        {"id": 9, "media": {"status": 3}},
+    ]
+
+    active = asyncio.run(api._prune_available_seerr_requests(seerr, requests))
+
+    assert [item["id"] for item in active] == [9]
+    assert seerr.cancelled == [8]
+
+
 def test_tmdb_movie_preview_returns_complete_film_metadata(monkeypatch):
     class FakeTMDB:
         async def get_movie_details(self, tmdb_id):

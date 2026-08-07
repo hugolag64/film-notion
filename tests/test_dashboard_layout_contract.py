@@ -15,7 +15,7 @@ def test_header_uses_compact_primary_navigation_and_right_aligned_utilities():
     assert '+ Ajouter un film' not in source
     assert 'Ajouter un film' in source
     assert source.index('title="Changer de thème"') > source.index('title="Ouvrir le compte"')
-    assert 'grid-cols-[1fr_auto_1fr]' in source
+    assert 'grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]' in source
     assert 'absolute left-1/2' not in source
 
 
@@ -30,6 +30,8 @@ def test_dashboard_exposes_seerr_request_queue_and_tmdb_request_action():
     assert "cancelSeerrRequest" in api
     assert "RequestDetailModal" in dashboard
     assert "onOpenRequest" in dashboard
+    assert "Gérer les demandes" in dashboard
+    assert "Date" in dashboard
 
 
 def test_continue_watching_is_a_horizontal_compact_row():
@@ -37,3 +39,13 @@ def test_continue_watching_is_a_horizontal_compact_row():
     assert 'aria-label="Reprises en cours"' in source
     assert "grid gap-4 md:grid-cols-2" not in source
     assert "flex gap-3 overflow-x-auto" in source
+
+
+def test_library_and_movie_detail_use_clean_catalogue_experience():
+    source = (ROOT / "proto-ui/src/BackstagePrototype.jsx").read_text(encoding="utf-8")
+    assert "HP PRODESK" not in source
+    assert "hp-prodesk.local" not in source
+    assert "Explorer par catégorie" in source
+    assert "category-rail" in source
+    assert "Floating Sidebar" not in source
+    assert "label: 'Lire'" in source

@@ -126,6 +126,17 @@ function RequestDetailModal({ item, isDarkMode, onClose, onCancelRequest, cancel
     </div>;
 }
 
+function RequestsManagerModal({ requests, isDarkMode, onClose, onDeleteRequest, cancellingRequest }) {
+    return <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={onClose} role="presentation">
+        <section className={`w-full max-w-2xl overflow-hidden rounded-2xl border shadow-2xl ${panelClass(isDarkMode)}`} onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Gérer les demandes">
+            <div className="flex items-center justify-between border-b border-current/10 px-5 py-4"><div><p className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#635bff]">File Seerr</p><h2 className="mt-1 text-xl font-serif font-bold">Mes demandes</h2></div><button type="button" onClick={onClose} className="rounded-full border border-current/10 px-2.5 py-1 text-xs opacity-70 hover:opacity-100" aria-label="Fermer">×</button></div>
+            <div className="max-h-[65vh] overflow-y-auto p-3">
+                {requests.length ? <div className="divide-y divide-current/10">{requests.map((item) => <div key={item.id} className="flex items-center gap-3 px-2 py-3"><div className="h-14 w-10 shrink-0 overflow-hidden rounded bg-slate-900">{item.poster_url && <img src={item.poster_url} alt="" className="h-full w-full object-cover" />}</div><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{item.title}</p><p className="mt-1 text-[11px] opacity-55">Date : {dateLabel(item.updated_at || item.created_at) || '—'} · {item.media_type === 'tv' ? 'Série' : 'Film'}</p></div><span className="shrink-0 rounded-full bg-[#635bff]/10 px-2 py-1 text-[11px] font-semibold text-[#635bff]">{item.status_label}</span><button type="button" onClick={() => onDeleteRequest(item.id)} disabled={cancellingRequest === item.id} className="shrink-0 rounded-lg border border-rose-500/30 px-2.5 py-1.5 text-[10px] font-semibold text-rose-500 disabled:opacity-50">{cancellingRequest === item.id ? '…' : 'Supprimer'}</button></div>)}</div> : <p className="p-8 text-center text-sm opacity-60">Aucune demande active.</p>}
+            </div>
+        </section>
+    </div>;
+}
+
 const activityIcon = {
     media_added: '＋', media_interacted: '★', availability: '↗', rental: '⇩', notification: '•',
 };
@@ -142,6 +153,7 @@ export default function DashboardHome({
     onCancelRequest, cancellingRequest,
 }) {
     const [selectedRequest, setSelectedRequest] = useState(null);
+    const [showRequestsManager, setShowRequestsManager] = useState(false);
     if (loading && !data) return <DashboardSkeleton isDarkMode={isDarkMode} />;
     if (error && !data) return <div className={`rounded-2xl border p-10 text-center ${panelClass(isDarkMode)}`}><p className="text-sm">{error}</p><button type="button" onClick={onRetry} className="mt-4 rounded-lg bg-[#635bff] px-4 py-2 text-xs font-semibold text-white">Réessayer</button></div>;
 
@@ -158,7 +170,7 @@ export default function DashboardHome({
         </section>
 
         <section>
-            <SectionHeading eyebrow="TÉLÉCHARGEMENTS" title="Mes demandes" isDarkMode={isDarkMode} />
+            <SectionHeading eyebrow="TÉLÉCHARGEMENTS" title="Mes demandes" action="Gérer les demandes" onAction={() => setShowRequestsManager(true)} isDarkMode={isDarkMode} />
             {requests.length ? <div className="flex gap-3 overflow-x-auto pb-3" aria-label="Mes demandes Seerr">{requests.map((item) => <RequestCard key={item.id} item={item} isDarkMode={isDarkMode} onCancelRequest={onCancelRequest} cancellingRequest={cancellingRequest} onOpenRequest={setSelectedRequest} />)}</div> : <div className={`rounded-2xl border p-6 ${panelClass(isDarkMode)}`}><p className="text-sm font-semibold">Aucune demande en cours.</p><p className="mt-1 text-xs opacity-60">Ouvre la fiche d’un film et demande-le à Seerr pour le retrouver ici.</p></div>}
         </section>
 
@@ -181,5 +193,6 @@ export default function DashboardHome({
             </div>
         </section>
         {selectedRequest && <RequestDetailModal item={selectedRequest} isDarkMode={isDarkMode} onClose={() => setSelectedRequest(null)} onCancelRequest={onCancelRequest} cancellingRequest={cancellingRequest} />}
+        {showRequestsManager && <RequestsManagerModal requests={requests} isDarkMode={isDarkMode} onClose={() => setShowRequestsManager(false)} onDeleteRequest={onCancelRequest} cancellingRequest={cancellingRequest} />}
     </div>;
 }

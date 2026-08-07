@@ -359,6 +359,22 @@ async def _hydrate_seerr_requests(requests: list[dict[str, Any]]) -> list[dict[s
 
     return list(await asyncio.gather(*(hydrate(request) for request in requests)))
 
+async def _prune_available_seerr_requests(seerr: SeerrClient, requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove completed requests from Seerr and return only active queue items."""
+    active = []
+    for request in requests:
+        media = request.get("media") if isinstance(request.get("media"), dict) else {}
+        status = media.get("status")
+        available = status == 5 or str(status).lower() in {"available", "completed"}
+        if available and request.get("id") is not None:
+            try:
+                await seerr.cancel_request(request["id"])
+            except (MediaServerError, RuntimeError, ValueError) as error:
+                logger.warning("Suppression de la demande Seerr %s impossible: %s", request["id"], error)
+            continue
+        active.append(request)
+    return active
+
 
 @router.get("/tmdb/search")
 async def search_tmdb(query: str):
@@ -500,6 +516,12 @@ async def dashboard_home(
     store: MediaStore = Depends(get_store),
 ):
     user_id = current.user["id"]
+    service = get_media_server_service(store)
+    if service.radarr or service.sonarr:
+        try:
+            await service.import_existing_libraries()
+        except (httpx.HTTPError, RuntimeError, ValueError) as error:
+            logger.warning("Import bibliothèque serveur indisponible: %s", error)
     medias, states, resume, completed, availabilities, rentals, notifications = await asyncio.gather(
         store.fetch_all(),
         store.list_user_media_states(user_id),
@@ -519,10 +541,10 @@ async def dashboard_home(
         logger.warning("Recommandations dashboard indisponibles: %s", error)
         recommendations = []
     requests = []
-    service = get_media_server_service(store)
     if service.seerr:
         try:
             requests = await service.seerr.list_requests(take=8, sort="modified", sort_direction="desc")
+            requests = await _prune_available_seerr_requests(service.seerr, requests)
             requests = await _hydrate_seerr_requests(requests)
         except MediaServerError as error:
             logger.warning("Demandes Seerr dashboard indisponibles: %s", error)

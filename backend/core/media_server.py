@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from backend.core.playback import PlaybackProgress
 from backend.config import Config
+from backend.core.tmdb import TMDBClient
 
 
 AvailabilityState = Literal[
@@ -175,6 +176,10 @@ class MediaServerService:
     async def import_existing_libraries(self) -> dict[str, int]:
         """Link already-managed Arr items to local TMDB-linked records."""
         medias = await self.store.fetch_all()
+        try:
+            tmdb = TMDBClient()
+        except ValueError:
+            tmdb = None
         linked = 0
         created = 0
         for provider, client, media_type in (
@@ -194,6 +199,24 @@ class MediaServerService:
                     })
                     medias.append(media)
                     created += 1
+                if tmdb and tmdb_id and (not media.cover_url or not media.synopsis):
+                    try:
+                        details = await tmdb.get_details(tmdb_id, is_series=media_type == "Série")
+                        if details:
+                            updates = {
+                                "cover_url": media.cover_url or tmdb.get_poster_url(details),
+                                "backdrop_url": media.backdrop_url or tmdb.get_backdrop_url(details),
+                                "synopsis": media.synopsis or details.get("overview") or None,
+                                "director": media.director or tmdb.get_director(details),
+                                "categories": media.categories or tmdb.get_genres(details),
+                                "cast": media.cast or tmdb.get_cast(details, limit=5),
+                                "release_date": media.release_date or details.get("release_date") or None,
+                                "tmdb_ok": True,
+                            }
+                            await self.store.update(media.id, {key: value for key, value in updates.items() if value is not None})
+                            media = await self.store.fetch_one(media.id) or media
+                    except Exception:
+                        pass
                 await self.store.upsert_availability(Availability(
                     media_id=media.id, provider=provider, arr_id=remote.get("id"),
                     state="imported" if remote.get("hasFile") else "requested",
@@ -203,6 +226,7 @@ class MediaServerService:
         return {"linked": linked, "created": created}
 
     async def sync_all(self) -> dict[str, int]:
+        await self.import_existing_libraries()
         synced = 0
         for media in await self.store.fetch_all():
             if media.tmdb_id and media.type in {"Film", "Série"}:

@@ -118,7 +118,6 @@ const mapMediaToMovie = (media, index = 0) => {
             watchedInCinema: media.watched_in_cinema || false,
             watchedDate: media.watched_date || '',
             createdAt: media.created_at || '',
-            localStreamUrl: `http://hp-prodesk.local:8090/stream/${media.id}.mkv`,
         };
     } catch (itemError) {
         console.error('Erreur mapping item', media?.title, itemError);
@@ -997,7 +996,7 @@ export default function BackstagePrototype() {
             {/* Top Header */}
             <header className={`border-b sticky top-0 z-40 backdrop-blur-xl transition-colors duration-300 ${isDarkMode ? 'border-white/10 bg-black/90' : 'border-[#e3e8ee] bg-white/90 shadow-sm'
                 }`}>
-                <div className="max-w-[1536px] mx-auto grid h-16 grid-cols-[1fr_auto_1fr] items-center gap-6 px-6">
+                <div className="max-w-[1536px] mx-auto grid h-16 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-8 px-6">
                     <div className="flex items-center gap-4">
                         <img src="/static/Logo.png" alt="Backstage" className="h-10 w-auto object-contain" />
                         <div>
@@ -1009,7 +1008,7 @@ export default function BackstagePrototype() {
                     </div>
 
                     <nav className="justify-self-center" aria-label="Navigation principale">
-                        <div className={`flex items-center gap-6 text-sm font-semibold ${isDarkMode ? 'text-white/60' : 'text-[#425466]'}`}>
+                        <div className={`flex items-center gap-6 whitespace-nowrap text-sm font-semibold ${isDarkMode ? 'text-white/60' : 'text-[#425466]'}`}>
                             {[['dashboard', 'Accueil'], ['library', 'Films'], ['library', 'Séries']].map(([view, label]) => {
                                 const selected = view === 'dashboard' ? activeView === 'dashboard' : activeView === 'library' && collection === label;
                                 return <button key={label} type="button" onClick={() => view === 'dashboard' ? setActiveView('dashboard') : (setActiveView('library'), changeCollection(label))} className={`border-b-2 px-1 pb-2 pt-2 transition-all ${selected ? 'border-b-2 border-[#635bff] text-[#635bff]' : 'border-transparent hover:border-[#635bff]/40 hover:text-[#635bff]'}`}>
@@ -1019,7 +1018,7 @@ export default function BackstagePrototype() {
                         </div>
                     </nav>
 
-                    <div className="flex min-w-0 shrink-0 items-center justify-self-end gap-3">
+                    <div className="flex min-w-0 shrink-0 items-center justify-self-end gap-2">
 
                         {/* Search Input */}
                         <div className="relative">
@@ -1028,14 +1027,14 @@ export default function BackstagePrototype() {
                                 placeholder={collection === 'Séries' ? 'Rechercher une série, créateur...' : 'Rechercher un film, réalisateur...'}
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
-                                className={`w-56 rounded-lg border px-3 py-2 text-xs outline-none transition-all xl:w-72 ${isDarkMode
+                                className={`w-44 rounded-lg border px-3 py-2 text-xs outline-none transition-all xl:w-56 ${isDarkMode
                                     ? 'bg-white/5 border-white/15 focus:border-[#635bff] text-white placeholder-white/40'
                                     : 'bg-[#f6f9fc] border-[#e3e8ee] focus:border-[#635bff] text-[#0a2540] placeholder-[#425466]/50'
                                     }`}
                             />
                         </div>
 
-                        <button onClick={() => setShowAddDialog(true)} className="bg-[#635bff] hover:bg-[#5048e5] text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all shadow-md cursor-pointer">
+                        <button onClick={() => setShowAddDialog(true)} className="whitespace-nowrap bg-[#635bff] px-3 py-2 text-xs font-semibold text-white shadow-md transition-all hover:bg-[#5048e5]">
                             {collection === 'Séries' ? 'Ajouter une série' : 'Ajouter un film'}
                         </button>
                         {user?.role === 'admin' && <button onClick={() => setShowAdminCenter(true)} className="rounded-lg border border-[#635bff]/40 px-3 py-2 text-xs font-semibold text-[#635bff]" title="Ouvrir l’administration">
@@ -1078,10 +1077,9 @@ export default function BackstagePrototype() {
                 onRequestSeerr={requestRecommendationOnSeerr}
             />}
 
-            {/* Main App Layout with Dynamic Floating Sidebar */}
-            <div className="flex-1 max-w-[1536px] w-full mx-auto flex p-6 gap-8">
-                {/* Floating Sidebar */}
-                {activeView === 'library' && <aside className="w-64 shrink-0 flex flex-col gap-6 sticky top-22 h-[calc(100vh-7rem)]">
+                {/* Main App Layout */}
+                <div className="flex-1 max-w-[1536px] w-full mx-auto flex p-6 gap-8">
+                {activeView === 'library' && <aside className="hidden">
                     {/* Filter Card */}
                     <div className={`rounded-2xl p-4 flex flex-col gap-4 transition-colors duration-300 border ${isDarkMode
                         ? 'bg-[#0a0a0a]/90 backdrop-blur-md border-white/10 shadow-2xl'
@@ -1236,6 +1234,11 @@ export default function BackstagePrototype() {
                         <button onClick={() => setSort(prev => ({ ...prev, direction: prev.direction === 'asc' ? 'desc' : 'asc' }))} className="text-xs rounded border px-2 py-1.5">{sort.direction === 'asc' ? '↑ Croissant' : '↓ Décroissant'}</button>
                         {[['genre', 'Genre', filterOptions(collectionMedias, 'genre')], ['director', 'Réalisateur', filterOptions(collectionMedias, 'director')], ['status', 'Statut', ['À regarder', 'En cours', 'Terminé', 'Terminée']], ['support', 'Support', filterOptions(collectionMedias, 'supports')]].map(([key, label, options]) => <select key={key} value={filters[key]} onChange={e => setFilters(prev => ({ ...prev, [key]: e.target.value }))} className="text-xs rounded border px-2 py-1.5"><option value="">{label}</option>{options.map(option => <option key={option} value={option}>{option}</option>)}</select>)}
                         <button onClick={() => setFilters({ genre: '', director: '', status: '', support: '' })} className="text-xs text-[#635bff] px-2">Réinitialiser</button>
+                    </div>
+
+                    <div className="category-rail mb-7" aria-label="Explorer par catégorie">
+                        <div className="mb-3 flex items-center justify-between gap-3"><div><p className="text-[10px] font-mono font-bold uppercase tracking-[0.2em] text-[#635bff]">CATÉGORIES</p><h2 className={`mt-1 text-lg font-serif font-bold ${isDarkMode ? 'text-white' : 'text-[#0a2540]'}`}>Explorer par catégorie</h2></div><button type="button" onClick={() => setFilters((current) => ({...current, genre: ''}))} className="text-xs font-semibold text-[#635bff] hover:underline">Toutes</button></div>
+                        <div className="flex gap-2 overflow-x-auto pb-1">{ALL_GENRES.filter((genre) => collectionMedias.some((movie) => movie.genre.includes(genre))).map((genre) => { const count = collectionMedias.filter((movie) => movie.genre.includes(genre)).length; return <button type="button" key={genre} onClick={() => setFilters((current) => ({...current, genre}))} className={`shrink-0 rounded-full border px-3 py-2 text-xs font-semibold transition ${filters.genre === genre ? 'border-[#635bff] bg-[#635bff] text-white shadow-md' : isDarkMode ? 'border-white/10 bg-white/5 text-white/70 hover:border-[#635bff]/60' : 'border-[#e3e8ee] bg-white text-[#425466] hover:border-[#635bff]/60 hover:text-[#635bff]'}`}>{genre}<span className="ml-1.5 opacity-60">{count}</span></button>; })}</div>
                     </div>
 
                     {/* 2/3 Poster Grid */}
@@ -1657,32 +1660,24 @@ export default function BackstagePrototype() {
                                 </div>
                             )}
 
-                            {/* HP ProDesk Local Server Launch Banner */}
-                            <div className="bg-gradient-to-r from-[#0a2540] to-[#000000] p-4 rounded-xl text-white shadow-lg flex items-center justify-between border border-[#635bff]/30">
-                                <div className="flex items-center gap-3">
-                                    <div className="w-10 h-10 rounded-lg bg-[#635bff] flex items-center justify-center text-lg font-mono font-bold shadow-md">
-                                        ▶
-                                    </div>
-                                    <div>
-                                        <div className="text-xs font-semibold uppercase tracking-wider font-mono text-emerald-400 flex items-center gap-1.5">
-                                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                                            HP PRODESK SERVEUR CONNECTÉ
-                                        </div>
-                                        <div className="text-[11px] font-mono text-white/70 mt-0.5 truncate max-w-[240px]">
-                                            {selectedMovie.localStreamUrl || 'hp-prodesk.local'}
-                                        </div>
-                                    </div>
+                            <div className={`flex items-center justify-between gap-4 rounded-xl border p-4 shadow-sm ${isDarkMode ? 'border-white/10 bg-[#0a0a0a]' : 'border-[#e3e8ee] bg-white'}`}>
+                                <div className="flex min-w-0 items-center gap-3">
+                                    <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${mediaAction.canPlay ? 'bg-emerald-500 text-white' : 'bg-[#635bff] text-white'}`} aria-hidden="true">{mediaAction.canPlay ? '▶' : '＋'}</div>
+                                    <div className="min-w-0"><p className="text-sm font-semibold">{mediaAction.canPlay ? 'Disponible dans votre bibliothèque' : mediaAction.disabled ? mediaAction.label : 'Ce film n’est pas encore disponible'}</p><p className="mt-0.5 truncate text-[11px] opacity-55">{mediaAction.canPlay ? 'Lecture immédiate depuis votre serveur média' : 'Lancer une demande de téléchargement via Seerr'}</p></div>
                                 </div>
+                                <div className="flex shrink-0 items-center gap-2">
+                                <button type="button" onClick={(event) => toggleFavorite(selectedMovie.id, event)} className={`rounded-lg border px-3 py-2.5 text-xs font-semibold transition ${selectedMovie.isFavorite ? 'border-red-500/40 bg-red-500/10 text-red-500' : isDarkMode ? 'border-white/15 text-white/70 hover:bg-white/10' : 'border-[#e3e8ee] text-[#425466] hover:bg-[#f6f9fc]'}`} aria-label={selectedMovie.isFavorite ? 'Retirer des favoris' : 'Ajouter aux favoris'}>{selectedMovie.isFavorite ? '♥' : '♡'}</button>
                                 <button
                                     onClick={mediaAction.disabled ? undefined : mediaAction.canPlay ? openPlayer : openAcquisition}
                                     disabled={mediaAction.disabled}
                                     className={mediaAction.canPlay
-                                        ? 'bg-emerald-500 hover:bg-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-300 text-white text-sm font-bold px-5 py-3 rounded-xl transition-all shadow-lg shadow-emerald-950/40 cursor-pointer flex items-center gap-2 whitespace-nowrap'
-                                        : 'bg-[#635bff] hover:bg-[#5048e5] focus-visible:ring-2 focus-visible:ring-[#a9a3ff] text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all shadow-md cursor-pointer flex items-center gap-2 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-60'}
+                                        ? 'flex items-center gap-2 whitespace-nowrap rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-bold text-white shadow-md transition-all hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60'
+                                        : 'flex items-center gap-2 whitespace-nowrap rounded-lg bg-[#635bff] px-4 py-2.5 text-xs font-semibold text-white shadow-md transition-all hover:bg-[#5048e5] disabled:cursor-not-allowed disabled:opacity-60'}
                                 >
                                     {mediaAction.canPlay && <span aria-hidden="true" className="text-base leading-none">▶</span>}
                                     <span>{mediaAction.label}</span>
                                 </button>
+                                </div>
                             </div>
 
                             {selectedRental && (
@@ -1918,18 +1913,6 @@ export default function BackstagePrototype() {
                         <div className={`p-4 border-t flex justify-between items-center transition-colors duration-300 ${isDarkMode ? 'border-white/10 bg-[#0a0a0a]' : 'border-[#e3e8ee] bg-white'
                             }`}>
                             <div className="flex items-center gap-2">
-                                <button
-                                    onClick={(e) => toggleFavorite(selectedMovie.id, e)}
-                                    className={`px-3 py-1.5 rounded text-xs font-mono border flex items-center gap-1.5 transition-all cursor-pointer ${selectedMovie.isFavorite
-                                        ? 'bg-red-500/10 border-red-500/40 text-red-500 font-bold'
-                                        : isDarkMode
-                                            ? 'bg-white/5 border-white/20 text-white/70 hover:bg-white/10'
-                                            : 'bg-[#f6f9fc] border-[#e3e8ee] text-[#425466] hover:bg-[#ebeef3]'
-                                        }`}
-                                >
-                                    <span>{selectedMovie.isFavorite ? '❤️ Favori' : '🤍 Favori'}</span>
-                                </button>
-
                                 <button
                                     onClick={() => {
                                         setTmdbSearchQuery(selectedMovie.title);
