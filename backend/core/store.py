@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from backend.core.models import (
     Media, Notification, RecommendationEvent, RecommendationSession,
-    Rental, UserMediaState,
+    Rental, UserEpisodeState, UserMediaState,
 )
 from backend.core.media_server import Availability
 from backend.core.playback import PlaybackProgress
@@ -88,6 +88,22 @@ class MediaStore:
                     FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE CASCADE
                 )
                 """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_episode_state (
+                    backstage_user_id TEXT NOT NULL,
+                    episode_id TEXT NOT NULL,
+                    watched INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (backstage_user_id, episode_id),
+                    FOREIGN KEY (episode_id) REFERENCES episode(id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_episode_state_user_watched "
+                "ON user_episode_state(backstage_user_id, watched)"
             )
             conn.execute(
                 """
@@ -757,10 +773,30 @@ class MediaStore:
                        episode.episode_number, episode.title, episode.synopsis, episode.watched
                 FROM episode
                 JOIN media ON media.id = episode.media_id
-                WHERE episode.media_id = ? AND media.type = 'Série'
+                WHERE episode.media_id = ? AND substr(media.type, 1, 1) = 'S' AND substr(media.type, -3) = 'rie'
                 ORDER BY episode.season_number, episode.episode_number
                 """,
                 (media_id,),
+            ).fetchall()
+        return [self._row_to_episode(row) for row in rows]
+
+    def _list_episodes_for_user_sync(self, media_id: str, user_id: str) -> List[Dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT episode.id, episode.media_id, episode.season_number,
+                       episode.episode_number, episode.title, episode.synopsis,
+                       COALESCE(user_episode_state.watched, 0) AS watched
+                FROM episode
+                JOIN media ON media.id = episode.media_id
+                LEFT JOIN user_episode_state
+                  ON user_episode_state.episode_id = episode.id
+                 AND user_episode_state.backstage_user_id = ?
+                WHERE episode.media_id = ? AND substr(media.type, 1, 1) = 'S' AND substr(media.type, -3) = 'rie'
+                ORDER BY episode.season_number, episode.episode_number
+                """,
+                (user_id, media_id),
             ).fetchall()
         return [self._row_to_episode(row) for row in rows]
 
@@ -768,13 +804,35 @@ class MediaStore:
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             media = conn.execute(
-                "SELECT id FROM media WHERE id = ? AND type = 'Série'", (media_id,)
+                "SELECT id FROM media WHERE id = ? AND substr(type, 1, 1) = 'S' AND substr(type, -3) = 'rie'", (media_id,)
             ).fetchone()
             if not media:
                 return None
             rows = conn.execute(
                 "SELECT season_number, watched FROM episode WHERE media_id = ?",
                 (media_id,),
+            ).fetchall()
+        return self._progress_from_rows(media_id, rows)
+
+    def _series_progress_for_user_sync(self, media_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            media = conn.execute(
+                "SELECT id FROM media WHERE id = ? AND substr(type, 1, 1) = 'S' AND substr(type, -3) = 'rie'", (media_id,)
+            ).fetchone()
+            if not media:
+                return None
+            rows = conn.execute(
+                """
+                SELECT episode.season_number,
+                       COALESCE(user_episode_state.watched, 0) AS watched
+                FROM episode
+                LEFT JOIN user_episode_state
+                  ON user_episode_state.episode_id = episode.id
+                 AND user_episode_state.backstage_user_id = ?
+                WHERE episode.media_id = ?
+                """,
+                (user_id, media_id),
             ).fetchall()
         return self._progress_from_rows(media_id, rows)
 
@@ -791,7 +849,7 @@ class MediaStore:
     def _create_episodes_sync(self, media_id: str, episodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         with sqlite3.connect(self.db_path) as conn:
             media = conn.execute(
-                "SELECT id FROM media WHERE id = ? AND type = 'Série'", (media_id,)
+                "SELECT id FROM media WHERE id = ? AND substr(type, 1, 1) = 'S' AND substr(type, -3) = 'rie'", (media_id,)
             ).fetchone()
             if not media:
                 return []
@@ -818,7 +876,7 @@ class MediaStore:
         """Refresh TMDB episode metadata without ever resetting local watch history."""
         with sqlite3.connect(self.db_path) as conn:
             media = conn.execute(
-                "SELECT id FROM media WHERE id = ? AND type = 'Série'", (media_id,)
+                "SELECT id FROM media WHERE id = ? AND substr(type, 1, 1) = 'S' AND substr(type, -3) = 'rie'", (media_id,)
             ).fetchone()
             if not media:
                 return []
@@ -863,6 +921,54 @@ class MediaStore:
                 (episode_id,),
             ).fetchone()
         return self._row_to_episode(row)
+
+    def _set_user_episode_watched_sync(
+        self, episode_id: str, user_id: str, watched: bool,
+    ) -> Optional[Dict[str, Any]]:
+        now = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            episode = conn.execute(
+                """
+                SELECT episode.id
+                FROM episode
+                JOIN media ON media.id = episode.media_id
+                WHERE episode.id = ? AND substr(media.type, 1, 1) = 'S' AND substr(media.type, -3) = 'rie'
+                """,
+                (episode_id,),
+            ).fetchone()
+            if not episode:
+                return None
+            conn.execute(
+                """
+                INSERT INTO user_episode_state (backstage_user_id, episode_id, watched, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(backstage_user_id, episode_id) DO UPDATE SET
+                    watched = excluded.watched,
+                    updated_at = excluded.updated_at
+                """,
+                (user_id, episode_id, int(watched), now),
+            )
+        return self._get_episode_for_user_sync(episode_id, user_id)
+
+    def _get_episode_for_user_sync(self, episode_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT episode.id, episode.media_id, episode.season_number,
+                       episode.episode_number, episode.title, episode.synopsis,
+                       COALESCE(user_episode_state.watched, 0) AS watched
+                FROM episode
+                JOIN media ON media.id = episode.media_id
+                LEFT JOIN user_episode_state
+                  ON user_episode_state.episode_id = episode.id
+                 AND user_episode_state.backstage_user_id = ?
+                WHERE episode.id = ? AND substr(media.type, 1, 1) = 'S' AND substr(media.type, -3) = 'rie'
+                """,
+                (user_id, episode_id),
+            ).fetchone()
+        return self._row_to_episode(row) if row else None
 
     @staticmethod
     def _row_to_availability(row: sqlite3.Row) -> Availability:
@@ -1382,11 +1488,22 @@ class MediaStore:
     async def list_episodes(self, media_id: str) -> List[Dict[str, Any]]:
         return await asyncio.to_thread(self._list_episodes_sync, media_id)
 
+    async def list_episodes_for_user(self, media_id: str, user_id: str) -> List[Dict[str, Any]]:
+        return await asyncio.to_thread(self._list_episodes_for_user_sync, media_id, user_id)
+
     async def set_episode_watched(self, episode_id: str, watched: bool) -> Optional[Dict[str, Any]]:
         return await asyncio.to_thread(self._set_episode_watched_sync, episode_id, watched)
 
+    async def set_user_episode_watched(
+        self, episode_id: str, user_id: str, watched: bool,
+    ) -> Optional[Dict[str, Any]]:
+        return await asyncio.to_thread(self._set_user_episode_watched_sync, episode_id, user_id, watched)
+
     async def series_progress(self, media_id: str) -> Optional[Dict[str, Any]]:
         return await asyncio.to_thread(self._series_progress_sync, media_id)
+
+    async def series_progress_for_user(self, media_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+        return await asyncio.to_thread(self._series_progress_for_user_sync, media_id, user_id)
 
     async def get_availability(self, media_id: str) -> Optional[Availability]:
         return await asyncio.to_thread(self._get_availability_sync, media_id)

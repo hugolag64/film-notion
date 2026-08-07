@@ -859,15 +859,22 @@ async def finish_recommendation(
 
 
 @router.get("/medias/{media_id}/episodes")
-async def get_series_episodes(media_id: str, store: MediaStore = Depends(get_store)):
+async def get_series_episodes(
+    media_id: str,
+    store: MediaStore = Depends(get_store),
+    current: AuthContext = Depends(get_current_user),
+):
     media = await store.fetch_one(media_id)
     if not media:
         raise HTTPException(status_code=404, detail="Média non trouvé")
 
-    return {
-        "episodes": await store.list_episodes(media_id),
-        "progress": await store.series_progress(media_id),
-    }
+    if isinstance(current, AuthContext):
+        episodes = await store.list_episodes_for_user(media_id, current.user["id"])
+        progress = await store.series_progress_for_user(media_id, current.user["id"])
+    else:
+        episodes = await store.list_episodes(media_id)
+        progress = await store.series_progress(media_id)
+    return {"episodes": episodes, "progress": progress}
 
 
 @router.patch("/episodes/{episode_id}")
@@ -875,14 +882,20 @@ async def update_episode(
     episode_id: str,
     payload: UpdateEpisodeRequest,
     store: MediaStore = Depends(get_store),
+    current: AuthContext = Depends(get_current_user),
 ):
-    episode = await store.set_episode_watched(episode_id, payload.watched)
+    if isinstance(current, AuthContext):
+        episode = await store.set_user_episode_watched(episode_id, current.user["id"], payload.watched)
+        progress = await store.series_progress_for_user(episode["media_id"], current.user["id"]) if episode else None
+    else:
+        episode = await store.set_episode_watched(episode_id, payload.watched)
+        progress = await store.series_progress(episode["media_id"]) if episode else None
     if not episode:
         raise HTTPException(status_code=404, detail="Épisode non trouvé")
 
     return {
         "episode": episode,
-        "progress": await store.series_progress(episode["media_id"]),
+        "progress": progress,
     }
 
 

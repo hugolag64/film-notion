@@ -83,6 +83,13 @@ class UserMediaState(BaseModel):
     last_interacted_at: datetime
 
 
+class UserEpisodeState(BaseModel):
+    backstage_user_id: str
+    episode_id: str
+    watched: bool = False
+    updated_at: datetime
+
+
 RecommendationEventType = Literal[
     "shown", "picked", "dismissed", "more_like_this", "less_like_this",
     "question_answered", "session_completed", "skipped", "not_now",

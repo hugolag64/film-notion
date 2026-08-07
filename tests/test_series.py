@@ -5,6 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 from backend.api import UpdateEpisodeRequest, get_series_episodes, update_episode
+from backend.auth_api import AuthContext
 from backend.core.store import MediaStore
 
 
@@ -80,7 +81,7 @@ def fake_tmdb():
 
 def test_series_progress_is_computed_by_season(tmp_path):
     store = _store(tmp_path)
-    series = asyncio.run(store.create({"title": "Severance", "type": "Série"}))
+    series = asyncio.run(store.create({"title": "Severance", "type": "SÃ©rie"}))
     asyncio.run(store.create_episodes(series.id, [{"season_number": 1, "episode_number": 1, "title": "Good News"}]))
 
     assert asyncio.run(store.series_progress(series.id))["status"] == "À regarder"
@@ -132,6 +133,27 @@ def test_episode_api_reads_progress_and_updates_episode(tmp_path):
     assert updated["episode"]["watched"] is True
     assert updated["episode"]["synopsis"] == "Episode synopsis"
     assert updated["progress"]["status"] == "Terminée"
+
+
+def test_episode_progress_is_scoped_per_user(tmp_path):
+    store = _store(tmp_path)
+    series = asyncio.run(store.create({"title": "Severance", "type": "Série"}))
+    episode = asyncio.run(store.create_episodes(series.id, [
+        {"season_number": 1, "episode_number": 1, "title": "Good News"},
+    ]))[0]
+    user_a = AuthContext(user={"id": "user-a", "role": "user"}, session_id="s-a", token="t-a")
+    user_b = AuthContext(user={"id": "user-b", "role": "user"}, session_id="s-b", token="t-b")
+
+    updated = asyncio.run(update_episode(
+        episode["id"], UpdateEpisodeRequest(watched=True), store, user_a,
+    ))
+    other_user = asyncio.run(get_series_episodes(series.id, store, user_b))
+
+    assert updated["episode"]["watched"] is True
+    assert updated["progress"]["percentage"] == 100.0
+    assert other_user["episodes"][0]["watched"] is False
+    assert other_user["progress"]["percentage"] == 0
+    assert asyncio.run(store.list_episodes(series.id))[0]["watched"] is False
 
 
 def test_episode_operations_reject_films_without_changing_their_status(tmp_path):
