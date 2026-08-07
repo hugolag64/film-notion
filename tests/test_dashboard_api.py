@@ -49,3 +49,17 @@ def test_dashboard_route_survives_optional_recommendation_network_failure(tmp_pa
     assert payload["recommendations"] == []
     assert "continue_watching" in payload
     assert "availability" in payload
+
+
+def test_dashboard_recommendation_can_be_added_to_current_users_watchlist(tmp_path):
+    store = make_store(tmp_path)
+    asyncio.run(store.create({"id": "m1", "title": "Arrival", "type": "Film", "tmdb_id": 42}))
+
+    payload = asyncio.run(api.add_recommendation_to_watchlist(
+        api.RecommendationWatchlistRequest(tmdb_id=42), current_user(), store,
+    ))
+
+    assert payload.id == "m1"
+    assert payload.is_watchlist is True
+    state = asyncio.run(store.get_user_media_state("hugo", "m1"))
+    assert state.is_watchlist is True

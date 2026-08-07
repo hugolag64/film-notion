@@ -277,6 +277,10 @@ class RecommendationConfirmRequest(BaseModel):
     download: bool = True
 
 
+class RecommendationWatchlistRequest(BaseModel):
+    tmdb_id: int
+
+
 class RelinkTMDBRequest(BaseModel):
     tmdb_id: int
 
@@ -453,6 +457,37 @@ async def dashboard_home(
         medias, states, resume + completed, availabilities, rentals,
         notifications, recommendations, datetime.now(timezone.utc),
     )
+
+
+@router.post("/recommendations/watchlist", response_model=Media)
+async def add_recommendation_to_watchlist(
+    payload: RecommendationWatchlistRequest,
+    current: AuthContext = Depends(get_current_user),
+    store: MediaStore = Depends(get_store),
+):
+    media = next(
+        (item for item in await store.fetch_all() if item.type == "Film" and item.tmdb_id == payload.tmdb_id),
+        None,
+    )
+    if media is None:
+        tmdb = TMDBClient()
+        details = await tmdb.get_movie_details(payload.tmdb_id)
+        if not details:
+            raise HTTPException(status_code=400, detail="Impossible de récupérer ce film")
+        media = await store.create({
+            "title": details.get("title") or details.get("original_title") or "Sans titre",
+            "original_title": details.get("original_title") or None,
+            "type": "Film", "status": "À regarder", "rating": None,
+            "release_date": details.get("release_date") or None,
+            "director": tmdb.get_director(details), "categories": tmdb.get_genres(details),
+            "synopsis": (details.get("overview") or "")[:2000],
+            "cover_url": tmdb.get_poster_url(details), "backdrop_url": tmdb.get_backdrop_url(details),
+            "cast": tmdb.get_cast(details, limit=5), "tmdb_ok": True, "tmdb_id": payload.tmdb_id,
+        })
+    await store.upsert_user_media_state(current.user["id"], media.id, {
+        "status": "À regarder", "is_watchlist": True,
+    })
+    return await _media_for_user(media, current, store)
 
 
 @router.get("/medias/{media_id}", response_model=Media)

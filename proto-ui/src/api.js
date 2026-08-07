@@ -346,6 +346,17 @@ export async function fetchDashboard() {
     return response.json();
 }
 
+export async function addRecommendationToWatchlist(tmdbId) {
+    const response = await fetch(`${API_BASE_URL}/recommendations/watchlist`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({tmdb_id: tmdbId}),
+    });
+    if (!response.ok) throw new Error((await response.json()).detail || 'Ajout à la watchlist impossible');
+    return response.json();
+}
+
 /**
  * Search TMDB for movies by query.
  */
