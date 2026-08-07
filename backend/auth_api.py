@@ -12,11 +12,22 @@ from backend.config import Config
 from backend.core.auth import AuthStore, AuthUser
 from backend.core.email import EmailSender
 from backend.core.jellyfin import JellyfinClient
+from backend.core.rate_limit import RateLimiter
 
 
 SESSION_COOKIE = "backstage_session"
 auth_router = APIRouter(prefix="/api/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
+LOGIN_RATE_LIMITER = RateLimiter(
+    Config.AUTH_RATE_LIMIT_MAX_ATTEMPTS,
+    Config.AUTH_RATE_LIMIT_WINDOW_SEC,
+    Config.AUTH_RATE_LIMIT_BLOCK_SEC,
+)
+RESET_RATE_LIMITER = RateLimiter(
+    Config.AUTH_RATE_LIMIT_MAX_ATTEMPTS,
+    Config.AUTH_RATE_LIMIT_WINDOW_SEC,
+    Config.AUTH_RATE_LIMIT_BLOCK_SEC,
+)
 
 
 @dataclass(frozen=True)
@@ -106,6 +117,21 @@ def _clear_session_cookie(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE, httponly=True, secure=_cookie_secure(), samesite="lax")
 
 
+def _rate_limit_key(request: Request, identity: str) -> str:
+    client_host = request.client.host if request.client else "unknown"
+    return f"{client_host}:{identity.strip().casefold()}"
+
+
+def _check_rate_limit(limiter: RateLimiter, key: str) -> None:
+    decision = limiter.check(key)
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Trop de tentatives. Réessayez plus tard.",
+            headers={"Retry-After": str(decision.retry_after_seconds)},
+        )
+
+
 async def get_current_user(
     request: Request, store: AuthStore = Depends(get_auth_store)
 ) -> AuthContext:
@@ -171,6 +197,8 @@ async def login(
     response: Response,
     store: AuthStore = Depends(get_auth_store),
 ):
+    rate_limit_key = _rate_limit_key(request, payload.email)
+    _check_rate_limit(LOGIN_RATE_LIMITER, rate_limit_key)
     try:
         user, token, _ = store.authenticate(
             payload.email, payload.password, payload.remember_device,
@@ -178,6 +206,7 @@ async def login(
         )
     except ValueError as error:
         raise HTTPException(status_code=401, detail="Identifiants invalides") from error
+    LOGIN_RATE_LIMITER.clear(rate_limit_key)
     _set_session_cookie(response, token, payload.remember_device)
     return {"user": user}
 
@@ -203,8 +232,10 @@ async def change_password(
 @auth_router.post("/forgot-password", status_code=202)
 async def forgot_password(
     payload: ForgotPasswordRequest,
+    request: Request,
     store: AuthStore = Depends(get_auth_store),
 ):
+    _check_rate_limit(RESET_RATE_LIMITER, _rate_limit_key(request, payload.email))
     reset = store.create_password_reset_token(payload.email)
     if reset is not None:
         token, _ = reset

@@ -18,6 +18,7 @@ from backend.core.store import MediaStore
 from backend.core.models import Rental
 from backend.core.media_server import Availability
 from backend.core.arr import MediaServerError
+from backend.core.rate_limit import RateLimiter
 
 
 class FakeJellyfinClient:
@@ -106,6 +107,36 @@ def test_login_me_and_logout_use_the_session_cookie(tmp_path, monkeypatch):
 
     assert client.post("/api/auth/logout").status_code == 204
     assert client.get("/api/auth/me").status_code == 401
+
+
+def test_login_is_rate_limited_after_repeated_failures(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    monkeypatch.setattr(auth_module, "LOGIN_RATE_LIMITER", RateLimiter(1, 60, 30))
+
+    first = client.post(
+        "/api/auth/login",
+        json={"email": "hugo@example.com", "password": "wrong", "remember_device": False},
+    )
+    second = client.post(
+        "/api/auth/login",
+        json={"email": "hugo@example.com", "password": "wrong", "remember_device": False},
+    )
+
+    assert first.status_code == 401
+    assert second.status_code == 429
+    assert second.headers["retry-after"] == "30"
+
+
+def test_forgot_password_is_rate_limited(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setattr(auth_module, "RESET_RATE_LIMITER", RateLimiter(1, 60, 30))
+
+    first = client.post("/api/auth/forgot-password", json={"email": "unknown@example.com"})
+    second = client.post("/api/auth/forgot-password", json={"email": "unknown@example.com"})
+
+    assert first.status_code == 202
+    assert second.status_code == 429
 
 
 def test_regular_user_cannot_list_users(tmp_path, monkeypatch):
