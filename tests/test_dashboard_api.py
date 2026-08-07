@@ -69,6 +69,35 @@ def test_dashboard_route_survives_media_library_import_failure(tmp_path, monkeyp
     assert "continue_watching" in payload
 
 
+def test_dashboard_loads_the_full_active_seerr_queue(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    captured = {}
+
+    class FakeSeerr:
+        async def list_requests(self, **kwargs):
+            captured.update(kwargs)
+            return [{"id": 12, "media": {"status": 2, "title": "L'Odyssée"}}]
+
+        async def cancel_request(self, _request_id):
+            raise AssertionError("La demande encore en attente ne doit pas être supprimée")
+
+    class FakeMediaService:
+        radarr = None
+        sonarr = None
+        seerr = FakeSeerr()
+
+    async def empty_recommendation_pool(_current, _store, _preferences):
+        return []
+
+    monkeypatch.setattr(api, "get_media_server_service", lambda _store: FakeMediaService())
+    monkeypatch.setattr(api, "_recommendation_pool", empty_recommendation_pool)
+
+    payload = asyncio.run(api.dashboard_home(current_user(), store))
+
+    assert captured["take"] == 100
+    assert payload["requests"][0]["title"] == "L'Odyssée"
+
+
 def test_dashboard_recommendation_can_be_added_to_current_users_watchlist(tmp_path):
     store = make_store(tmp_path)
     asyncio.run(store.create({"id": "m1", "title": "Arrival", "type": "Film", "tmdb_id": 42}))

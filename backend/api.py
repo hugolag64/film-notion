@@ -543,7 +543,7 @@ async def dashboard_home(
     requests = []
     if service.seerr:
         try:
-            requests = await service.seerr.list_requests(take=8, sort="modified", sort_direction="desc")
+            requests = await service.seerr.list_requests(take=100, sort="modified", sort_direction="desc")
             requests = await _prune_available_seerr_requests(service.seerr, requests)
             requests = await _hydrate_seerr_requests(requests)
         except MediaServerError as error:

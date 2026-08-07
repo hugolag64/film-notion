@@ -129,3 +129,13 @@ def test_dashboard_uses_seerr_request_status_when_media_is_still_pending():
 
     assert payload["requests"][0]["status_label"] == "En attente"
     assert payload["requests"][0]["cancellable"] is True
+
+
+def test_dashboard_keeps_all_active_seerr_requests_for_the_manager():
+    requests = [{"id": index, "media": {"status": 2, "title": f"Film {index}"}} for index in range(1, 10)]
+
+    payload = build_dashboard_payload(
+        [], [], [], [], [], [], [], NOW, requests=requests,
+    )
+
+    assert len(payload["requests"]) == 9

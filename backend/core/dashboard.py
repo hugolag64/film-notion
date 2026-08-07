@@ -230,7 +230,7 @@ def build_dashboard_payload(
     return {
         "continue_watching": continue_watching[:6],
         "recommendations": recommendations[:8],
-        "requests": [_request_card(item) for item in (requests or [])[:8]],
+        "requests": [_request_card(item) for item in (requests or [])],
         "activity": activity[:10],
         "availability": availability_payload,
         "last_synced_at": _iso(latest_sync or now),
