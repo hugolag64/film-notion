@@ -354,6 +354,7 @@ async def _hydrate_seerr_requests(requests: list[dict[str, Any]]) -> list[dict[s
             **media,
             "title": media.get("title") or media.get("name") or details.get("title") or details.get("name"),
             "posterPath": media.get("posterPath") or media.get("poster_path") or details.get("poster_path"),
+            "releaseDate": media.get("releaseDate") or media.get("release_date") or details.get("release_date") or details.get("first_air_date"),
         }
         return {**request, "media": enriched_media}
 

@@ -56,6 +56,14 @@ def _availability_state_label(state: str) -> str:
 
 def _request_status(request: dict[str, Any]) -> tuple[str, str]:
     media = request.get("media") if isinstance(request.get("media"), dict) else {}
+    release_date = media.get("releaseDate") or media.get("release_date")
+    if release_date:
+        try:
+            parsed_release_date = datetime.fromisoformat(str(release_date).replace("Z", "+00:00")).date()
+            if parsed_release_date > datetime.now().date():
+                return "pending", "En attente"
+        except (TypeError, ValueError):
+            pass
     value = media.get("status")
     if isinstance(value, str):
         normalized = value.lower().replace("_", " ")

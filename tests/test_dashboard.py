@@ -139,3 +139,16 @@ def test_dashboard_keeps_all_active_seerr_requests_for_the_manager():
     )
 
     assert len(payload["requests"]) == 9
+
+
+def test_dashboard_marks_future_release_requests_as_pending():
+    payload = build_dashboard_payload(
+        [], [], [], [], [], [], [], NOW,
+        requests=[{
+            "id": 10,
+            "media": {"status": 3, "title": "L'Odyssée", "releaseDate": "2099-01-01"},
+        }],
+    )
+
+    assert payload["requests"][0]["status"] == "pending"
+    assert payload["requests"][0]["status_label"] == "En attente"

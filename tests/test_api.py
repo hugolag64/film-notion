@@ -114,7 +114,7 @@ def test_seerr_request_cards_are_hydrated_with_tmdb_metadata(monkeypatch):
         async def get_details(self, tmdb_id, is_series=False):
             assert tmdb_id == 693134
             assert is_series is False
-            return {"title": "Dune", "poster_path": "/dune.jpg"}
+            return {"title": "Dune", "poster_path": "/dune.jpg", "release_date": "2099-01-01"}
 
     monkeypatch.setattr(api, "TMDBClient", FakeTMDB)
     requests = [{"id": 4, "mediaType": "movie", "media": {"tmdbId": 693134}}]
@@ -123,6 +123,7 @@ def test_seerr_request_cards_are_hydrated_with_tmdb_metadata(monkeypatch):
 
     assert hydrated[0]["media"]["title"] == "Dune"
     assert hydrated[0]["media"]["posterPath"] == "/dune.jpg"
+    assert hydrated[0]["media"]["releaseDate"] == "2099-01-01"
 
 
 def test_available_seerr_requests_are_removed_from_the_active_queue():

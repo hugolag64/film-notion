@@ -106,7 +106,7 @@ function RequestCard({ item, isDarkMode, onCancelRequest, cancellingRequest, onO
 }
 
 function RequestDetailModal({ item, isDarkMode, onClose, onCancelRequest, cancellingRequest }) {
-    return <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={onClose} role="presentation">
+    return <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/25 p-4" onClick={onClose} role="presentation">
         <section className={`w-full max-w-lg overflow-hidden rounded-2xl border shadow-2xl ${panelClass(isDarkMode)}`} onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={`Détails de la demande ${item.title}`}>
             <div className="flex items-start gap-4 p-5">
                 <div className="h-32 w-22 shrink-0 overflow-hidden rounded-lg bg-slate-900">
