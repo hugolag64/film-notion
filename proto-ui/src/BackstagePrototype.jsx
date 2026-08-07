@@ -5,8 +5,9 @@ import AdminCenter from './components/AdminCenter';
 import RecommendationFlow from './components/RecommendationFlow';
 import FilmDetailView from './components/FilmDetailView';
 import DashboardHome from './components/DashboardHome';
+import TMDBMoviePreview from './components/TMDBMoviePreview';
 import { useAuth } from './auth-context';
-import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncPlayback, fetchTMDBRating, fetchDashboard, addRecommendationToWatchlist } from './api';
+import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncPlayback, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
 
@@ -177,6 +178,8 @@ export default function BackstagePrototype() {
     const [showAccountPanel, setShowAccountPanel] = useState(false);
     const [showAdminCenter, setShowAdminCenter] = useState(false);
     const [showRecommendationFlow, setShowRecommendationFlow] = useState(false);
+    const [tmdbPreview, setTMDBPreview] = useState({open: false, loading: false, movie: null, recommendation: null, error: null});
+    const [tmdbWatchlistBusy, setTMDBWatchlistBusy] = useState(false);
 
     // TMDB Relink Modal State
     const [showRelinkModal, setShowRelinkModal] = useState(false);
@@ -240,8 +243,13 @@ export default function BackstagePrototype() {
         const mediaId = selectedMovieId;
         setTMDBRating({mediaId, loading: true, rating: null});
         fetchTMDBRating(mediaId)
-            .then(({rating}) => {
-                if (!cancelled) setTMDBRating({mediaId, loading: false, rating});
+            .then(({rating, tmdb_id: resolvedTMDBId}) => {
+                if (!cancelled) {
+                    setTMDBRating({mediaId, loading: false, rating});
+                    if (resolvedTMDBId) {
+                        setSelectedMovie((current) => current?.id === mediaId ? {...current, tmdbId: resolvedTMDBId} : current);
+                    }
+                }
             })
             .catch(() => {
                 if (!cancelled) setTMDBRating({mediaId, loading: false, rating: null});
@@ -531,16 +539,30 @@ export default function BackstagePrototype() {
 
     const addDashboardRecommendationToWatchlist = async (recommendation) => {
         try {
+            setTMDBWatchlistBusy(true);
             await addRecommendationToWatchlist(recommendation.tmdb_id);
             await Promise.all([loadRealMedias(), loadDashboard()]);
+            setTMDBPreview((current) => ({...current, open: false}));
             showToast(`« ${recommendation.title} » a été ajouté à ta watchlist.`);
         } catch (error) {
             showToast(error.message || 'Ajout à la watchlist impossible.', 'error');
+        } finally {
+            setTMDBWatchlistBusy(false);
+        }
+    };
+
+    const openTMDBPreview = async (recommendation) => {
+        setTMDBPreview({open: true, loading: true, movie: null, recommendation, error: null});
+        try {
+            const movie = await fetchTMDBMovieDetails(recommendation.tmdb_id);
+            setTMDBPreview({open: true, loading: false, movie, recommendation, error: null});
+        } catch (error) {
+            setTMDBPreview({open: true, loading: false, movie: null, recommendation, error: error.message || 'Fiche TMDB indisponible.'});
         }
     };
 
     const explainDashboardRecommendation = (recommendation) => {
-        showToast(recommendation.reasons?.[0] || 'Ce film correspond à ton profil de visionnage.');
+        showToast(recommendation.explanation || 'Ce film correspond à ton profil de visionnage.');
     };
 
 
@@ -1016,6 +1038,16 @@ export default function BackstagePrototype() {
             {showAccountPanel && <AccountPanel isDarkMode={isDarkMode} onClose={() => setShowAccountPanel(false)} />}
             {showAdminCenter && user?.role === 'admin' && <AdminCenter isDarkMode={isDarkMode} onClose={() => setShowAdminCenter(false)} onMediaChanged={loadRealMedias} />}
             {showRecommendationFlow && <RecommendationFlow isDarkMode={isDarkMode} onClose={() => setShowRecommendationFlow(false)} />}
+            {tmdbPreview.open && <TMDBMoviePreview
+                movie={tmdbPreview.movie}
+                recommendation={tmdbPreview.recommendation}
+                isDarkMode={isDarkMode}
+                loading={tmdbPreview.loading}
+                error={tmdbPreview.error}
+                watchlistBusy={tmdbWatchlistBusy}
+                onClose={() => setTMDBPreview((current) => ({...current, open: false}))}
+                onAddWatchlist={addDashboardRecommendationToWatchlist}
+            />}
 
             {/* Main App Layout with Dynamic Floating Sidebar */}
             <div className="flex-1 max-w-[1536px] w-full mx-auto flex p-6 gap-8">
@@ -1139,6 +1171,7 @@ export default function BackstagePrototype() {
                         onResume={resumeDashboardItem}
                         onAddWatchlist={addDashboardRecommendationToWatchlist}
                         onWhyRecommendation={explainDashboardRecommendation}
+                        onOpenTMDBDetails={openTMDBPreview}
                         onOpenLibrary={() => setActiveView('library')}
                         onOpenRecommendations={() => setShowRecommendationFlow(true)}
                     /> : <>

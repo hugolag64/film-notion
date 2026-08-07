@@ -29,8 +29,9 @@ from backend.core.media_server import MediaServerService
 from backend.core.dashboard import build_dashboard_payload
 from backend.core.backup import create_backup, get_backup_health, get_backup_status, verify_backup
 from backend.core.recommendations import (
-    RecommendationCandidate, TasteProfile, build_local_question, build_taste_profile,
-    choose_from_top, score_candidate, score_recommendation_candidate,
+    GENRE_IDS, RecommendationCandidate, TasteProfile, apply_session_genre_delta, build_local_question,
+    build_taste_profile, choose_from_top, record_compare_choice, score_candidate,
+    score_recommendation_candidate,
 )
 from backend.core.gemini_recommendations import GeminiRecommendationGateway, SUPPORTED_QUESTION_AXES
 from backend.auth_api import AuthContext, get_auth_store, get_current_user, require_admin
@@ -362,6 +363,33 @@ async def search_tmdb_tv_endpoint(query: str):
     return await search_tmdb_tv(query, TMDBClient())
 
 
+def _serialize_tmdb_movie_details(details: Dict[str, Any], tmdb: TMDBClient) -> Dict[str, Any]:
+    return {
+        "tmdb_id": details.get("id"),
+        "title": details.get("title") or details.get("original_title") or "Sans titre",
+        "original_title": details.get("original_title") or None,
+        "overview": details.get("overview") or "",
+        "release_date": details.get("release_date") or None,
+        "runtime": details.get("runtime"),
+        "vote_average": details.get("vote_average"),
+        "vote_count": details.get("vote_count") or 0,
+        "poster_url": tmdb.get_poster_url(details),
+        "backdrop_url": tmdb.get_backdrop_url(details),
+        "director": tmdb.get_director(details),
+        "genres": tmdb.get_genres(details),
+        "cast": tmdb.get_cast(details, limit=8),
+    }
+
+
+@router.get("/tmdb/movies/{tmdb_id}")
+async def get_tmdb_movie_preview(tmdb_id: int):
+    tmdb = TMDBClient()
+    details = await tmdb.get_movie_details(tmdb_id)
+    if not details:
+        raise HTTPException(status_code=404, detail="Film TMDB introuvable")
+    return _serialize_tmdb_movie_details(details, tmdb)
+
+
 @router.get("/tmdb/search/person")
 async def search_tmdb_person_endpoint(query: str):
     if not query or len(query.strip()) < 2:
@@ -501,15 +529,27 @@ async def get_media(
         raise HTTPException(status_code=404, detail="Média non trouvé")
     return await _media_for_user(media, current, store)
 
+
 @router.get("/medias/{media_id}/tmdb-rating")
 async def get_tmdb_rating(media_id: str, store: MediaStore = Depends(get_store)):
     media = await store.fetch_one(media_id)
     if not media:
         raise HTTPException(status_code=404, detail="Média non trouvé")
-    if not media.tmdb_id:
-        return {"rating": None}
     try:
-        details = await TMDBClient().get_movie_details(media.tmdb_id)
+        from backend.core.tmdb_relink import select_confident_match
+
+        tmdb = TMDBClient()
+        tmdb_id = media.tmdb_id
+        was_unlinked = not tmdb_id
+        if not tmdb_id and media.type == "Film":
+            year = media.release_date.year if media.release_date else None
+            match = select_confident_match(media, await tmdb.search_movie(media.title, year=year))
+            tmdb_id = int(match["id"]) if match and match.get("id") else None
+            details = await tmdb.get_movie_details(tmdb_id) if tmdb_id else None
+            if tmdb_id and details:
+                await store.update(media.id, {"tmdb_ok": True, "tmdb_id": tmdb_id})
+        else:
+            details = await tmdb.get_movie_details(tmdb_id) if tmdb_id else None
     except Exception as error:
         logger.warning("Note TMDB indisponible pour le média %s : %s", media_id, error)
         return {"rating": None}
@@ -518,7 +558,7 @@ async def get_tmdb_rating(media_id: str, store: MediaStore = Depends(get_store))
         rating = float(raw_rating) if raw_rating is not None else None
     except (TypeError, ValueError):
         rating = None
-    return {"rating": rating}
+    return {"rating": rating, **({"tmdb_id": tmdb_id} if was_unlinked and tmdb_id else {})}
 
 
 @router.patch("/medias/{media_id}/personal", response_model=Media)
@@ -639,7 +679,13 @@ async def _recommendation_pool(
 
 
 def _serialize_recommendation(candidate: RecommendationCandidate | None) -> dict[str, Any] | None:
-    return candidate.model_dump(mode="json") if candidate else None
+    if not candidate:
+        return None
+    payload = candidate.model_dump(mode="json")
+    explanation = getattr(candidate, "explanation", None)
+    if explanation:
+        payload["explanation"] = explanation
+    return payload
 
 
 def _question_from_candidates(candidates: list[RecommendationCandidate]) -> dict[str, Any] | None:

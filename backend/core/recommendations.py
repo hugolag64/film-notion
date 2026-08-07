@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from backend.core.models import Media, RecommendationEvent, UserMediaState
 from backend.core.playback import PlaybackProgress
+from backend.core.recommendation_explanations import build_recommendation_explanation
 
 
 TMDB_GENRE_NAMES = {
@@ -208,13 +209,26 @@ def score_recommendation_candidate(
     if session:
         reasons.append("session_match")
     reasons.append("exploration")
-    return RecommendationCandidate(
+    explanation = build_recommendation_explanation(
+        {
+            "title": _candidate_field(candidate, "title", "Sans titre") or "Sans titre",
+            "genre_names": genres,
+            "vote_average": _candidate_field(candidate, "vote_average", 0),
+            "reasons": reasons,
+            "tmdb_id": tmdb_id,
+        },
+        profile,
+        session_preferences,
+    )
+    recommendation = RecommendationCandidate(
         tmdb_id=tmdb_id, title=_candidate_field(candidate, "title", "Sans titre") or "Sans titre",
         overview=_candidate_field(candidate, "overview", "") or "", score=round(score, 6), reasons=reasons,
         genre_ids=genre_ids, poster_path=_candidate_field(candidate, "poster_path"),
         backdrop_path=_candidate_field(candidate, "backdrop_path"), release_date=_candidate_field(candidate, "release_date"),
         vote_average=float(_candidate_field(candidate, "vote_average", 0) or 0),
     )
+    object.__setattr__(recommendation, "explanation", explanation)
+    return recommendation
 
 
 def build_adaptive_question(

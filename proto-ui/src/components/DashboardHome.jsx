@@ -60,26 +60,11 @@ function ContinueCard({ item, isDarkMode, onOpenMedia, onResume }) {
     </article>;
 }
 
-function RecommendationCard({ item, isDarkMode, onOpenMedia, onAddWatchlist, onWhyRecommendation }) {
+function RecommendationCard({ item, isDarkMode, onOpenDetails, onAddWatchlist, onWhyRecommendation }) {
     const [showWhy, setShowWhy] = useState(false);
     const image = posterUrl(item.poster_path);
-    const pseudoMedia = {
-        id: `tmdb-${item.tmdb_id}`,
-        tmdbId: item.tmdb_id,
-        title: item.title,
-        type: 'Film',
-        poster: image,
-        backdrop: posterUrl(item.backdrop_path, 'w780'),
-        synopsis: item.overview || 'Aucun synopsis disponible.',
-        year: item.release_date?.slice(0, 4) || '—',
-        rating: 0,
-        genre: [],
-        cast: [],
-        supports: [],
-        status: 'À regarder',
-    };
     return <article className={`w-52 shrink-0 overflow-hidden rounded-2xl border ${panelClass(isDarkMode)} shadow-sm`}>
-        <button type="button" className="group block w-full text-left" onClick={() => onOpenMedia(pseudoMedia)} aria-label={`Voir la fiche de ${item.title}`}>
+        <button type="button" className="group block w-full text-left" onClick={() => onOpenDetails(item)} aria-label={`Voir la fiche de ${item.title}`}>
             <div className="relative aspect-[2/3] overflow-hidden bg-slate-900">
                 {image ? <img src={image} alt={`Affiche de ${item.title}`} className="h-full w-full object-cover transition duration-500 group-hover:scale-105" /> : <div className="flex h-full items-center justify-center p-4 text-center text-xs text-white/50">Affiche indisponible</div>}
                 <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 to-transparent px-3 pb-3 pt-10 text-white">
@@ -93,11 +78,11 @@ function RecommendationCard({ item, isDarkMode, onOpenMedia, onAddWatchlist, onW
         </button>
         <div className="border-t border-current/10 p-3">
             <div className="flex flex-wrap gap-1.5">
-                <button type="button" onClick={() => onOpenMedia(pseudoMedia)} className="rounded-md border border-current/15 px-2 py-1.5 text-[10px] font-semibold hover:border-[#635bff] hover:text-[#635bff]">Voir la fiche</button>
+                <button type="button" onClick={() => onOpenDetails(item)} className="rounded-md border border-current/15 px-2 py-1.5 text-[10px] font-semibold hover:border-[#635bff] hover:text-[#635bff]">Voir la fiche</button>
                 <button type="button" onClick={() => { setShowWhy((value) => !value); onWhyRecommendation(item); }} className="rounded-md border border-current/15 px-2 py-1.5 text-[10px] font-semibold hover:border-[#635bff] hover:text-[#635bff]">Pourquoi ce film ?</button>
                 <button type="button" onClick={() => onAddWatchlist(item)} className="w-full rounded-md bg-[#635bff]/10 px-2 py-1.5 text-[10px] font-semibold text-[#635bff] hover:bg-[#635bff]/20">Ajouter à ma watchlist</button>
             </div>
-            {showWhy && <p className="mt-2 rounded-lg bg-[#635bff]/10 p-2 text-[10px] leading-4 text-[#635bff]">{item.reasons?.[0] || 'Ce film correspond à ton profil de visionnage.'}</p>}
+            {showWhy && <p className="mt-2 rounded-lg bg-[#635bff]/10 p-2 text-[10px] leading-4 text-[#635bff]">{item.explanation || 'Ce film correspond à ton profil de visionnage.'}</p>}
         </div>
     </article>;
 }
@@ -114,7 +99,7 @@ function DashboardSkeleton({ isDarkMode }) {
 
 export default function DashboardHome({
     data, isDarkMode, loading, error, onRetry, onOpenMedia, onResume,
-    onAddWatchlist, onWhyRecommendation, onOpenLibrary, onOpenRecommendations,
+    onAddWatchlist, onWhyRecommendation, onOpenLibrary, onOpenRecommendations, onOpenTMDBDetails,
 }) {
     if (loading && !data) return <DashboardSkeleton isDarkMode={isDarkMode} />;
     if (error && !data) return <div className={`rounded-2xl border p-10 text-center ${panelClass(isDarkMode)}`}><p className="text-sm">{error}</p><button type="button" onClick={onRetry} className="mt-4 rounded-lg bg-[#635bff] px-4 py-2 text-xs font-semibold text-white">Réessayer</button></div>;
@@ -132,7 +117,7 @@ export default function DashboardHome({
 
         <section>
             <SectionHeading eyebrow="SÉLECTION PERSONNELLE" title="Pour vous" action="Choisir un film" onAction={onOpenRecommendations} isDarkMode={isDarkMode} />
-            {recommendations.length ? <div className="dashboard-scroll flex gap-4 overflow-x-auto pb-3" aria-label="Recommandations personnalisées">{recommendations.map((item) => <RecommendationCard key={item.tmdb_id} item={item} isDarkMode={isDarkMode} onOpenMedia={onOpenMedia} onAddWatchlist={onAddWatchlist} onWhyRecommendation={onWhyRecommendation} />)}</div> : <div className={`rounded-2xl border p-8 ${panelClass(isDarkMode)}`}><p className="text-sm font-semibold">Les recommandations seront disponibles dès que TMDB sera connecté.</p><p className="mt-1 text-xs opacity-60">Tu peux déjà parcourir ta bibliothèque ou lancer une sélection personnalisée.</p></div>}
+            {recommendations.length ? <div className="dashboard-scroll flex gap-4 overflow-x-auto pb-3" aria-label="Recommandations personnalisées">{recommendations.map((item) => <RecommendationCard key={item.tmdb_id} item={item} isDarkMode={isDarkMode} onOpenDetails={onOpenTMDBDetails} onAddWatchlist={onAddWatchlist} onWhyRecommendation={onWhyRecommendation} />)}</div> : <div className={`rounded-2xl border p-8 ${panelClass(isDarkMode)}`}><p className="text-sm font-semibold">Les recommandations seront disponibles dès que TMDB sera connecté.</p><p className="mt-1 text-xs opacity-60">Tu peux déjà parcourir ta bibliothèque ou lancer une sélection personnalisée.</p></div>}
         </section>
 
         <section>

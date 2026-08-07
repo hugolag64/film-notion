@@ -103,6 +103,88 @@ def test_health_route_is_registered_without_media_dependencies():
     assert "/health" in routes
 
 
+def test_tmdb_movie_preview_route_is_registered():
+    paths = {route.path for route in api.router.routes}
+
+    assert "/api/tmdb/movies/{tmdb_id}" in paths
+
+
+def test_tmdb_movie_preview_returns_complete_film_metadata(monkeypatch):
+    class FakeTMDB:
+        async def get_movie_details(self, tmdb_id):
+            assert tmdb_id == 693134
+            return {
+                "id": tmdb_id,
+                "title": "Dune",
+                "original_title": "Dune",
+                "overview": "Une histoire de sable.",
+                "release_date": "2021-09-15",
+                "runtime": 155,
+                "vote_average": 8.24,
+                "vote_count": 12000,
+                "poster_path": "/dune.jpg",
+                "backdrop_path": "/dune-backdrop.jpg",
+                "genres": [{"name": "Science-Fiction"}],
+                "credits": {
+                    "crew": [{"job": "Director", "name": "Denis Villeneuve"}],
+                    "cast": [{"name": "TimothÃ©e Chalamet"}],
+                },
+            }
+
+        @staticmethod
+        def get_poster_url(details):
+            return f"https://image.tmdb.org/t/p/w500{details['poster_path']}"
+
+        @staticmethod
+        def get_backdrop_url(details):
+            return f"https://image.tmdb.org/t/p/w1280{details['backdrop_path']}"
+
+        @staticmethod
+        def get_director(details):
+            return details["credits"]["crew"][0]["name"]
+
+        @staticmethod
+        def get_genres(details):
+            return [genre["name"] for genre in details["genres"]]
+
+        @staticmethod
+        def get_cast(details, limit=8):
+            return [actor["name"] for actor in details["credits"]["cast"][:limit]]
+
+    monkeypatch.setattr(api, "TMDBClient", FakeTMDB)
+
+    result = asyncio.run(api.get_tmdb_movie_preview(693134))
+
+    assert result["tmdb_id"] == 693134
+    assert result["title"] == "Dune"
+    assert result["director"] == "Denis Villeneuve"
+    assert result["genres"] == ["Science-Fiction"]
+    assert result["cast"] == ["TimothÃ©e Chalamet"]
+    assert result["vote_average"] == 8.24
+    assert result["poster_url"].endswith("/w500/dune.jpg")
+
+
+def test_tmdb_rating_resolves_an_unlinked_library_media(monkeypatch):
+    store = FakeStore()
+    store.media = Media(id="1", title="Dune", type="Film", tmdb_id=None)
+
+    class FakeTMDB:
+        async def search_movie(self, query, year=None):
+            assert query == "Dune"
+            return [{"id": 693134, "title": "Dune", "release_date": "2021-09-15"}]
+
+        async def get_movie_details(self, tmdb_id):
+            assert tmdb_id == 693134
+            return {"vote_average": 8.24}
+
+    monkeypatch.setattr(api, "TMDBClient", FakeTMDB)
+
+    result = asyncio.run(api.get_tmdb_rating("1", store))
+
+    assert result == {"rating": 8.24, "tmdb_id": 693134}
+    assert store.media.tmdb_id == 693134
+
+
 def test_tmdb_rating_is_null_when_media_has_no_tmdb_id(monkeypatch):
     store = FakeStore()
     store.media = Media(id="1", title="Dune", type="Film", tmdb_id=None)

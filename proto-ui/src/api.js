@@ -169,6 +169,12 @@ export async function fetchTMDBRating(mediaId) {
     return response.json();
 }
 
+export async function fetchTMDBMovieDetails(tmdbId) {
+    const response = await fetch(`${API_BASE_URL}/tmdb/movies/${encodeURIComponent(tmdbId)}`);
+    if (!response.ok) throw new Error(`Failed to fetch TMDB movie details: ${response.statusText}`);
+    return response.json();
+}
+
 /**
  * Update media fields (rating, review/userNotes, watched_in_cinema, watched_date, etc.).
  */
