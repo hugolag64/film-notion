@@ -1,15 +1,17 @@
 import httpx
 import asyncio
+import pytest
 from datetime import datetime, timezone
 
 from fastapi import FastAPI
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from urllib.parse import parse_qs, urlparse
 
 import backend.auth_api as auth_module
 import backend.api as api_module
-from backend.api import health_router, router as media_router
-from backend.auth_api import auth_router
+from backend.api import health_router, router as media_router, _ensure_playback_access
+from backend.auth_api import AuthContext, auth_router
 from backend.config import Config
 from backend.core.auth import AuthStore
 from backend.core.store import MediaStore
@@ -142,6 +144,31 @@ def test_regular_user_cannot_mutate_shared_catalog(tmp_path, monkeypatch):
     ).status_code == 403
     assert client.post("/api/series/from_tmdb", json={"tmdb_id": 1}).status_code == 403
     assert client.post("/api/series/media-1/refresh").status_code == 403
+
+
+def test_playback_access_is_scoped_to_active_rental(tmp_path):
+    store = MediaStore(str(tmp_path / "backstage.db"))
+    store.init_schema()
+    media = asyncio.run(store.create({"title": "Dune", "type": "Film"}))
+    now = datetime.now(timezone.utc)
+    rental = Rental(
+        id="rental-1", media_id=media.id, backstage_user_id="user-a", status="available",
+        requested_at=now, expires_at=now.replace(year=now.year + 1),
+        created_at=now, updated_at=now,
+    )
+    asyncio.run(store.create_rental(rental))
+    owner = AuthContext(user={"id": "user-a", "role": "user"}, session_id="s-a", token="t-a")
+    other = AuthContext(user={"id": "user-b", "role": "user"}, session_id="s-b", token="t-b")
+
+    assert asyncio.run(_ensure_playback_access(owner, media.id, store)).id == rental.id
+    with pytest.raises(HTTPException) as denied:
+        asyncio.run(_ensure_playback_access(other, media.id, store))
+    assert denied.value.status_code == 403
+
+    asyncio.run(store.update_rental(rental.id, {"status": "expired", "expires_at": now}))
+    with pytest.raises(HTTPException) as expired:
+        asyncio.run(_ensure_playback_access(owner, media.id, store))
+    assert expired.value.status_code == 403
 
 
 def test_admin_can_list_and_link_jellyfin_accounts(tmp_path, monkeypatch):

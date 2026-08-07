@@ -1103,11 +1103,39 @@ async def media_server_status():
     }
 
 
+_PLAYBACK_RENTAL_STATES = {"available", "keep_requested", "kept"}
+
+
+async def _ensure_playback_access(
+    current: AuthContext, media_id: str, store: MediaStore,
+) -> Optional[Rental]:
+    media = await store.fetch_one(media_id)
+    if not media:
+        raise HTTPException(status_code=404, detail="MÃ©dia non trouvÃ©")
+    if current.user.get("role") == "admin":
+        return None
+
+    now = datetime.now(timezone.utc)
+    user_rentals = await store.list_user_rentals(current.user["id"])
+    owned = next((rental for rental in user_rentals if rental.media_id == media_id), None)
+    if owned and owned.status in _PLAYBACK_RENTAL_STATES:
+        if owned.expires_at is None or owned.expires_at > now or owned.storage_policy == "permanent":
+            return owned
+
+    all_rentals = await store.list_rentals_for_media(media_id)
+    if not all_rentals:
+        # Administratively managed permanent media has no user rental row.
+        return None
+    raise HTTPException(status_code=403, detail="Vous n'avez pas accès à ce contenu")
+
+
 @router.get("/medias/{media_id}/availability")
 async def get_availability(
     media_id: str,
+    current: AuthContext = Depends(get_current_user),
     service: MediaServerService = Depends(get_media_server_service),
 ):
+    await _ensure_playback_access(current, media_id, service.store)
     availability = await service.store.get_availability(media_id)
     playback_url = await service.playback_url(media_id)
     return {"availability": availability, "playback_url": playback_url}
@@ -1116,8 +1144,10 @@ async def get_availability(
 @router.get("/medias/{media_id}/playback/manifest")
 async def get_playback_manifest(
     media_id: str,
+    current: AuthContext = Depends(get_current_user),
     service: MediaServerService = Depends(get_media_server_service),
 ):
+    await _ensure_playback_access(current, media_id, service.store)
     playback = await service.playback_manifest(media_id)
     if not playback or not service.jellyfin:
         raise HTTPException(status_code=404, detail="Lecture indisponible")
@@ -1139,8 +1169,10 @@ async def get_playback_resource(
     media_id: str,
     resource_path: str,
     request: Request,
+    current: AuthContext = Depends(get_current_user),
     service: MediaServerService = Depends(get_media_server_service),
 ):
+    await _ensure_playback_access(current, media_id, service.store)
     query = {key: value for key, value in request.query_params.multi_items() if key.lower() != "api_key"}
     try:
         response = await service.playback_resource(media_id, resource_path, query)

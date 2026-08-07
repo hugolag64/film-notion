@@ -1016,6 +1016,15 @@ class MediaStore:
             ).fetchall()
         return [self._row_to_rental(row) for row in rows]
 
+    def _list_rentals_for_media_sync(self, media_id: str) -> List[Rental]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM media_rentals WHERE media_id = ? ORDER BY created_at DESC",
+                (media_id,),
+            ).fetchall()
+        return [self._row_to_rental(row) for row in rows]
+
     def _count_active_rentals_sync(self, user_id: str) -> int:
         placeholders = ", ".join("?" for _ in _ACTIVE_RENTAL_STATES)
         with sqlite3.connect(self.db_path) as conn:
@@ -1516,6 +1525,9 @@ class MediaStore:
 
     async def list_user_rentals(self, user_id: str) -> List[Rental]:
         return await asyncio.to_thread(self._list_user_rentals_sync, user_id)
+
+    async def list_rentals_for_media(self, media_id: str) -> List[Rental]:
+        return await asyncio.to_thread(self._list_rentals_for_media_sync, media_id)
 
     async def count_active_rentals(self, user_id: str) -> int:
         return await asyncio.to_thread(self._count_active_rentals_sync, user_id)
