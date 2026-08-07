@@ -55,3 +55,10 @@ def test_dashboard_api_client_handles_plain_text_server_errors():
     source = (ROOT / "proto-ui/src/api.js").read_text(encoding="utf-8")
     assert "const text = await response.text();" in source
     assert "body?.detail || body?.message || 'Dashboard indisponible'" in source
+
+
+def test_requests_manager_modal_does_not_blur_the_dashboard():
+    source = (ROOT / "proto-ui/src/components/DashboardHome.jsx").read_text(encoding="utf-8")
+    assert "function RequestsManagerModal" in source
+    assert "bg-black/25 p-4" in source
+    assert "bg-black/60 p-4 backdrop-blur-sm" not in source

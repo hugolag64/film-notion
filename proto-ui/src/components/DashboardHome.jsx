@@ -127,7 +127,7 @@ function RequestDetailModal({ item, isDarkMode, onClose, onCancelRequest, cancel
 }
 
 function RequestsManagerModal({ requests, isDarkMode, onClose, onDeleteRequest, cancellingRequest }) {
-    return <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={onClose} role="presentation">
+    return <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/25 p-4" onClick={onClose} role="presentation">
         <section className={`w-full max-w-2xl overflow-hidden rounded-2xl border shadow-2xl ${panelClass(isDarkMode)}`} onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Gérer les demandes">
             <div className="flex items-center justify-between border-b border-current/10 px-5 py-4"><div><p className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#635bff]">File Seerr</p><h2 className="mt-1 text-xl font-serif font-bold">Mes demandes</h2></div><button type="button" onClick={onClose} className="rounded-full border border-current/10 px-2.5 py-1 text-xs opacity-70 hover:opacity-100" aria-label="Fermer">×</button></div>
             <div className="max-h-[65vh] overflow-y-auto p-3">
