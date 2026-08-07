@@ -328,6 +328,38 @@ def get_media_server_service(store: MediaStore = Depends(get_store)) -> MediaSer
     return MediaServerService(store, radarr=radarr, sonarr=sonarr, jellyfin=jellyfin, seerr=seerr)
 
 
+async def _hydrate_seerr_requests(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fill Seerr's compact request records with display metadata from TMDB."""
+    if not requests:
+        return []
+    try:
+        tmdb = TMDBClient()
+    except ValueError:
+        return requests
+
+    async def hydrate(request: dict[str, Any]) -> dict[str, Any]:
+        media = request.get("media") if isinstance(request.get("media"), dict) else {}
+        tmdb_id = media.get("tmdbId", media.get("tmdb_id", request.get("mediaId")))
+        if not tmdb_id:
+            return request
+        try:
+            media_type = request.get("mediaType") or media.get("mediaType")
+            is_series = media_type == "tv" or bool(media.get("tvdbId"))
+            details = await tmdb.get_details(int(tmdb_id), is_series=is_series)
+        except (TypeError, ValueError):
+            details = None
+        if not details:
+            return request
+        enriched_media = {
+            **media,
+            "title": media.get("title") or media.get("name") or details.get("title") or details.get("name"),
+            "posterPath": media.get("posterPath") or media.get("poster_path") or details.get("poster_path"),
+        }
+        return {**request, "media": enriched_media}
+
+    return list(await asyncio.gather(*(hydrate(request) for request in requests)))
+
+
 @router.get("/tmdb/search")
 async def search_tmdb(query: str):
     if not query or not query.strip():
@@ -491,6 +523,7 @@ async def dashboard_home(
     if service.seerr:
         try:
             requests = await service.seerr.list_requests(take=8, sort="modified", sort_direction="desc")
+            requests = await _hydrate_seerr_requests(requests)
         except MediaServerError as error:
             logger.warning("Demandes Seerr dashboard indisponibles: %s", error)
     return build_dashboard_payload(

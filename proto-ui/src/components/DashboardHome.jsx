@@ -87,9 +87,10 @@ function RecommendationCard({ item, isDarkMode, onOpenDetails, onAddWatchlist, o
     </article>;
 }
 
-function RequestCard({ item, isDarkMode, onCancelRequest, cancellingRequest }) {
+function RequestCard({ item, isDarkMode, onCancelRequest, cancellingRequest, onOpenRequest }) {
     const progress = item.progress_percent;
-    return <article className={`flex min-w-[280px] shrink-0 overflow-hidden rounded-xl border ${panelClass(isDarkMode)} shadow-sm`}>
+    const open = () => onOpenRequest(item);
+    return <article role="button" tabIndex={0} onClick={open} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); } }} className={`flex min-w-[280px] shrink-0 cursor-pointer overflow-hidden rounded-xl border ${panelClass(isDarkMode)} shadow-sm transition hover:-translate-y-0.5 hover:border-[#635bff]/60`}>
         <div className="relative h-36 w-24 shrink-0 overflow-hidden bg-slate-900">
             {item.poster_url ? <img src={item.poster_url} alt={`Affiche de ${item.title}`} className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center p-3 text-center text-[10px] text-white/50">Affiche indisponible</div>}
         </div>
@@ -99,9 +100,30 @@ function RequestCard({ item, isDarkMode, onCancelRequest, cancellingRequest }) {
                 <p className="mt-1 text-[11px] font-semibold text-[#635bff]">{item.status_label}</p>
                 {progress !== null && progress !== undefined && <div className="mt-2"><div className="h-1.5 overflow-hidden rounded-full bg-black/10 dark:bg-white/10"><div className="h-full rounded-full bg-[#635bff]" style={{width: `${progress}%`}} /></div><p className="mt-1 text-[10px] opacity-55">{progress}%</p></div>}
             </div>
-            {item.cancellable && <button type="button" onClick={() => onCancelRequest(item.id)} disabled={cancellingRequest === item.id} className="mt-2 self-start rounded-md border border-rose-500/30 px-2 py-1.5 text-[10px] font-semibold text-rose-500 hover:bg-rose-500/10 disabled:opacity-50">{cancellingRequest === item.id ? 'Annulation…' : 'Annuler la demande'}</button>}
+            {item.cancellable && <button type="button" onClick={(event) => { event.stopPropagation(); onCancelRequest(item.id); }} disabled={cancellingRequest === item.id} className="mt-2 self-start rounded-md border border-rose-500/30 px-2 py-1.5 text-[10px] font-semibold text-rose-500 hover:bg-rose-500/10 disabled:opacity-50">{cancellingRequest === item.id ? 'Annulation…' : 'Annuler la demande'}</button>}
         </div>
     </article>;
+}
+
+function RequestDetailModal({ item, isDarkMode, onClose, onCancelRequest, cancellingRequest }) {
+    return <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={onClose} role="presentation">
+        <section className={`w-full max-w-lg overflow-hidden rounded-2xl border shadow-2xl ${panelClass(isDarkMode)}`} onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={`Détails de la demande ${item.title}`}>
+            <div className="flex items-start gap-4 p-5">
+                <div className="h-32 w-22 shrink-0 overflow-hidden rounded-lg bg-slate-900">
+                    {item.poster_url ? <img src={item.poster_url} alt={`Affiche de ${item.title}`} className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center p-3 text-center text-[10px] text-white/50">Affiche indisponible</div>}
+                </div>
+                <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-3"><div><p className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#635bff]">Demande Seerr</p><h2 className="mt-1 text-xl font-serif font-bold">{item.title}</h2></div><button type="button" onClick={onClose} className="rounded-full border border-current/10 px-2.5 py-1 text-xs opacity-70 hover:opacity-100" aria-label="Fermer">×</button></div>
+                    <p className="mt-3 text-sm font-semibold text-[#635bff]">{item.status_label}</p>
+                    {item.progress_percent !== null && item.progress_percent !== undefined && <><div className="mt-3 h-2 overflow-hidden rounded-full bg-black/10 dark:bg-white/10"><div className="h-full rounded-full bg-[#635bff]" style={{width: `${item.progress_percent}%`}} /></div><p className="mt-1 text-[11px] opacity-55">{item.progress_percent}%</p></>}
+                </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-current/10 px-5 py-4">
+                {item.cancellable && <button type="button" onClick={() => onCancelRequest(item.id)} disabled={cancellingRequest === item.id} className="rounded-lg border border-rose-500/30 px-3 py-2 text-xs font-semibold text-rose-500 disabled:opacity-50">{cancellingRequest === item.id ? 'Annulation…' : 'Annuler la demande'}</button>}
+                <button type="button" onClick={onClose} className="rounded-lg bg-[#635bff] px-3 py-2 text-xs font-semibold text-white">Fermer</button>
+            </div>
+        </section>
+    </div>;
 }
 
 const activityIcon = {
@@ -119,6 +141,7 @@ export default function DashboardHome({
     onAddWatchlist, onWhyRecommendation, onOpenLibrary, onOpenRecommendations, onOpenTMDBDetails,
     onCancelRequest, cancellingRequest,
 }) {
+    const [selectedRequest, setSelectedRequest] = useState(null);
     if (loading && !data) return <DashboardSkeleton isDarkMode={isDarkMode} />;
     if (error && !data) return <div className={`rounded-2xl border p-10 text-center ${panelClass(isDarkMode)}`}><p className="text-sm">{error}</p><button type="button" onClick={onRetry} className="mt-4 rounded-lg bg-[#635bff] px-4 py-2 text-xs font-semibold text-white">Réessayer</button></div>;
 
@@ -136,7 +159,7 @@ export default function DashboardHome({
 
         <section>
             <SectionHeading eyebrow="TÉLÉCHARGEMENTS" title="Mes demandes" isDarkMode={isDarkMode} />
-            {requests.length ? <div className="flex gap-3 overflow-x-auto pb-3" aria-label="Mes demandes Seerr">{requests.map((item) => <RequestCard key={item.id} item={item} isDarkMode={isDarkMode} onCancelRequest={onCancelRequest} cancellingRequest={cancellingRequest} />)}</div> : <div className={`rounded-2xl border p-6 ${panelClass(isDarkMode)}`}><p className="text-sm font-semibold">Aucune demande en cours.</p><p className="mt-1 text-xs opacity-60">Ouvre la fiche d’un film et demande-le à Seerr pour le retrouver ici.</p></div>}
+            {requests.length ? <div className="flex gap-3 overflow-x-auto pb-3" aria-label="Mes demandes Seerr">{requests.map((item) => <RequestCard key={item.id} item={item} isDarkMode={isDarkMode} onCancelRequest={onCancelRequest} cancellingRequest={cancellingRequest} onOpenRequest={setSelectedRequest} />)}</div> : <div className={`rounded-2xl border p-6 ${panelClass(isDarkMode)}`}><p className="text-sm font-semibold">Aucune demande en cours.</p><p className="mt-1 text-xs opacity-60">Ouvre la fiche d’un film et demande-le à Seerr pour le retrouver ici.</p></div>}
         </section>
 
         <section>
@@ -157,5 +180,6 @@ export default function DashboardHome({
                 </div>
             </div>
         </section>
+        {selectedRequest && <RequestDetailModal item={selectedRequest} isDarkMode={isDarkMode} onClose={() => setSelectedRequest(null)} onCancelRequest={onCancelRequest} cancellingRequest={cancellingRequest} />}
     </div>;
 }

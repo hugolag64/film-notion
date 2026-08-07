@@ -997,7 +997,7 @@ export default function BackstagePrototype() {
             {/* Top Header */}
             <header className={`border-b sticky top-0 z-40 backdrop-blur-xl transition-colors duration-300 ${isDarkMode ? 'border-white/10 bg-black/90' : 'border-[#e3e8ee] bg-white/90 shadow-sm'
                 }`}>
-                <div className="relative max-w-[1536px] mx-auto flex h-16 items-center gap-6 px-6">
+                <div className="max-w-[1536px] mx-auto grid h-16 grid-cols-[1fr_auto_1fr] items-center gap-6 px-6">
                     <div className="flex items-center gap-4">
                         <img src="/static/Logo.png" alt="Backstage" className="h-10 w-auto object-contain" />
                         <div>
@@ -1008,7 +1008,7 @@ export default function BackstagePrototype() {
                         </div>
                     </div>
 
-                    <nav className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2" aria-label="Navigation principale">
+                    <nav className="justify-self-center" aria-label="Navigation principale">
                         <div className={`flex items-center gap-6 text-sm font-semibold ${isDarkMode ? 'text-white/60' : 'text-[#425466]'}`}>
                             {[['dashboard', 'Accueil'], ['library', 'Films'], ['library', 'Séries']].map(([view, label]) => {
                                 const selected = view === 'dashboard' ? activeView === 'dashboard' : activeView === 'library' && collection === label;
@@ -1019,7 +1019,7 @@ export default function BackstagePrototype() {
                         </div>
                     </nav>
 
-                    <div className="flex shrink-0 items-center gap-3">
+                    <div className="flex min-w-0 shrink-0 items-center justify-self-end gap-3">
 
                         {/* Search Input */}
                         <div className="relative">

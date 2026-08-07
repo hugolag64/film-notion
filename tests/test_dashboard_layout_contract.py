@@ -15,8 +15,8 @@ def test_header_uses_compact_primary_navigation_and_right_aligned_utilities():
     assert '+ Ajouter un film' not in source
     assert 'Ajouter un film' in source
     assert source.index('title="Changer de thème"') > source.index('title="Ouvrir le compte"')
-    assert 'left-1/2' in source
-    assert '-translate-x-1/2' in source
+    assert 'grid-cols-[1fr_auto_1fr]' in source
+    assert 'absolute left-1/2' not in source
 
 
 def test_dashboard_exposes_seerr_request_queue_and_tmdb_request_action():
@@ -28,6 +28,8 @@ def test_dashboard_exposes_seerr_request_queue_and_tmdb_request_action():
     assert "Demander à Seerr" in preview
     assert "createSeerrRequest" in api
     assert "cancelSeerrRequest" in api
+    assert "RequestDetailModal" in dashboard
+    assert "onOpenRequest" in dashboard
 
 
 def test_continue_watching_is_a_horizontal_compact_row():

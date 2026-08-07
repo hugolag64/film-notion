@@ -109,6 +109,22 @@ def test_tmdb_movie_preview_route_is_registered():
     assert "/api/tmdb/movies/{tmdb_id}" in paths
 
 
+def test_seerr_request_cards_are_hydrated_with_tmdb_metadata(monkeypatch):
+    class FakeTMDB:
+        async def get_details(self, tmdb_id, is_series=False):
+            assert tmdb_id == 693134
+            assert is_series is False
+            return {"title": "Dune", "poster_path": "/dune.jpg"}
+
+    monkeypatch.setattr(api, "TMDBClient", FakeTMDB)
+    requests = [{"id": 4, "mediaType": "movie", "media": {"tmdbId": 693134}}]
+
+    hydrated = asyncio.run(api._hydrate_seerr_requests(requests))
+
+    assert hydrated[0]["media"]["title"] == "Dune"
+    assert hydrated[0]["media"]["posterPath"] == "/dune.jpg"
+
+
 def test_tmdb_movie_preview_returns_complete_film_metadata(monkeypatch):
     class FakeTMDB:
         async def get_movie_details(self, tmdb_id):
