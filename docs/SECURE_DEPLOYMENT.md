@@ -94,4 +94,3 @@ Apres une panne d'integration, l'interface doit afficher un statut indisponible 
 - [ ] sessions anciennes revoquees apres rotation ;
 - [ ] healthcheck actif ;
 - [ ] procedure de rollback disponible.
-
