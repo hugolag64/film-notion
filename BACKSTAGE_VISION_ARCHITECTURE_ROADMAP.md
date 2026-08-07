@@ -11,12 +11,15 @@ Cette section est la référence opérationnelle pour reprendre le projet dans u
 
 ### Mise à jour de fin de session — 07/08/2026
 
-- [x] Branche `main` synchronisée avec GitHub sur le commit `ea7776b`.
-- [x] Centre d’administration centralisé : tableau de bord, activité serveur, demandes, stockage, services, paramètres et utilisateurs.
-- [x] Gestion des utilisateurs déplacée dans `Administration > Utilisateurs`, avec cartes cliquables et actions complètes : création, modification, rôle, Jellyfin, mot de passe, activation/désactivation et suppression.
-- [x] `GogBoss` limité aux informations personnelles : nom, mot de passe, notifications, appareils mémorisés et déconnexion.
-- [x] Tests, build et lint validés ; production redeployée et contrôlée sur `/health`.
-- [ ] Sauvegardes : fonctionnalité présente dans le code, mais validation opérationnelle reportée après réception et montage du disque dédié.
+- [x] Branche `main` synchronisée avec GitHub sur le commit `4f3ad36`.
+- [x] File Seerr fiabilisée : jusqu’à 100 demandes récupérées, toutes les demandes actives conservées dans Backstage et disponibles dans « Mes demandes ».
+- [x] Les demandes devenues disponibles sont retirées de la file active ; les demandes dont la date de sortie TMDB est future restent en statut **En attente** et ne sont pas présentées comme des téléchargements.
+- [x] Fenêtre « Mes demandes » livrée avec titre, date, statut et suppression ; voile gris/flou retiré de la fenêtre principale.
+- [x] Synchronisation Radarr/Sonarr bidirectionnelle : import des contenus déjà présents dans leurs bibliothèques, création de la fiche Backstage et enrichissement TMDB avec affiche/métadonnées.
+- [x] Expérience catalogue livrée : navigation Accueil/Films/Séries, sidebar bibliothèque masquée, catégories accessibles horizontalement, fiche film sans bandeau serveur et actions Lire/Demander/Favori réorganisées.
+- [x] Résilience du dashboard améliorée : une erreur d’intégration média ne bloque plus `/api/dashboard` ; les réponses serveur texte sont correctement affichées par le frontend.
+- [x] Vérification finale : **272 tests pytest**, lint frontend et build Vite validés.
+- [ ] Dernier redeploy de l’interface à confirmer après le commit `4f3ad36`. Le dossier Portainer `/var/lib/docker/volumes/portainer_portainer_data/_data/compose/1` n’est pas un dépôt Git ; le déploiement manuel utilise donc un clone temporaire, une image `backstage:local`, puis `docker compose -p backstage ... up --no-build` pour conserver la base SQLite.
 
 ### Fonctionnalités livrées
 
@@ -51,7 +54,7 @@ Cette section est la référence opérationnelle pour reprendre le projet dans u
 - Dépôt : `https://github.com/hugolag64/film-notion.git`
 - Branche suivie par Portainer : `main` (à conserver lors des prochains redeploys)
 - Branche de travail de cette session : `main`
-- Branche stable synchronisée : `main` (`ea7776b`)
+- Branche stable synchronisée : `main` (`4f3ad36`)
 - Serveur : `hugo@192.168.1.5`
 - Stack Portainer : `backstage`
 - Volume de données Backstage : `/srv/data/backstage` monté dans `/data`
@@ -62,8 +65,8 @@ Après une modification validée : pousser la branche utilisée par Portainer, p
 
 ### Prochaine reprise recommandée
 
-1. Consolider la pertinence de l’algorithme « Choisir un film » : respecter strictement les réponses récent/classique et mesurer la qualité des recommandations.
-2. Remplacer ou finaliser la fiche film centrée, large ou plein écran.
+1. Confirmer le redeploy de `4f3ad36` dans Portainer et vérifier que l’asset frontend servi correspond à la nouvelle compilation.
+2. Consolider la pertinence de l’algorithme « Choisir un film » : respecter strictement les réponses récent/classique et mesurer la qualité des recommandations.
 3. Après réception du disque dédié, reprendre la configuration et les tests de sauvegarde.
 4. Ensuite seulement, reprendre la gestion avancée des séries.
 
