@@ -29,8 +29,8 @@ from backend.core.media_server import MediaServerService
 from backend.core.dashboard import build_dashboard_payload
 from backend.core.backup import create_backup, get_backup_health, get_backup_status, verify_backup
 from backend.core.recommendations import (
-    GENRE_IDS, RecommendationCandidate, TasteProfile, apply_session_genre_delta, build_local_question,
-    build_taste_profile, choose_from_top, record_compare_choice, score_candidate,
+    RecommendationCandidate, TasteProfile, build_local_question,
+    build_taste_profile, choose_from_top, score_candidate,
     score_recommendation_candidate,
 )
 from backend.core.gemini_recommendations import GeminiRecommendationGateway, SUPPORTED_QUESTION_AXES
