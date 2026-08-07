@@ -7,7 +7,7 @@ import FilmDetailView from './components/FilmDetailView';
 import DashboardHome from './components/DashboardHome';
 import TMDBMoviePreview from './components/TMDBMoviePreview';
 import { useAuth } from './auth-context';
-import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncPlayback, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist } from './api';
+import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncPlayback, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
 
@@ -180,6 +180,8 @@ export default function BackstagePrototype() {
     const [showRecommendationFlow, setShowRecommendationFlow] = useState(false);
     const [tmdbPreview, setTMDBPreview] = useState({open: false, loading: false, movie: null, recommendation: null, error: null});
     const [tmdbWatchlistBusy, setTMDBWatchlistBusy] = useState(false);
+    const [seerrRequestBusy, setSeerrRequestBusy] = useState(false);
+    const [cancellingRequest, setCancellingRequest] = useState(null);
 
     // TMDB Relink Modal State
     const [showRelinkModal, setShowRelinkModal] = useState(false);
@@ -558,6 +560,34 @@ export default function BackstagePrototype() {
             setTMDBPreview({open: true, loading: false, movie, recommendation, error: null});
         } catch (error) {
             setTMDBPreview({open: true, loading: false, movie: null, recommendation, error: error.message || 'Fiche TMDB indisponible.'});
+        }
+    };
+
+    const requestRecommendationOnSeerr = async (recommendation) => {
+        if (!recommendation?.tmdb_id) return;
+        try {
+            setSeerrRequestBusy(true);
+            await createSeerrRequest(recommendation.tmdb_id, 'movie');
+            await loadDashboard();
+            setTMDBPreview((current) => ({...current, open: false}));
+            showToast(`« ${recommendation.title} » a été demandé à Seerr.`);
+        } catch (error) {
+            showToast(error.message || 'Demande Seerr impossible.', 'error');
+        } finally {
+            setSeerrRequestBusy(false);
+        }
+    };
+
+    const cancelDashboardRequest = async (requestId) => {
+        try {
+            setCancellingRequest(requestId);
+            await cancelSeerrRequest(requestId);
+            await loadDashboard();
+            showToast('Demande Seerr annulée.');
+        } catch (error) {
+            showToast(error.message || 'Annulation impossible.', 'error');
+        } finally {
+            setCancellingRequest(null);
         }
     };
 
@@ -967,7 +997,7 @@ export default function BackstagePrototype() {
             {/* Top Header */}
             <header className={`border-b sticky top-0 z-40 backdrop-blur-xl transition-colors duration-300 ${isDarkMode ? 'border-white/10 bg-black/90' : 'border-[#e3e8ee] bg-white/90 shadow-sm'
                 }`}>
-                <div className="max-w-[1536px] mx-auto flex h-16 items-center gap-6 px-6">
+                <div className="relative max-w-[1536px] mx-auto flex h-16 items-center gap-6 px-6">
                     <div className="flex items-center gap-4">
                         <img src="/static/Logo.png" alt="Backstage" className="h-10 w-auto object-contain" />
                         <div>
@@ -978,7 +1008,7 @@ export default function BackstagePrototype() {
                         </div>
                     </div>
 
-                    <nav className="flex min-w-0 flex-1 justify-center" aria-label="Navigation principale">
+                    <nav className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2" aria-label="Navigation principale">
                         <div className={`flex items-center gap-6 text-sm font-semibold ${isDarkMode ? 'text-white/60' : 'text-[#425466]'}`}>
                             {[['dashboard', 'Accueil'], ['library', 'Films'], ['library', 'Séries']].map(([view, label]) => {
                                 const selected = view === 'dashboard' ? activeView === 'dashboard' : activeView === 'library' && collection === label;
@@ -1017,14 +1047,16 @@ export default function BackstagePrototype() {
                         </button>
                         <button
                             onClick={() => setIsDarkMode(!isDarkMode)}
-                            className={`flex h-9 w-9 items-center justify-center rounded-lg border text-base transition-all ${isDarkMode
-                                ? 'border-white/20 bg-white/10 text-amber-300 hover:bg-white/20'
-                                : 'border-[#e3e8ee] bg-[#f6f9fc] text-slate-700 hover:bg-[#ebeef3]'
+                            className={`flex h-9 w-9 items-center justify-center rounded-full border text-base transition-all ${isDarkMode
+                                ? 'border-white/15 bg-white/5 text-white/80 hover:bg-white/10'
+                                : 'border-[#e3e8ee] bg-[#f6f9fc] text-[#425466] hover:bg-[#ebeef3]'
                                 }`}
                             title="Changer de thème"
                             aria-label={isDarkMode ? 'Activer le mode clair' : 'Activer le mode sombre'}
                         >
-                            <span aria-hidden="true">{isDarkMode ? '☀' : '☾'}</span>
+                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M20.2 15.4A8.5 8.5 0 0 1 8.6 3.8 8.5 8.5 0 1 0 20.2 15.4Z" />
+                            </svg>
                         </button>
                     </div>
                 </div>
@@ -1040,8 +1072,10 @@ export default function BackstagePrototype() {
                 loading={tmdbPreview.loading}
                 error={tmdbPreview.error}
                 watchlistBusy={tmdbWatchlistBusy}
+                requestBusy={seerrRequestBusy}
                 onClose={() => setTMDBPreview((current) => ({...current, open: false}))}
                 onAddWatchlist={addDashboardRecommendationToWatchlist}
+                onRequestSeerr={requestRecommendationOnSeerr}
             />}
 
             {/* Main App Layout with Dynamic Floating Sidebar */}
@@ -1167,6 +1201,8 @@ export default function BackstagePrototype() {
                         onAddWatchlist={addDashboardRecommendationToWatchlist}
                         onWhyRecommendation={explainDashboardRecommendation}
                         onOpenTMDBDetails={openTMDBPreview}
+                        onCancelRequest={cancelDashboardRequest}
+                        cancellingRequest={cancellingRequest}
                         onOpenLibrary={() => setActiveView('library')}
                         onOpenRecommendations={() => setShowRecommendationFlow(true)}
                     /> : <>

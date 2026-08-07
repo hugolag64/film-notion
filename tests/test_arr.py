@@ -114,3 +114,42 @@ def test_seerr_http_error_preserves_remote_reason():
                 raise AssertionError("Expected Seerr request failure")
 
     asyncio.run(run())
+
+
+def test_seerr_lists_recent_requests_with_filters():
+    captured = {}
+
+    async def handler(request):
+        captured["path"] = request.url.path
+        captured["query"] = dict(request.url.params)
+        return httpx.Response(200, json={"results": [{"id": 9, "status": 1}]})
+
+    async def run():
+        async with _client(handler) as client:
+            result = await SeerrClient("http://seerr:5055", "secret", client).list_requests(
+                take=6, skip=2, request_filter="all", sort="modified", sort_direction="desc",
+            )
+        assert result == [{"id": 9, "status": 1}]
+
+    asyncio.run(run())
+    assert captured["path"] == "/api/v1/request"
+    assert captured["query"] == {
+        "take": "6", "skip": "2", "filter": "all", "sort": "modified", "sortDirection": "desc",
+    }
+
+
+def test_seerr_cancel_request_accepts_empty_delete_response():
+    captured = {}
+
+    async def handler(request):
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        return httpx.Response(204)
+
+    async def run():
+        async with _client(handler) as client:
+            result = await SeerrClient("http://seerr:5055", "secret", client).cancel_request(14)
+        assert result == {}
+
+    asyncio.run(run())
+    assert captured == {"method": "DELETE", "path": "/api/v1/request/14"}

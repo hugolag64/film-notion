@@ -87,6 +87,23 @@ function RecommendationCard({ item, isDarkMode, onOpenDetails, onAddWatchlist, o
     </article>;
 }
 
+function RequestCard({ item, isDarkMode, onCancelRequest, cancellingRequest }) {
+    const progress = item.progress_percent;
+    return <article className={`flex min-w-[280px] shrink-0 overflow-hidden rounded-xl border ${panelClass(isDarkMode)} shadow-sm`}>
+        <div className="relative h-36 w-24 shrink-0 overflow-hidden bg-slate-900">
+            {item.poster_url ? <img src={item.poster_url} alt={`Affiche de ${item.title}`} className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center p-3 text-center text-[10px] text-white/50">Affiche indisponible</div>}
+        </div>
+        <div className="flex min-w-0 flex-1 flex-col justify-between p-3">
+            <div>
+                <p className="truncate text-sm font-semibold">{item.title}</p>
+                <p className="mt-1 text-[11px] font-semibold text-[#635bff]">{item.status_label}</p>
+                {progress !== null && progress !== undefined && <div className="mt-2"><div className="h-1.5 overflow-hidden rounded-full bg-black/10 dark:bg-white/10"><div className="h-full rounded-full bg-[#635bff]" style={{width: `${progress}%`}} /></div><p className="mt-1 text-[10px] opacity-55">{progress}%</p></div>}
+            </div>
+            {item.cancellable && <button type="button" onClick={() => onCancelRequest(item.id)} disabled={cancellingRequest === item.id} className="mt-2 self-start rounded-md border border-rose-500/30 px-2 py-1.5 text-[10px] font-semibold text-rose-500 hover:bg-rose-500/10 disabled:opacity-50">{cancellingRequest === item.id ? 'Annulation…' : 'Annuler la demande'}</button>}
+        </div>
+    </article>;
+}
+
 const activityIcon = {
     media_added: '＋', media_interacted: '★', availability: '↗', rental: '⇩', notification: '•',
 };
@@ -100,6 +117,7 @@ function DashboardSkeleton({ isDarkMode }) {
 export default function DashboardHome({
     data, isDarkMode, loading, error, onRetry, onOpenMedia, onResume,
     onAddWatchlist, onWhyRecommendation, onOpenLibrary, onOpenRecommendations, onOpenTMDBDetails,
+    onCancelRequest, cancellingRequest,
 }) {
     if (loading && !data) return <DashboardSkeleton isDarkMode={isDarkMode} />;
     if (error && !data) return <div className={`rounded-2xl border p-10 text-center ${panelClass(isDarkMode)}`}><p className="text-sm">{error}</p><button type="button" onClick={onRetry} className="mt-4 rounded-lg bg-[#635bff] px-4 py-2 text-xs font-semibold text-white">Réessayer</button></div>;
@@ -107,12 +125,18 @@ export default function DashboardHome({
     const dashboard = data || {continue_watching: [], recommendations: [], activity: [], availability: []};
     const continueWatching = dashboard.continue_watching || [];
     const recommendations = dashboard.recommendations || [];
+    const requests = dashboard.requests || [];
     const activity = dashboard.activity || [];
     const availability = dashboard.availability || [];
     return <div className="series-portal space-y-12">
         <section>
             <SectionHeading eyebrow="REPRENDRE" title="Continuer à regarder" action="Voir ma bibliothèque" onAction={onOpenLibrary} isDarkMode={isDarkMode} />
             {continueWatching.length ? <div className="flex gap-3 overflow-x-auto pb-3 snap-x snap-mandatory" aria-label="Reprises en cours">{continueWatching.map((item) => <ContinueCard key={`${item.jellyfin_id}-${item.media_id || item.title}`} item={item} isDarkMode={isDarkMode} onOpenMedia={onOpenMedia} onResume={onResume} />)}</div> : <div className={`rounded-2xl border p-8 ${panelClass(isDarkMode)}`}><p className="text-sm font-semibold">Aucun programme en cours.</p><p className="mt-1 text-xs opacity-60">Commence un film ou une série depuis ta bibliothèque, et ta reprise apparaîtra ici.</p><button type="button" onClick={onOpenLibrary} className="mt-4 rounded-lg border border-[#635bff]/40 px-3 py-2 text-xs font-semibold text-[#635bff]">Explorer la bibliothèque</button></div>}
+        </section>
+
+        <section>
+            <SectionHeading eyebrow="TÉLÉCHARGEMENTS" title="Mes demandes" isDarkMode={isDarkMode} />
+            {requests.length ? <div className="flex gap-3 overflow-x-auto pb-3" aria-label="Mes demandes Seerr">{requests.map((item) => <RequestCard key={item.id} item={item} isDarkMode={isDarkMode} onCancelRequest={onCancelRequest} cancellingRequest={cancellingRequest} />)}</div> : <div className={`rounded-2xl border p-6 ${panelClass(isDarkMode)}`}><p className="text-sm font-semibold">Aucune demande en cours.</p><p className="mt-1 text-xs opacity-60">Ouvre la fiche d’un film et demande-le à Seerr pour le retrouver ici.</p></div>}
         </section>
 
         <section>

@@ -85,3 +85,47 @@ def test_dashboard_availability_joins_titles_and_preserves_explicit_status():
         "last_error": None,
         "updated_at": NOW.isoformat(),
     }]
+
+
+def test_dashboard_normalizes_seerr_requests_for_the_request_queue():
+    payload = build_dashboard_payload(
+        [], [], [], [], [], [], [], NOW,
+        requests=[{
+            "id": 42,
+            "mediaType": "movie",
+            "status": 2,
+            "media": {
+                "tmdbId": 438631,
+                "title": "Dune",
+                "status": 3,
+                "posterPath": "/dune.jpg",
+                "progress": 64,
+            },
+            "createdAt": "2026-08-07T10:00:00Z",
+            "updatedAt": "2026-08-07T11:00:00Z",
+        }],
+    )
+
+    assert payload["requests"] == [{
+        "id": 42,
+        "tmdb_id": 438631,
+        "title": "Dune",
+        "media_type": "movie",
+        "status": "processing",
+        "status_label": "Téléchargement",
+        "progress_percent": 64,
+        "poster_url": "https://image.tmdb.org/t/p/w342/dune.jpg",
+        "created_at": "2026-08-07T10:00:00Z",
+        "updated_at": "2026-08-07T11:00:00Z",
+        "cancellable": False,
+    }]
+
+
+def test_dashboard_uses_seerr_request_status_when_media_is_still_pending():
+    payload = build_dashboard_payload(
+        [], [], [], [], [], [], [], NOW,
+        requests=[{"id": 7, "status": 1, "media": {"status": 2, "title": "The Odyssey"}}],
+    )
+
+    assert payload["requests"][0]["status_label"] == "En attente"
+    assert payload["requests"][0]["cancellable"] is True

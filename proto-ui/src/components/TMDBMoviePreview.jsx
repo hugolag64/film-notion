@@ -5,7 +5,7 @@ function panelClass(isDarkMode) {
 }
 
 export default function TMDBMoviePreview({
-    movie, recommendation, isDarkMode, loading, error, watchlistBusy, onClose, onAddWatchlist,
+    movie, recommendation, isDarkMode, loading, error, watchlistBusy, requestBusy, onClose, onAddWatchlist, onRequestSeerr,
 }) {
     return <div
         className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-3 backdrop-blur-md sm:p-6"
@@ -58,8 +58,11 @@ export default function TMDBMoviePreview({
 
                 <div className="flex flex-wrap justify-end gap-2 border-t border-current/10 pt-5">
                     <button type="button" onClick={onClose} className="rounded-lg border border-current/15 px-4 py-2 text-xs font-semibold">Fermer</button>
-                    <button type="button" onClick={() => onAddWatchlist(recommendation)} disabled={watchlistBusy} className="rounded-lg bg-[#635bff] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">
+                    <button type="button" onClick={() => onAddWatchlist(recommendation)} disabled={watchlistBusy} className="rounded-lg border border-[#635bff]/40 px-4 py-2 text-xs font-semibold text-[#635bff] disabled:opacity-50">
                         {watchlistBusy ? 'Ajout…' : 'Ajouter à ma watchlist'}
+                    </button>
+                    <button type="button" onClick={() => onRequestSeerr(recommendation)} disabled={requestBusy} className="rounded-lg bg-[#635bff] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">
+                        {requestBusy ? 'Demande…' : 'Demander à Seerr'}
                     </button>
                 </div>
             </div>}

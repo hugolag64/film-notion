@@ -363,6 +363,26 @@ export async function addRecommendationToWatchlist(tmdbId) {
     return response.json();
 }
 
+export async function createSeerrRequest(tmdbId, mediaType = 'movie') {
+    const response = await fetch(`${API_BASE_URL}/seerr/requests`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({tmdb_id: tmdbId, media_type: mediaType}),
+    });
+    if (!response.ok) throw new Error((await response.json()).detail || 'Demande Seerr impossible');
+    return response.json();
+}
+
+export async function cancelSeerrRequest(requestId) {
+    const response = await fetch(`${API_BASE_URL}/seerr/requests/${encodeURIComponent(requestId)}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+    });
+    if (!response.ok) throw new Error((await response.json()).detail || 'Annulation impossible');
+    return response.json();
+}
+
 /**
  * Search TMDB for movies by query.
  */

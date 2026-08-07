@@ -21,6 +21,8 @@ class SeerrClient:
             else:
                 response = await http.get_client().request(method, f"{self.base_url}{path}", headers=headers, timeout=10.0, **kwargs)
             response.raise_for_status()
+            if response.status_code == 204 or not response.content:
+                return {}
             return response.json()
         except httpx.HTTPStatusError as error:
             response = error.response
@@ -57,3 +59,29 @@ class SeerrClient:
             if language_profile_id is not None:
                 payload["languageProfileId"] = language_profile_id
         return await self._request("POST", "/api/v1/request", json=payload)
+
+    async def list_requests(
+        self, *, take: int = 8, skip: int = 0, request_filter: str = "all",
+        sort: str = "modified", sort_direction: str = "desc",
+    ) -> list[dict[str, Any]]:
+        """Return recent Seerr requests across supported response shapes."""
+        payload = await self._request(
+            "GET", "/api/v1/request",
+            params={
+                "take": take, "skip": skip, "filter": request_filter,
+                "sort": sort, "sortDirection": sort_direction,
+            },
+        )
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        if isinstance(payload, dict):
+            for key in ("results", "requests"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    return [item for item in value if isinstance(item, dict)]
+        return []
+
+    async def cancel_request(self, request_id: int | str) -> dict[str, Any]:
+        """Cancel a Seerr request; Seerr returns an empty 204 on success."""
+        result = await self._request("DELETE", f"/api/v1/request/{request_id}")
+        return result if isinstance(result, dict) else {}

@@ -15,6 +15,19 @@ def test_header_uses_compact_primary_navigation_and_right_aligned_utilities():
     assert '+ Ajouter un film' not in source
     assert 'Ajouter un film' in source
     assert source.index('title="Changer de thème"') > source.index('title="Ouvrir le compte"')
+    assert 'left-1/2' in source
+    assert '-translate-x-1/2' in source
+
+
+def test_dashboard_exposes_seerr_request_queue_and_tmdb_request_action():
+    dashboard = (ROOT / "proto-ui/src/components/DashboardHome.jsx").read_text(encoding="utf-8")
+    preview = (ROOT / "proto-ui/src/components/TMDBMoviePreview.jsx").read_text(encoding="utf-8")
+    api = (ROOT / "proto-ui/src/api.js").read_text(encoding="utf-8")
+    assert "Mes demandes" in dashboard
+    assert "Annuler la demande" in dashboard
+    assert "Demander à Seerr" in preview
+    assert "createSeerrRequest" in api
+    assert "cancelSeerrRequest" in api
 
 
 def test_continue_watching_is_a_horizontal_compact_row():

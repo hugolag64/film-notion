@@ -54,6 +54,74 @@ def _availability_state_label(state: str) -> str:
     }.get(state, "Demande possible")
 
 
+def _request_status(request: dict[str, Any]) -> tuple[str, str]:
+    media = request.get("media") if isinstance(request.get("media"), dict) else {}
+    value = media.get("status")
+    if isinstance(value, str):
+        normalized = value.lower().replace("_", " ")
+        if normalized in {"pending", "pending approval", "requested", "request pending"}:
+            return "pending", "En attente"
+        if normalized in {"approved", "searching", "processing request"}:
+            return "searching", "Recherche"
+        if normalized in {"processing", "downloading", "partial"}:
+            return "processing", "Téléchargement"
+        if normalized in {"available", "completed", "complete"}:
+            return "available", "Disponible"
+        if normalized in {"declined", "failed", "error", "unavailable"}:
+            return "error", "Erreur"
+    if value == 2:
+        return "pending", "En attente"
+    if value in {3, 4}:
+        return "processing", "Téléchargement"
+    if value == 5:
+        return "available", "Disponible"
+    if value in {6, 7}:
+        return "error", "Erreur"
+    value = request.get("status")
+    if isinstance(value, str):
+        normalized = value.lower().replace("_", " ")
+        if normalized in {"pending", "pending approval", "requested", "request pending"}:
+            return "pending", "En attente"
+        if normalized in {"approved", "searching", "processing request"}:
+            return "searching", "Recherche"
+        if normalized in {"declined", "failed", "error", "unavailable"}:
+            return "error", "Erreur"
+    if value == 1:
+        return "pending", "En attente"
+    if value == 2:
+        return "searching", "Recherche"
+    if value == 3:
+        return "error", "Erreur"
+    return "pending", "En attente"
+
+
+def _request_card(request: dict[str, Any]) -> dict[str, Any]:
+    media = request.get("media") if isinstance(request.get("media"), dict) else {}
+    status, status_label = _request_status(request)
+    poster = media.get("posterPath") or media.get("poster_path") or request.get("posterPath")
+    poster_url = poster
+    if poster and not str(poster).startswith(("http://", "https://")):
+        poster_url = f"https://image.tmdb.org/t/p/w342{poster if str(poster).startswith('/') else '/' + str(poster)}"
+    progress = media.get("progress", request.get("progress"))
+    if isinstance(progress, dict):
+        progress = progress.get("percent", progress.get("percentage"))
+    if not isinstance(progress, (int, float)):
+        progress = None
+    return {
+        "id": request.get("id"),
+        "tmdb_id": media.get("tmdbId", media.get("tmdb_id", request.get("mediaId"))),
+        "title": media.get("title") or request.get("title") or "Titre indisponible",
+        "media_type": request.get("mediaType") or media.get("mediaType") or "movie",
+        "status": status,
+        "status_label": status_label,
+        "progress_percent": round(max(0, min(100, progress))) if isinstance(progress, (int, float)) else None,
+        "poster_url": poster_url,
+        "created_at": request.get("createdAt") or request.get("created_at"),
+        "updated_at": request.get("updatedAt") or request.get("updated_at"),
+        "cancellable": status == "pending",
+    }
+
+
 def build_dashboard_payload(
     medias: list[Media],
     states: list[UserMediaState],
@@ -63,6 +131,7 @@ def build_dashboard_payload(
     notifications: list[Notification],
     recommendations: list[dict[str, Any]],
     now: datetime,
+    requests: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Join user-scoped data into the small, stable dashboard response contract."""
     media_by_id = {media.id: media for media in medias}
@@ -161,6 +230,7 @@ def build_dashboard_payload(
     return {
         "continue_watching": continue_watching[:6],
         "recommendations": recommendations[:8],
+        "requests": [_request_card(item) for item in (requests or [])[:8]],
         "activity": activity[:10],
         "availability": availability_payload,
         "last_synced_at": _iso(latest_sync or now),

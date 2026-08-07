@@ -301,6 +301,11 @@ class AcquisitionRequest(BaseModel):
     monitor: str = "all"
 
 
+class SeerrRequestCreate(BaseModel):
+    tmdb_id: int
+    media_type: str = "movie"
+
+
 MAX_ACTIVE_RENTALS = 5
 
 
@@ -481,10 +486,53 @@ async def dashboard_home(
     except (httpx.HTTPError, RuntimeError, ValueError) as error:
         logger.warning("Recommandations dashboard indisponibles: %s", error)
         recommendations = []
+    requests = []
+    service = get_media_server_service(store)
+    if service.seerr:
+        try:
+            requests = await service.seerr.list_requests(take=8, sort="modified", sort_direction="desc")
+        except MediaServerError as error:
+            logger.warning("Demandes Seerr dashboard indisponibles: %s", error)
     return build_dashboard_payload(
         medias, states, resume + completed, availabilities, rentals,
-        notifications, recommendations, datetime.now(timezone.utc),
+        notifications, recommendations, datetime.now(timezone.utc), requests,
     )
+
+
+@router.post("/seerr/requests")
+async def create_seerr_request(
+    payload: SeerrRequestCreate,
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    if not service.seerr:
+        raise HTTPException(status_code=503, detail="Seerr n'est pas configuré")
+    if payload.media_type not in {"movie", "tv"}:
+        raise HTTPException(status_code=422, detail="Type de média Seerr invalide")
+    try:
+        return await service.seerr.request_media(
+            tmdb_id=payload.tmdb_id,
+            media_type="Film" if payload.media_type == "movie" else "Série",
+            quality_profile_id=None,
+            root_folder=None,
+            language_profile_id=None,
+            monitor="all",
+        )
+    except (MediaServerError, RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@router.delete("/seerr/requests/{request_id}")
+async def cancel_seerr_request(
+    request_id: int,
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    if not service.seerr:
+        raise HTTPException(status_code=503, detail="Seerr n'est pas configuré")
+    try:
+        await service.seerr.cancel_request(request_id)
+    except (MediaServerError, RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    return {"cancelled": True, "request_id": request_id}
 
 
 @router.post("/recommendations/watchlist", response_model=Media)
