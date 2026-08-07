@@ -5,7 +5,7 @@ import AdminCenter from './components/AdminCenter';
 import RecommendationFlow from './components/RecommendationFlow';
 import FilmDetailView from './components/FilmDetailView';
 import { useAuth } from './auth-context';
-import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncPlayback } from './api';
+import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncPlayback, fetchTMDBRating } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
 
@@ -132,6 +132,7 @@ export default function BackstagePrototype() {
     const [, setError] = useState(null);
     const [activeFilter, setActiveFilter] = useState('all'); // 'all' | 'watched' | 'unwatched' | 'watchlist' | 'favorite'
     const [selectedMovie, setSelectedMovie] = useState(null);
+    const [tmdbRating, setTMDBRating] = useState({mediaId: null, loading: false, rating: null});
     const libraryScrollTop = useRef(0);
     const [selectedSeries, setSelectedSeries] = useState(null);
     const [seriesEpisodes, setSeriesEpisodes] = useState([]);
@@ -196,6 +197,7 @@ export default function BackstagePrototype() {
     };
 
     const selectedMedia = selectedMovie || selectedSeries;
+    const selectedMovieId = selectedMovie?.id;
     const mediaAction = getMediaAction(selectedMedia?.type, mediaAvailability?.availability);
     const selectedRental = selectedMedia?.id ? rentalsByMedia[selectedMedia.id] : null;
 
@@ -222,6 +224,26 @@ export default function BackstagePrototype() {
             window.removeEventListener('keydown', handleEscape);
         };
     }, [selectedMovie]);
+
+    useEffect(() => {
+        if (!selectedMovieId) {
+            setTMDBRating({mediaId: null, loading: false, rating: null});
+            return undefined;
+        }
+
+        let cancelled = false;
+        const mediaId = selectedMovieId;
+        setTMDBRating({mediaId, loading: true, rating: null});
+        fetchTMDBRating(mediaId)
+            .then(({rating}) => {
+                if (!cancelled) setTMDBRating({mediaId, loading: false, rating});
+            })
+            .catch(() => {
+                if (!cancelled) setTMDBRating({mediaId, loading: false, rating: null});
+            });
+
+        return () => { cancelled = true; };
+    }, [selectedMovieId]);
 
     const loadRentals = () => fetchRentals().then((result) => {
         setRentalsByMedia(Object.fromEntries((result.rentals || []).map((rental) => [rental.media_id, rental])));
@@ -1555,7 +1577,7 @@ export default function BackstagePrototype() {
                                     </div>
                                 </div>
 
-                                <div className="flex items-center gap-3">
+                                <div className="flex flex-wrap items-center justify-end gap-3">
                                     {/* 5 Interactive Stars with Half-Star Click Zones */}
                                     <div className="flex items-center gap-1 text-2xl select-none">
                                         {[1, 2, 3, 4, 5].map((starIndex) => {
@@ -1590,6 +1612,19 @@ export default function BackstagePrototype() {
                                         <span className="text-base font-bold font-mono text-amber-400">
                                             {selectedMovie.rating > 0 ? `${selectedMovie.rating} / 5` : '— / 5'}
                                         </span>
+                                    </div>
+                                    <div className="h-10 w-px bg-black/10 dark:bg-white/10" aria-hidden="true" />
+                                    <div className="min-w-[140px] text-left sm:text-right">
+                                        <div className={`text-[10px] font-mono uppercase tracking-wider font-bold ${isDarkMode ? 'text-white/50' : 'text-[#425466]'}`}>
+                                            UTILISATEURS <span className="text-[#01b4e4]">TMDB</span>
+                                        </div>
+                                        <div className="mt-1 text-base font-bold font-mono text-[#01b4e4]" aria-live="polite">
+                                            {tmdbRating.mediaId !== selectedMovie.id || tmdbRating.loading
+                                                ? 'Chargement…'
+                                                : typeof tmdbRating.rating === 'number'
+                                                    ? `${tmdbRating.rating.toFixed(1)} / 10`
+                                                    : 'Note indisponible'}
+                                        </div>
                                     </div>
                                 </div>
                             </div>

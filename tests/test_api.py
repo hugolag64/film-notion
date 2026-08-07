@@ -1,5 +1,8 @@
 import asyncio
 
+import pytest
+from fastapi import HTTPException
+
 from backend.api import (
     UpdateMediaRequest,
     UpdatePersonalMediaRequest,
@@ -98,3 +101,71 @@ def test_health_route_is_registered_without_media_dependencies():
     routes = {route.path for route in health_router.routes}
 
     assert "/health" in routes
+
+
+def test_tmdb_rating_is_null_when_media_has_no_tmdb_id(monkeypatch):
+    store = FakeStore()
+    store.media = Media(id="1", title="Dune", type="Film", tmdb_id=None)
+
+    class UnexpectedTMDB:
+        def __init__(self):
+            raise AssertionError("TMDB ne doit pas être appelé sans tmdb_id")
+
+    monkeypatch.setattr(api, "TMDBClient", UnexpectedTMDB)
+
+    result = asyncio.run(api.get_tmdb_rating("1", store))
+
+    assert result == {"rating": None}
+
+
+def test_tmdb_rating_returns_vote_average(monkeypatch):
+    store = FakeStore()
+    store.media = Media(id="1", title="Dune", type="Film", tmdb_id=693134)
+
+    class FakeTMDB:
+        async def get_movie_details(self, tmdb_id):
+            assert tmdb_id == 693134
+            return {"vote_average": 8.24}
+
+    monkeypatch.setattr(api, "TMDBClient", FakeTMDB)
+
+    result = asyncio.run(api.get_tmdb_rating("1", store))
+
+    assert result == {"rating": 8.24}
+
+
+def test_tmdb_rating_is_null_when_tmdb_has_no_vote_average(monkeypatch):
+    store = FakeStore()
+    store.media = Media(id="1", title="Dune", type="Film", tmdb_id=693134)
+
+    class FakeTMDB:
+        async def get_movie_details(self, tmdb_id):
+            return {"vote_average": None}
+
+    monkeypatch.setattr(api, "TMDBClient", FakeTMDB)
+
+    assert asyncio.run(api.get_tmdb_rating("1", store)) == {"rating": None}
+
+
+def test_tmdb_rating_is_null_when_tmdb_request_fails(monkeypatch):
+    store = FakeStore()
+    store.media = Media(id="1", title="Dune", type="Film", tmdb_id=693134)
+
+    class FakeTMDB:
+        async def get_movie_details(self, tmdb_id):
+            raise RuntimeError("TMDB indisponible")
+
+    monkeypatch.setattr(api, "TMDBClient", FakeTMDB)
+
+    assert asyncio.run(api.get_tmdb_rating("1", store)) == {"rating": None}
+
+
+def test_tmdb_rating_returns_404_for_unknown_media():
+    class MissingStore:
+        async def fetch_one(self, media_id):
+            return None
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(api.get_tmdb_rating("missing", MissingStore()))
+
+    assert error.value.status_code == 404

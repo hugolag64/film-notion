@@ -1,6 +1,7 @@
 """FastAPI REST API for Backstage UI integration."""
 from datetime import datetime, timedelta, timezone
 import asyncio
+import logging
 import sqlite3
 import uuid
 from random import Random
@@ -34,6 +35,8 @@ from backend.core.gemini_recommendations import GeminiRecommendationGateway, SUP
 from backend.auth_api import AuthContext, get_auth_store, get_current_user, require_admin
 from backend.core.auth import AuthStore
 from urllib.parse import quote, parse_qsl, urlencode, urlsplit
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api",
@@ -421,6 +424,25 @@ async def get_media(
     if not media:
         raise HTTPException(status_code=404, detail="Média non trouvé")
     return await _media_for_user(media, current, store)
+
+@router.get("/medias/{media_id}/tmdb-rating")
+async def get_tmdb_rating(media_id: str, store: MediaStore = Depends(get_store)):
+    media = await store.fetch_one(media_id)
+    if not media:
+        raise HTTPException(status_code=404, detail="Média non trouvé")
+    if not media.tmdb_id:
+        return {"rating": None}
+    try:
+        details = await TMDBClient().get_movie_details(media.tmdb_id)
+    except Exception as error:
+        logger.warning("Note TMDB indisponible pour le média %s : %s", media_id, error)
+        return {"rating": None}
+    raw_rating = details.get("vote_average") if details else None
+    try:
+        rating = float(raw_rating) if raw_rating is not None else None
+    except (TypeError, ValueError):
+        rating = None
+    return {"rating": rating}
 
 
 @router.patch("/medias/{media_id}/personal", response_model=Media)

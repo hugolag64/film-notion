@@ -163,6 +163,12 @@ export async function fetchMedias() {
     }
 }
 
+export async function fetchTMDBRating(mediaId) {
+    const response = await fetch(`${API_BASE_URL}/medias/${encodeURIComponent(mediaId)}/tmdb-rating`);
+    if (!response.ok) throw new Error(`Failed to fetch TMDB rating: ${response.statusText}`);
+    return response.json();
+}
+
 /**
  * Update media fields (rating, review/userNotes, watched_in_cinema, watched_date, etc.).
  */
