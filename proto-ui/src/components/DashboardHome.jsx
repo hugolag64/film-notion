@@ -32,27 +32,27 @@ function ContinueCard({ item, isDarkMode, onOpenMedia, onResume }) {
     const episode = item.series_title
         ? `${item.series_title}${item.season_number ? ` · S${item.season_number}E${item.episode_number || '?'}` : ''}`
         : media?.title || item.title;
-    return <article className={`group overflow-hidden rounded-2xl border ${panelClass(isDarkMode)} shadow-sm transition duration-300 hover:-translate-y-0.5 hover:border-[#635bff]/60 hover:shadow-xl`}>
-        <div className="flex min-h-52">
-            <div className="relative w-36 shrink-0 overflow-hidden bg-slate-900 sm:w-44">
+    return <article className={`group w-[calc((100%-60px)/6)] min-w-[230px] shrink-0 snap-start overflow-hidden rounded-xl border ${panelClass(isDarkMode)} shadow-sm transition duration-300 hover:-translate-y-0.5 hover:border-[#635bff]/60 hover:shadow-xl`}>
+        <div className="flex min-h-40">
+            <div className="relative w-24 shrink-0 overflow-hidden bg-slate-900 sm:w-28">
                 {image ? <img src={image} alt={`Affiche de ${media?.title || item.title}`} className="h-full w-full object-cover transition duration-500 group-hover:scale-105" /> : <div className="flex h-full items-center justify-center p-4 text-center text-xs text-white/50">Affiche indisponible</div>}
                 <div className="absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/75 to-transparent" />
                 <span className="absolute bottom-3 left-3 rounded-full bg-black/65 px-2 py-1 text-[10px] font-mono font-bold text-white">{Math.round(item.percent || 0)} %</span>
             </div>
-            <div className="flex min-w-0 flex-1 flex-col justify-between p-5">
+            <div className="flex min-w-0 flex-1 flex-col justify-between p-3">
                 <div>
                     <p className="text-[10px] font-mono uppercase tracking-widest opacity-50">À reprendre</p>
-                    <h3 className="mt-2 truncate text-xl font-semibold">{media?.title || item.title}</h3>
+                    <h3 className="mt-1 truncate text-sm font-semibold">{media?.title || item.title}</h3>
                     <p className="mt-1 truncate text-xs opacity-60">{episode}</p>
-                    {item.last_played_at && <p className="mt-3 text-xs opacity-50">Vu le {dateLabel(item.last_played_at)}</p>}
+                    {item.last_played_at && <p className="mt-2 text-[10px] opacity-50">Vu le {dateLabel(item.last_played_at)}</p>}
                 </div>
-                <div className="mt-5">
-                    <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-black/10 dark:bg-white/10" aria-label={`${Math.round(item.percent || 0)} % regardé`}>
+                <div className="mt-3">
+                    <div className="mb-2 h-1.5 overflow-hidden rounded-full bg-black/10 dark:bg-white/10" aria-label={`${Math.round(item.percent || 0)} % regardé`}>
                         <div className="h-full rounded-full bg-[#635bff]" style={{width: `${Math.min(100, Math.max(0, item.percent || 0))}%`}} />
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                        <button type="button" onClick={() => onResume(item)} className="rounded-lg bg-[#635bff] px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-[#5048e5]">Reprendre</button>
-                        {media && <button type="button" onClick={() => onOpenMedia(media)} className="rounded-lg border border-current/15 px-3 py-2 text-xs font-semibold opacity-80 hover:border-[#635bff] hover:text-[#635bff]">Voir la fiche</button>}
+                    <div className="flex flex-wrap gap-1.5">
+                        <button type="button" onClick={() => onResume(item)} className="rounded-md bg-[#635bff] px-2 py-1.5 text-[10px] font-semibold text-white shadow-sm hover:bg-[#5048e5]">Reprendre</button>
+                        {media && <button type="button" onClick={() => onOpenMedia(media)} className="rounded-md border border-current/15 px-2 py-1.5 text-[10px] font-semibold opacity-80 hover:border-[#635bff] hover:text-[#635bff]">Voir la fiche</button>}
                     </div>
                 </div>
             </div>
@@ -93,7 +93,7 @@ const activityIcon = {
 
 function DashboardSkeleton({ isDarkMode }) {
     return <div className="space-y-10" aria-label="Chargement du dashboard">
-        {[['CONTINUER', 'Continuer à regarder'], ['POUR VOUS', 'Pour vous']].map(([eyebrow, title]) => <section key={title}><SectionHeading eyebrow={eyebrow} title={title} isDarkMode={isDarkMode} /><div className="grid gap-4 md:grid-cols-2"><div className="h-52 animate-pulse rounded-2xl bg-current/10" /><div className="hidden h-52 animate-pulse rounded-2xl bg-current/10 md:block" /></div></section>)}
+        {[['CONTINUER', 'Continuer à regarder'], ['POUR VOUS', 'Pour vous']].map(([eyebrow, title]) => <section key={title}><SectionHeading eyebrow={eyebrow} title={title} isDarkMode={isDarkMode} /><div className="flex gap-3 overflow-hidden"><div className="h-40 min-w-[230px] flex-1 animate-pulse rounded-xl bg-current/10" /><div className="hidden h-40 min-w-[230px] flex-1 animate-pulse rounded-xl bg-current/10 sm:block" /></div></section>)}
     </div>;
 }
 
@@ -112,7 +112,7 @@ export default function DashboardHome({
     return <div className="series-portal space-y-12">
         <section>
             <SectionHeading eyebrow="REPRENDRE" title="Continuer à regarder" action="Voir ma bibliothèque" onAction={onOpenLibrary} isDarkMode={isDarkMode} />
-            {continueWatching.length ? <div className="grid gap-4 md:grid-cols-2">{continueWatching.map((item) => <ContinueCard key={`${item.jellyfin_id}-${item.media_id || item.title}`} item={item} isDarkMode={isDarkMode} onOpenMedia={onOpenMedia} onResume={onResume} />)}</div> : <div className={`rounded-2xl border p-8 ${panelClass(isDarkMode)}`}><p className="text-sm font-semibold">Aucun programme en cours.</p><p className="mt-1 text-xs opacity-60">Commence un film ou une série depuis ta bibliothèque, et ta reprise apparaîtra ici.</p><button type="button" onClick={onOpenLibrary} className="mt-4 rounded-lg border border-[#635bff]/40 px-3 py-2 text-xs font-semibold text-[#635bff]">Explorer la bibliothèque</button></div>}
+            {continueWatching.length ? <div className="flex gap-3 overflow-x-auto pb-3 snap-x snap-mandatory" aria-label="Reprises en cours">{continueWatching.map((item) => <ContinueCard key={`${item.jellyfin_id}-${item.media_id || item.title}`} item={item} isDarkMode={isDarkMode} onOpenMedia={onOpenMedia} onResume={onResume} />)}</div> : <div className={`rounded-2xl border p-8 ${panelClass(isDarkMode)}`}><p className="text-sm font-semibold">Aucun programme en cours.</p><p className="mt-1 text-xs opacity-60">Commence un film ou une série depuis ta bibliothèque, et ta reprise apparaîtra ici.</p><button type="button" onClick={onOpenLibrary} className="mt-4 rounded-lg border border-[#635bff]/40 px-3 py-2 text-xs font-semibold text-[#635bff]">Explorer la bibliothèque</button></div>}
         </section>
 
         <section>

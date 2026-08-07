@@ -967,7 +967,7 @@ export default function BackstagePrototype() {
             {/* Top Header */}
             <header className={`border-b sticky top-0 z-40 backdrop-blur-xl transition-colors duration-300 ${isDarkMode ? 'border-white/10 bg-black/90' : 'border-[#e3e8ee] bg-white/90 shadow-sm'
                 }`}>
-                <div className="max-w-[1536px] mx-auto px-6 h-16 flex items-center justify-between">
+                <div className="max-w-[1536px] mx-auto flex h-16 items-center gap-6 px-6">
                     <div className="flex items-center gap-4">
                         <img src="/static/Logo.png" alt="Backstage" className="h-10 w-auto object-contain" />
                         <div>
@@ -981,32 +981,18 @@ export default function BackstagePrototype() {
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-4">
-                        <div className={`flex rounded-lg border p-1 text-xs font-semibold ${isDarkMode ? 'border-white/15 bg-white/5' : 'border-[#e3e8ee] bg-[#f6f9fc]'}`} aria-label="Accueil | Bibliothèque">
-                            {[['dashboard', 'Accueil'], ['library', 'Bibliothèque']].map(([view, label]) => (
-                                <button key={view} type="button" onClick={() => setActiveView(view)} className={`rounded-md px-3 py-1.5 transition-all ${activeView === view ? 'bg-[#635bff] text-white shadow-sm' : isDarkMode ? 'text-white/60 hover:text-white' : 'text-[#425466] hover:text-[#0a2540]'}`}>
+                    <nav className="flex min-w-0 flex-1 justify-center" aria-label="Navigation principale">
+                        <div className={`flex rounded-lg border p-1 text-xs font-semibold ${isDarkMode ? 'border-white/15 bg-white/5' : 'border-[#e3e8ee] bg-[#f6f9fc]'}`}>
+                            {[['dashboard', 'Accueil'], ['library', 'Films'], ['library', 'Séries']].map(([view, label]) => {
+                                const selected = view === 'dashboard' ? activeView === 'dashboard' : activeView === 'library' && collection === label;
+                                return <button key={label} type="button" onClick={() => view === 'dashboard' ? setActiveView('dashboard') : (setActiveView('library'), changeCollection(label))} className={`rounded-md px-3 py-1.5 transition-all ${selected ? 'bg-[#635bff] text-white shadow-sm' : isDarkMode ? 'text-white/60 hover:text-white' : 'text-[#425466] hover:text-[#0a2540]'}`}>
                                     {label}
-                                </button>
-                            ))}
+                                </button>;
+                            })}
                         </div>
-                        <div className={`flex rounded-lg border p-1 text-xs font-semibold ${isDarkMode ? 'border-white/15 bg-white/5' : 'border-[#e3e8ee] bg-[#f6f9fc]'}`} aria-label="Films | Séries">
-                            {['Films', 'Séries'].map((item) => (
-                                <button key={item} onClick={() => { setActiveView('library'); changeCollection(item); }} className={`rounded-md px-3 py-1.5 transition-all ${collection === item ? 'bg-[#635bff] text-white shadow-sm' : isDarkMode ? 'text-white/60 hover:text-white' : 'text-[#425466] hover:text-[#0a2540]'}`}>
-                                    {item}
-                                </button>
-                            ))}
-                        </div>
-                        {/* Light / Dark Mode Switcher Button */}
-                        <button
-                            onClick={() => setIsDarkMode(!isDarkMode)}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-mono font-medium border flex items-center gap-2 transition-all cursor-pointer ${isDarkMode
-                                ? 'bg-white/10 border-white/20 text-amber-300 hover:bg-white/20'
-                                : 'bg-[#f6f9fc] border-[#e3e8ee] text-slate-700 hover:bg-[#ebeef3]'
-                                }`}
-                            title="Changer de thème"
-                        >
-                            <span>{isDarkMode ? '☀️ Mode Clair' : '🌙 Mode Sombre'}</span>
-                        </button>
+                    </nav>
+
+                    <div className="flex shrink-0 items-center gap-3">
 
                         {/* Search Input */}
                         <div className="relative">
@@ -1015,7 +1001,7 @@ export default function BackstagePrototype() {
                                 placeholder={collection === 'Séries' ? 'Rechercher une série, créateur...' : 'Rechercher un film, réalisateur...'}
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
-                                className={`text-xs rounded-lg px-3 py-2 w-72 transition-all outline-none border ${isDarkMode
+                                className={`w-56 rounded-lg border px-3 py-2 text-xs outline-none transition-all xl:w-72 ${isDarkMode
                                     ? 'bg-white/5 border-white/15 focus:border-[#635bff] text-white placeholder-white/40'
                                     : 'bg-[#f6f9fc] border-[#e3e8ee] focus:border-[#635bff] text-[#0a2540] placeholder-[#425466]/50'
                                     }`}
@@ -1028,8 +1014,20 @@ export default function BackstagePrototype() {
                         {user?.role === 'admin' && <button onClick={() => setShowAdminCenter(true)} className="rounded-lg border border-[#635bff]/40 px-3 py-2 text-xs font-semibold text-[#635bff]" title="Ouvrir l’administration">
                             Administration
                         </button>}
-                        <button onClick={() => setShowAccountPanel(true)} className="rounded-lg border px-3 py-2 text-xs font-semibold" title="Ouvrir le compte">
-                            {user?.display_name || 'Compte'}
+                        <button
+                            onClick={() => setIsDarkMode(!isDarkMode)}
+                            className={`flex h-9 w-9 items-center justify-center rounded-lg border text-base transition-all ${isDarkMode
+                                ? 'border-white/20 bg-white/10 text-amber-300 hover:bg-white/20'
+                                : 'border-[#e3e8ee] bg-[#f6f9fc] text-slate-700 hover:bg-[#ebeef3]'
+                                }`}
+                            title="Changer de thème"
+                            aria-label={isDarkMode ? 'Activer le mode clair' : 'Activer le mode sombre'}
+                        >
+                            <span aria-hidden="true">{isDarkMode ? '☀' : '☾'}</span>
+                        </button>
+                        <button onClick={() => setShowAccountPanel(true)} className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs font-semibold" title="Ouvrir le compte">
+                            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#635bff] text-[11px] font-bold text-white" aria-hidden="true">{(user?.display_name || 'Compte').charAt(0).toUpperCase()}</span>
+                            <span className="hidden lg:inline">{user?.display_name || 'Compte'}</span>
                         </button>
                     </div>
                 </div>
