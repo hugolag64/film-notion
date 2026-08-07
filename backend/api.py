@@ -175,15 +175,24 @@ def _recent_question_axes(events: list[RecommendationEvent]) -> list[str]:
 
 
 def _recent_question_plans(events: list[RecommendationEvent]) -> list[list[str]]:
-    plans: dict[str, list[str]] = {}
-    for event in reversed(events):
+    plans: dict[str, list[tuple[int, str]]] = {}
+    for event in sorted(events, key=lambda item: (item.created_at, item.id)):
         value = str(event.value or "")
         if event.event_type != "question_answered" or not value.startswith("plan:") or not event.session_id:
             continue
-        axis = value.removeprefix("plan:")
+        payload = value.removeprefix("plan:")
+        index_text, separator, axis = payload.partition(":")
+        if separator and index_text.isdigit():
+            index = int(index_text)
+        else:
+            axis = payload
+            index = len(plans.get(event.session_id, []))
         if axis in SUPPORTED_QUESTION_AXES:
-            plans.setdefault(event.session_id, []).append(axis)
-    return list(plans.values())[-4:]
+            plans.setdefault(event.session_id, []).append((index, axis))
+    return [
+        [axis for _, axis in sorted(items)]
+        for items in list(plans.values())[-4:]
+    ]
 
 
 def _fallback_question_plan(recent_axes: list[str]) -> list[str]:
@@ -197,9 +206,10 @@ def _vary_question_plan(plan: list[str], recent_plans: list[list[str]], recent_a
     if not normalized:
         return _fallback_question_plan(recent_axes)
     recent = [item for item in recent_plans[-4:] if item]
+    recent_first_axes = {item[0] for item in recent if item}
     for offset in range(len(normalized)):
         candidate = normalized[offset:] + normalized[:offset]
-        if candidate not in recent:
+        if candidate not in recent and candidate[0] not in recent_first_axes:
             return candidate
     return _fallback_question_plan(recent_axes)
 
@@ -685,10 +695,10 @@ async def start_recommendation_session(
             )
         quota["used"] += 1
         quota["remaining"] = max(0, quota["limit"] - quota["used"])
-    for axis in question_plan:
+    for index, axis in enumerate(question_plan):
         await store.record_recommendation_event(RecommendationEvent(
             id=str(uuid.uuid4()), backstage_user_id=current.user["id"],
-            session_id=session.id, event_type="question_answered", value=f"plan:{axis}",
+            session_id=session.id, event_type="question_answered", value=f"plan:{index}:{axis}",
             created_at=datetime.now(timezone.utc),
         ))
     await _remember_question_options(session, question, store)
