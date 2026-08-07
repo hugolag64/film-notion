@@ -2,6 +2,16 @@
 
 const API_BASE_URL = '/api';
 
+async function readResponseBody(response) {
+    const text = await response.text();
+    if (!text) return null;
+    try {
+        return JSON.parse(text);
+    } catch {
+        return {detail: text.trim()};
+    }
+}
+
 async function authRequest(path, options = {}) {
     const response = await fetch(`${API_BASE_URL}/auth${path}`, {
         ...options,
@@ -348,8 +358,9 @@ export async function fetchPlaybackSummary() {
 
 export async function fetchDashboard() {
     const response = await fetch(`${API_BASE_URL}/dashboard`, {credentials: 'same-origin'});
-    if (!response.ok) throw new Error((await response.json()).detail || 'Dashboard indisponible');
-    return response.json();
+    const body = await readResponseBody(response);
+    if (!response.ok) throw new Error(body?.detail || body?.message || 'Dashboard indisponible');
+    return body;
 }
 
 export async function addRecommendationToWatchlist(tmdbId) {

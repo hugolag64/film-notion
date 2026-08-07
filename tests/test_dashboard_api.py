@@ -51,6 +51,24 @@ def test_dashboard_route_survives_optional_recommendation_network_failure(tmp_pa
     assert "availability" in payload
 
 
+def test_dashboard_route_survives_media_library_import_failure(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+
+    class FailingMediaService:
+        radarr = object()
+        sonarr = None
+        seerr = None
+
+        async def import_existing_libraries(self):
+            raise Exception("Radarr returned an unexpected response")
+
+    monkeypatch.setattr(api, "get_media_server_service", lambda _store: FailingMediaService())
+
+    payload = asyncio.run(api.dashboard_home(current_user(), store))
+
+    assert "continue_watching" in payload
+
+
 def test_dashboard_recommendation_can_be_added_to_current_users_watchlist(tmp_path):
     store = make_store(tmp_path)
     asyncio.run(store.create({"id": "m1", "title": "Arrival", "type": "Film", "tmdb_id": 42}))

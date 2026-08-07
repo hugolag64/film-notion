@@ -49,3 +49,9 @@ def test_library_and_movie_detail_use_clean_catalogue_experience():
     assert "category-rail" in source
     assert "Floating Sidebar" not in source
     assert "label: 'Lire'" in source
+
+
+def test_dashboard_api_client_handles_plain_text_server_errors():
+    source = (ROOT / "proto-ui/src/api.js").read_text(encoding="utf-8")
+    assert "const text = await response.text();" in source
+    assert "body?.detail || body?.message || 'Dashboard indisponible'" in source

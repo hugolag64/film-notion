@@ -520,7 +520,7 @@ async def dashboard_home(
     if service.radarr or service.sonarr:
         try:
             await service.import_existing_libraries()
-        except (httpx.HTTPError, RuntimeError, ValueError) as error:
+        except Exception as error:
             logger.warning("Import bibliothèque serveur indisponible: %s", error)
     medias, states, resume, completed, availabilities, rentals, notifications = await asyncio.gather(
         store.fetch_all(),
