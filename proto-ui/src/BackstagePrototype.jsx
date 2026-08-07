@@ -975,17 +975,14 @@ export default function BackstagePrototype() {
                                 }`}>
                                 BACKSTAGE
                             </span>
-                            <span className="text-[10px] font-mono uppercase tracking-widest text-[#635bff] block font-semibold -mt-1">
-                                FILM VAULT • {isDarkMode ? 'DARK CINEMA' : 'STRIPE LIGHT'}
-                            </span>
                         </div>
                     </div>
 
                     <nav className="flex min-w-0 flex-1 justify-center" aria-label="Navigation principale">
-                        <div className={`flex rounded-lg border p-1 text-xs font-semibold ${isDarkMode ? 'border-white/15 bg-white/5' : 'border-[#e3e8ee] bg-[#f6f9fc]'}`}>
+                        <div className={`flex items-center gap-6 text-sm font-semibold ${isDarkMode ? 'text-white/60' : 'text-[#425466]'}`}>
                             {[['dashboard', 'Accueil'], ['library', 'Films'], ['library', 'Séries']].map(([view, label]) => {
                                 const selected = view === 'dashboard' ? activeView === 'dashboard' : activeView === 'library' && collection === label;
-                                return <button key={label} type="button" onClick={() => view === 'dashboard' ? setActiveView('dashboard') : (setActiveView('library'), changeCollection(label))} className={`rounded-md px-3 py-1.5 transition-all ${selected ? 'bg-[#635bff] text-white shadow-sm' : isDarkMode ? 'text-white/60 hover:text-white' : 'text-[#425466] hover:text-[#0a2540]'}`}>
+                                return <button key={label} type="button" onClick={() => view === 'dashboard' ? setActiveView('dashboard') : (setActiveView('library'), changeCollection(label))} className={`border-b-2 px-1 pb-2 pt-2 transition-all ${selected ? 'border-b-2 border-[#635bff] text-[#635bff]' : 'border-transparent hover:border-[#635bff]/40 hover:text-[#635bff]'}`}>
                                     {label}
                                 </button>;
                             })}
@@ -1009,11 +1006,15 @@ export default function BackstagePrototype() {
                         </div>
 
                         <button onClick={() => setShowAddDialog(true)} className="bg-[#635bff] hover:bg-[#5048e5] text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all shadow-md cursor-pointer">
-                            {collection === 'Séries' ? '+ Ajouter une série' : '+ Ajouter un film'}
+                            {collection === 'Séries' ? 'Ajouter une série' : 'Ajouter un film'}
                         </button>
                         {user?.role === 'admin' && <button onClick={() => setShowAdminCenter(true)} className="rounded-lg border border-[#635bff]/40 px-3 py-2 text-xs font-semibold text-[#635bff]" title="Ouvrir l’administration">
                             Administration
                         </button>}
+                        <button onClick={() => setShowAccountPanel(true)} className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs font-semibold" title="Ouvrir le compte">
+                            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#635bff] text-[11px] font-bold text-white" aria-hidden="true">{(user?.display_name || 'Compte').charAt(0).toUpperCase()}</span>
+                            <span className="hidden lg:inline">{user?.display_name || 'Compte'}</span>
+                        </button>
                         <button
                             onClick={() => setIsDarkMode(!isDarkMode)}
                             className={`flex h-9 w-9 items-center justify-center rounded-lg border text-base transition-all ${isDarkMode
@@ -1024,10 +1025,6 @@ export default function BackstagePrototype() {
                             aria-label={isDarkMode ? 'Activer le mode clair' : 'Activer le mode sombre'}
                         >
                             <span aria-hidden="true">{isDarkMode ? '☀' : '☾'}</span>
-                        </button>
-                        <button onClick={() => setShowAccountPanel(true)} className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs font-semibold" title="Ouvrir le compte">
-                            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#635bff] text-[11px] font-bold text-white" aria-hidden="true">{(user?.display_name || 'Compte').charAt(0).toUpperCase()}</span>
-                            <span className="hidden lg:inline">{user?.display_name || 'Compte'}</span>
                         </button>
                     </div>
                 </div>

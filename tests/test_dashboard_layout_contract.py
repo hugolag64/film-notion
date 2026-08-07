@@ -10,6 +10,11 @@ def test_header_uses_compact_primary_navigation_and_right_aligned_utilities():
     assert "['library', 'Bibliothèque']" not in source
     assert 'title="Changer de thème"' in source
     assert 'aria-label="Navigation principale"' in source
+    assert 'border-b-2 border-[#635bff]' in source
+    assert 'FILM VAULT' not in source
+    assert '+ Ajouter un film' not in source
+    assert 'Ajouter un film' in source
+    assert source.index('title="Changer de thème"') > source.index('title="Ouvrir le compte"')
 
 
 def test_continue_watching_is_a_horizontal_compact_row():
