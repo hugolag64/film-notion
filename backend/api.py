@@ -26,6 +26,7 @@ from backend.core.arr import RadarrClient, SonarrClient, MediaServerError
 from backend.core.seerr import SeerrClient
 from backend.core.jellyfin import JellyfinClient
 from backend.core.media_server import MediaServerService
+from backend.core.dashboard import build_dashboard_payload
 from backend.core.backup import create_backup, get_backup_health, get_backup_status, verify_backup
 from backend.core.recommendations import (
     RecommendationCandidate, TasteProfile, build_local_question, build_taste_profile,
@@ -422,6 +423,36 @@ async def list_medias(
 ):
     medias = await store.fetch_all()
     return [await _media_for_user(media, current, store) for media in medias]
+
+
+@router.get("/dashboard")
+async def dashboard_home(
+    current: AuthContext = Depends(get_current_user),
+    store: MediaStore = Depends(get_store),
+):
+    user_id = current.user["id"]
+    medias, states, resume, completed, availabilities, rentals, notifications = await asyncio.gather(
+        store.fetch_all(),
+        store.list_user_media_states(user_id),
+        store.list_resume_progress(user_id),
+        store.list_recently_completed(user_id),
+        store.list_availabilities(),
+        store.list_user_rentals(user_id),
+        store.list_notifications(user_id),
+    )
+    try:
+        recommendations = [
+            _serialize_recommendation(item)
+            for item in await _recommendation_pool(current, store, {})
+            if item is not None and item.score >= 0
+        ]
+    except (httpx.HTTPError, RuntimeError, ValueError) as error:
+        logger.warning("Recommandations dashboard indisponibles: %s", error)
+        recommendations = []
+    return build_dashboard_payload(
+        medias, states, resume + completed, availabilities, rentals,
+        notifications, recommendations, datetime.now(timezone.utc),
+    )
 
 
 @router.get("/medias/{media_id}", response_model=Media)

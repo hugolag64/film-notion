@@ -340,6 +340,12 @@ export async function fetchPlaybackSummary() {
     return response.json();
 }
 
+export async function fetchDashboard() {
+    const response = await fetch(`${API_BASE_URL}/dashboard`, {credentials: 'same-origin'});
+    if (!response.ok) throw new Error((await response.json()).detail || 'Dashboard indisponible');
+    return response.json();
+}
+
 /**
  * Search TMDB for movies by query.
  */
