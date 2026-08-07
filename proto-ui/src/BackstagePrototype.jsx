@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useCallback, useState, useEffect, useRef } from 'react';
 import Hls from 'hls.js';
 import AccountPanel from './AccountPanel';
 import AdminCenter from './components/AdminCenter';
@@ -225,24 +225,10 @@ export default function BackstagePrototype() {
         setSelectedMovie(movie);
     };
 
-    const closeMovie = () => {
+    const closeMovie = useCallback(() => {
         setSelectedMovie(null);
         window.requestAnimationFrame(() => window.scrollTo(0, libraryScrollTop.current));
-    };
-
-    useEffect(() => {
-        if (!selectedMovie) return undefined;
-        const handleEscape = (event) => {
-            if (event.key === 'Escape') closeMovie();
-        };
-        const previousOverflow = document.body.style.overflow;
-        document.body.style.overflow = 'hidden';
-        window.addEventListener('keydown', handleEscape);
-        return () => {
-            document.body.style.overflow = previousOverflow;
-            window.removeEventListener('keydown', handleEscape);
-        };
-    }, [selectedMovie]);
+    }, []);
 
     useEffect(() => {
         if (!selectedMovieId) {
