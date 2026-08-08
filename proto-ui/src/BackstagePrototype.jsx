@@ -7,7 +7,7 @@ import FilmDetailView from './components/FilmDetailView';
 import DashboardHome from './components/DashboardHome';
 import TMDBMoviePreview from './components/TMDBMoviePreview';
 import { useAuth } from './auth-context';
-import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncPlayback, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest } from './api';
+import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncMediaServer, syncPlayback, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
 
@@ -381,13 +381,6 @@ export default function BackstagePrototype() {
     }, [actorQuery]);
 
     useEffect(() => {
-        fetchMediaServerActivity().then((activity) => {
-            const items = activity.items || [];
-            setAvailabilityByMedia(Object.fromEntries(items.map(item => [item.media_id, item])));
-        }).catch(() => {});
-    }, []);
-
-    useEffect(() => {
         if (!user?.id) return;
         loadRentals();
         loadDashboard();
@@ -418,7 +411,7 @@ export default function BackstagePrototype() {
             }
             setMediaServerOptions(options);
             setAcquisitionForm({
-                quality_profile_id: options.quality_profiles?.[0]?.id || '',
+                quality_profile_id: options.default_quality_profile_id || options.quality_profiles?.[0]?.id || '',
                 language_profile_id: options.language_profiles?.[0]?.id || '',
                 root_folder: options.root_folders?.[0]?.path || '', monitor: 'all',
             });
@@ -442,10 +435,7 @@ export default function BackstagePrototype() {
             if (result.rental) setRentalsByMedia((current) => ({...current, [selectedMedia.id]: result.rental}));
             setShowAcquisitionModal(false);
             showToast(`"${selectedMedia?.title}" a bien été ajouté au serveur !`, 'success');
-            fetchMediaServerActivity().then((activity) => {
-                const items = activity.items || [];
-                setAvailabilityByMedia(Object.fromEntries(items.map(item => [item.media_id, item])));
-            }).catch(() => {});
+            await refreshLibraryState({sync: user?.role === 'admin'});
         } catch (error) {
             const errorMsg = error.message || 'Erreur lors de l\'ajout au serveur.';
             setMediaServerError(errorMsg);
@@ -513,6 +503,44 @@ export default function BackstagePrototype() {
             setLoading(false);
         }
     };
+
+    const refreshAvailabilityByMedia = async () => {
+        if (user?.role !== 'admin') return;
+        try {
+            const activity = await fetchMediaServerActivity();
+            const items = activity.items || [];
+            setAvailabilityByMedia(Object.fromEntries(items.map(item => [item.media_id, item])));
+        } catch {
+            setAvailabilityByMedia({});
+        }
+    };
+
+    const refreshLibraryState = async ({sync = false} = {}) => {
+        if (sync && user?.role === 'admin') {
+            try {
+                await syncMediaServer();
+            } catch (error) {
+                console.error('Erreur de synchronisation du serveur:', error);
+            }
+        }
+        await loadRealMedias();
+        await refreshAvailabilityByMedia();
+    };
+
+    useEffect(() => {
+        if (!user?.id) return undefined;
+        const refresh = (sync = false) => refreshLibraryState({sync}).catch((error) => {
+            console.error('Erreur de rafraîchissement du catalogue:', error);
+        });
+        refresh(user.role === 'admin');
+        const interval = window.setInterval(() => refresh(false), 60000);
+        const handleFocus = () => refresh(false);
+        window.addEventListener('focus', handleFocus);
+        return () => {
+            window.clearInterval(interval);
+            window.removeEventListener('focus', handleFocus);
+        };
+    }, [user?.id, user?.role]);
 
     const openDashboardMedia = (media) => {
         if (!media) return;
@@ -594,10 +622,6 @@ export default function BackstagePrototype() {
         showToast(recommendation.explanation || 'Ce film correspond à ton profil de visionnage.');
     };
 
-
-    useEffect(() => {
-        loadRealMedias();
-    }, []);
 
     const collectionMedias = movies.filter((movie) => movie.type === (collection === 'Séries' ? 'Série' : 'Film'));
     const filteredMovies = filterAndSortMovies(collectionMedias, { ...filters, query: searchQuery }, sort)
@@ -1342,20 +1366,42 @@ export default function BackstagePrototype() {
 
 
             {selectedSeries && (
-                <div className="fixed inset-0 z-50 flex justify-end bg-black/80 backdrop-blur-md animate-fade-in-smooth" onClick={closeSeries}>
-                    <section className={`w-full max-w-xl h-full overflow-y-auto border-l shadow-2xl ${isDarkMode ? 'bg-[#0a0a0a] text-white border-white/10' : 'bg-[#f6f9fc] text-[#0a2540] border-[#e3e8ee]'}`} onClick={(event) => event.stopPropagation()}>
-                        <div className="relative h-52 overflow-hidden bg-slate-950">
-                            <img src={selectedSeries.backdrop || selectedSeries.poster} alt="" className="h-full w-full object-cover opacity-50 blur-sm scale-110" />
+                <FilmDetailView media={selectedSeries} isDarkMode={isDarkMode} onClose={closeSeries}>
+                    <div className={`flex h-[min(94vh,980px)] w-full max-w-5xl flex-col overflow-y-auto rounded-2xl border shadow-2xl animate-fade-in-smooth cursor-default ${isDarkMode
+                        ? 'bg-[#0a0a0a] text-white border-white/10'
+                        : 'bg-[#f6f9fc] text-[#0a2540] border-[#e3e8ee]'}`} onClick={(event) => event.stopPropagation()}>
+                        <div className="relative aspect-[16/9] overflow-hidden bg-slate-950">
+                            <img src={selectedSeries.backdrop || selectedSeries.poster} alt="" className="h-full w-full object-cover" />
                             <div className="absolute inset-0 bg-gradient-to-t from-black via-black/45 to-transparent" />
+                            <div className="absolute inset-0 bg-gradient-to-r from-black/60 via-transparent to-transparent" />
                             <button onClick={closeSeries} className="absolute right-4 top-4 rounded-full bg-black/60 px-3 py-2 text-xs text-white">✕</button>
-                            <div className="absolute bottom-5 left-6 right-6 text-white">
+                            <div className="absolute bottom-6 left-6 right-6 text-white md:left-8 md:right-8">
                                 <span className="rounded bg-[#635bff] px-2 py-1 text-[10px] font-mono font-bold">FICHE SÉRIE</span>
-                                <h2 className="mt-2 text-3xl font-serif font-bold">{selectedSeries.title}</h2>
-                                <p className="mt-1 text-xs text-white/70">{selectedSeries.director} • {selectedSeries.year}</p>
+                                <h2 className="mt-2 text-3xl font-serif font-bold md:text-5xl">{selectedSeries.title}</h2>
+                                <p className="mt-1 text-xs text-white/70">Créée par {selectedSeries.director || '—'} • {selectedSeries.year || '—'}</p>
                             </div>
                         </div>
 
                         <div className="p-5">
+                            <div className={`mb-5 rounded-xl border p-5 shadow-sm ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
+                                <h3 className="text-[10px] font-mono uppercase tracking-widest opacity-60">Statut & support de stockage</h3>
+                                <p className="mt-4 text-xs font-semibold">Statut de la série :</p>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                    {['À regarder', 'Terminée'].map((status) => <button key={status} onClick={() => handleStatusChange(selectedSeries.id, status)} className={`rounded-lg border px-3 py-2 text-xs ${selectedSeries.status === status ? 'border-[#635bff] bg-[#635bff]/10 text-[#635bff]' : 'opacity-70'}`}>{status}</button>)}
+                                    <button type="button" onClick={() => toggleWatchlist(selectedSeries.id)} className={`rounded-lg border px-3 py-2 text-xs ${selectedSeries.isWatchlist ? 'border-blue-500/40 bg-blue-500/10 text-blue-500' : 'opacity-70'}`}>📌 Watchlist</button>
+                                </div>
+                                <p className="mt-4 text-xs font-semibold">Support / Emplacement :</p>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                    {['🖥️ Serveur', '💿 Physique', '🌐 Streaming', '🍿 Salle Cinéma'].map((support) => <span key={support} className="rounded-lg border px-3 py-2 text-xs opacity-80">{support}</span>)}
+                                </div>
+                            </div>
+                            <div className={`mb-5 flex items-center justify-between gap-4 rounded-xl border p-4 shadow-sm ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
+                                <div>
+                                    <p className="text-sm font-semibold">{mediaAction.canPlay ? 'Cette série est disponible' : 'Cette série n’est pas encore disponible'}</p>
+                                    <p className="mt-1 text-xs opacity-60">{mediaAction.canPlay ? 'Lecture depuis le serveur' : 'Lancer une demande de téléchargement via Seerr'}</p>
+                                </div>
+                                <button onClick={mediaAction.disabled ? undefined : mediaAction.canPlay ? openPlayer : openAcquisition} disabled={mediaAction.disabled} className="rounded-lg bg-[#635bff] px-4 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60">{mediaAction.label}</button>
+                            </div>
                             <div className={`mb-5 flex rounded-xl border p-1 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
                                 {[['details', 'Détails'], ['episodes', 'Épisodes']].map(([tab, label]) => <button key={tab} onClick={() => setSeriesTab(tab)} className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold transition ${seriesTab === tab ? 'bg-[#635bff] text-white shadow-lg' : 'opacity-60 hover:opacity-100'}`}>{label}</button>)}
                             </div>
@@ -1432,8 +1478,8 @@ export default function BackstagePrototype() {
                             {!seriesEpisodes.length && <p className="py-8 text-center text-xs font-mono opacity-60">Aucun épisode disponible.</p>}
                             </div>}
                         </div>
-                    </section>
-                </div>
+                    </div>
+                </FilmDetailView>
             )}
 
 

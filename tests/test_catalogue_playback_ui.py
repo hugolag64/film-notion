@@ -110,3 +110,42 @@ def test_admin_user_management_is_interactive_and_complete():
     assert "Créer un utilisateur" in users
     assert "Supprimer" in users
     assert "Un administrateur ne peut pas supprimer son propre compte." in users
+
+
+def test_catalogue_refreshes_after_server_action():
+    source = UI_SOURCE.read_text(encoding="utf-8")
+
+    assert "syncMediaServer" in source
+    assert "await loadRealMedias()" in source
+
+
+def test_acquisition_defaults_are_used_and_non_admin_options_are_filtered():
+    source = UI_SOURCE.read_text(encoding="utf-8")
+
+    assert "default_quality_profile_id" in source
+    assert "user?.role === 'admin'" in source
+
+
+def test_availability_is_refreshed_periodically_with_cleanup():
+    source = UI_SOURCE.read_text(encoding="utf-8")
+
+    assert "setInterval" in source
+    assert "clearInterval" in source
+
+
+def test_series_detail_uses_the_centered_film_detail_shell():
+    source = UI_SOURCE.read_text(encoding="utf-8")
+    series = source[source.index("{selectedSeries && ("):source.index("{/* TMDB Search & Relink Modal */}")]
+
+    assert "<FilmDetailView" in series
+    assert "FICHE SÉRIE" in series
+    assert "Statut & support de stockage" in series
+
+
+def test_series_detail_keeps_details_and_episodes_tabs():
+    source = UI_SOURCE.read_text(encoding="utf-8")
+    series = source[source.index("{selectedSeries && ("):source.index("{/* TMDB Search & Relink Modal */}")]
+
+    assert "Détails" in series
+    assert "Épisodes" in series
+    assert "groupEpisodesBySeason" in source

@@ -5,6 +5,24 @@ import httpx
 from backend.core.jellyfin import JellyfinClient
 
 
+async def _run_library_request(payloads):
+    requests = []
+
+    async def handler(request):
+        requests.append(request)
+        page = len(requests) - 1
+        assert request.url.params.get("IncludeItemTypes") == "Movie,Series"
+        assert request.url.params.get("Recursive") == "true"
+        assert "ProviderIds" in request.url.params.get("Fields", "")
+        assert request.url.params.get("Limit") == "1000"
+        assert request.url.params.get("StartIndex") == str(page * 1000)
+        return httpx.Response(200, json=payloads[page])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = JellyfinClient("http://127.0.0.1:8096", "secret", http_client)
+        return await client.list_library()
+
+
 def test_playback_url_points_to_jellyfin_item():
     client = JellyfinClient("https://jellyfin.example.test", "secret", server_id="server-1")
     assert client.playback_url("abc") == "https://jellyfin.example.test/web/index.html#/details?id=abc&serverId=server-1"
@@ -166,3 +184,58 @@ def test_user_playback_reads_resumable_and_latest_items_for_the_selected_user():
         }]
 
     asyncio.run(run())
+
+
+def test_list_library_normalizes_movies_and_series():
+    items = asyncio.run(_run_library_request([{"Items": [
+        {
+            "Id": "movie-1", "Type": "Movie", "Name": "Dune", "ProductionYear": 2021,
+            "Overview": "Sable.", "ProviderIds": {"Tmdb": "438631"},
+            "ImageTags": {"Primary": "poster-1"}, "BackdropImageTags": {"Backdrop": "backdrop-1"},
+        },
+        {
+            "Id": "series-1", "Type": "Series", "Name": "Game of Thrones", "ProductionYear": 2011,
+            "Overview": "Westeros.", "ProviderIds": {"Tmdb": "1399"},
+            "ImageTags": {"Primary": "poster-2"}, "BackdropImageTags": {"Backdrop": "backdrop-2"},
+        },
+    ]}]))
+
+    assert items == [
+        {
+            "jellyfin_id": "movie-1", "tmdb_id": 438631, "title": "Dune",
+            "media_type": "Film", "year": 2021, "overview": "Sable.",
+            "poster_tag": "poster-1", "backdrop_tag": "backdrop-1",
+        },
+        {
+            "jellyfin_id": "series-1", "tmdb_id": 1399, "title": "Game of Thrones",
+            "media_type": "Série", "year": 2011, "overview": "Westeros.",
+            "poster_tag": "poster-2", "backdrop_tag": "backdrop-2",
+        },
+    ]
+
+
+def test_list_library_requests_next_page_when_page_is_full():
+    first_page = [{
+        "Id": f"movie-{index}", "Type": "Movie", "Name": f"Film {index}",
+        "ProviderIds": {"Tmdb": str(index + 1)},
+    } for index in range(1000)]
+    second_page = [{
+        "Id": "series-1000", "Type": "Series", "Name": "Série suivante",
+        "ProviderIds": {"Tmdb": "2000"},
+    }]
+
+    items = asyncio.run(_run_library_request([
+        {"Items": first_page}, {"Items": second_page},
+    ]))
+
+    assert len(items) == 1001
+    assert items[-1]["media_type"] == "Série"
+    assert items[-1]["tmdb_id"] == 2000
+
+
+def test_list_library_skips_items_without_tmdb_id():
+    items = asyncio.run(_run_library_request([{"Items": [
+        {"Id": "unknown", "Type": "Movie", "Name": "Sans TMDB", "ProviderIds": {}},
+    ]}]))
+
+    assert items == []

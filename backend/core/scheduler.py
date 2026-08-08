@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 _media_task: asyncio.Task | None = None
 
 
+def should_sync_media_servers() -> bool:
+    return Config.media_server_enabled() or Config.jellyfin_enabled()
+
+
 async def _media_loop():
     while True:
         await asyncio.sleep(Config.MEDIA_SYNC_INTERVAL_SEC)
@@ -30,7 +34,7 @@ async def _media_loop():
                     server_id=Config.JELLYFIN_SERVER_ID,
                 ) if Config.jellyfin_enabled() else None,
             )
-            if Config.media_server_enabled():
+            if should_sync_media_servers():
                 await service.sync_all()
             if Config.media_server_enabled() or Config.jellyfin_enabled():
                 await notify_automatic_events(service, service.store, AuthStore(Config.DB_PATH))
