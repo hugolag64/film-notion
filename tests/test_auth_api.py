@@ -412,7 +412,7 @@ def test_non_admin_acquisition_rejects_a_non_default_quality_profile(tmp_path, m
     })
 
     assert response.status_code == 422
-    assert "1080 FR - max 10go" in response.json()["detail"]
+    assert "1080p FR - max 10 Go" in response.json()["detail"]
     assert service.add_calls == []
 
 

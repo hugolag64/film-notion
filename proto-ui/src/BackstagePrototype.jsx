@@ -1709,7 +1709,7 @@ export default function BackstagePrototype() {
 
                             <div className={`flex items-center justify-between gap-4 rounded-xl border p-4 shadow-sm ${isDarkMode ? 'border-white/10 bg-[#0a0a0a]' : 'border-[#e3e8ee] bg-white'}`}>
                                 <div className="flex min-w-0 items-center gap-3">
-                                    <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${mediaAction.canPlay ? 'bg-emerald-500 text-white' : 'bg-[#635bff] text-white'}`} aria-hidden="true">{mediaAction.canPlay ? '▶' : '＋'}</div>
+                                    <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${mediaAction.canPlay ? 'bg-emerald-500 text-white' : 'bg-[#635bff] text-white'}`} aria-hidden="true">{mediaAction.canPlay ? '✓' : '+'}</div>
                                     <div className="min-w-0"><p className="text-sm font-semibold">{mediaAction.canPlay ? 'Disponible dans votre bibliothèque' : mediaAction.disabled ? mediaAction.label : 'Ce film n’est pas encore disponible'}</p><p className="mt-0.5 truncate text-[11px] opacity-55">{mediaAction.canPlay ? 'Lecture immédiate depuis votre serveur média' : 'Lancer une demande de téléchargement via Seerr'}</p></div>
                                 </div>
                                 <div className="flex shrink-0 items-center gap-2">

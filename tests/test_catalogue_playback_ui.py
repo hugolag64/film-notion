@@ -130,6 +130,13 @@ def test_catalogue_refreshes_after_server_action():
     assert "await loadRealMedias()" in source
 
 
+def test_available_media_uses_a_status_check_instead_of_a_second_play_icon():
+    source = UI_SOURCE.read_text(encoding="utf-8")
+
+    assert "mediaAction.canPlay ? '✓' : '+'" in source
+    assert "mediaAction.canPlay && <span" in source
+
+
 def test_acquisition_defaults_are_used_and_non_admin_options_are_filtered():
     source = UI_SOURCE.read_text(encoding="utf-8")
 

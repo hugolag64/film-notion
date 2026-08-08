@@ -12,6 +12,7 @@ from backend.core.tmdb import TMDBClient
 
 
 logger = logging.getLogger(__name__)
+STALE_REQUEST_GRACE = timedelta(hours=1)
 
 
 AvailabilityState = Literal[
@@ -166,6 +167,22 @@ class MediaServerService:
                 current = await self.store.get_availability(media_id)
                 if current and jellyfin_error:
                     return await self.store.upsert_availability(current.model_copy(update={"last_error": jellyfin_error}))
+                if (
+                    current
+                    and arr is not None
+                    and not remote
+                    and current.state in {"requested", "searching", "downloading", "imported", "available"}
+                    and current.last_synced_at
+                    and datetime.now(timezone.utc) - current.last_synced_at >= STALE_REQUEST_GRACE
+                ):
+                    return await self.store.upsert_availability(current.model_copy(update={
+                        "arr_id": None,
+                        "jellyfin_id": None,
+                        "state": "error",
+                        "progress_percent": None,
+                        "last_error": "Demande absente de Radarr et Jellyfin",
+                        "last_synced_at": datetime.now(timezone.utc),
+                    }))
                 return current
             queue_id_key = "seriesId" if provider == "sonarr" else "movieId"
             queue_item = next(

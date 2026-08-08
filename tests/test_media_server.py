@@ -38,7 +38,7 @@ class OptionsRadarr(FakeRadarr):
         return {
             "quality_profiles": [
                 {"id": 4, "name": "720p"},
-                {"id": 9, "name": "1080 FR - max 10go"},
+                {"id": 9, "name": "1080p FR - max 10 Go"},
             ],
             "root_folders": [{"path": "D:/Films"}, {"path": "E:/Films"}],
         }
@@ -188,7 +188,7 @@ def test_admin_defaults_resolve_quality_profile_by_name_and_first_root(tmp_path,
     store = MediaStore(str(tmp_path / "test.db"))
     store.init_schema()
     media = asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
-    monkeypatch.setattr(Config, "RADARR_DEFAULT_QUALITY_PROFILE_NAME", "1080 FR - max 10go")
+    monkeypatch.setattr(Config, "RADARR_DEFAULT_QUALITY_PROFILE_NAME", "1080p FR - max 10 Go")
     monkeypatch.setattr(Config, "RADARR_DEFAULT_ROOT_FOLDER", None)
     service = MediaServerService(store, radarr=OptionsRadarr())
 
@@ -391,6 +391,54 @@ def test_sync_media_keeps_existing_state_when_jellyfin_is_unavailable(tmp_path):
     assert result.state == "downloading"
     assert result.progress_percent == 42
     assert result.last_error == "Synchronisation indisponible"
+
+
+def test_sync_media_marks_stale_request_missing_from_arr_and_jellyfin_as_error(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    media = asyncio.run(store.create({
+        "id": "whiplash", "title": "Whiplash", "type": "Film", "tmdb_id": 244786,
+    }))
+    asyncio.run(store.upsert_availability(Availability(
+        media_id=media.id,
+        provider="radarr",
+        state="requested",
+        last_synced_at=datetime.now(timezone.utc) - timedelta(hours=2),
+    )))
+    service = MediaServerService(
+        store,
+        radarr=FakeRadarrWithoutJellyfinMatch(),
+        jellyfin=FakeJellyfinLibrary(),
+    )
+
+    result = asyncio.run(service.sync_media(media.id))
+
+    assert result.state == "error"
+    assert result.last_error == "Demande absente de Radarr et Jellyfin"
+
+
+def test_sync_media_keeps_recent_request_when_arr_has_not_seen_it_yet(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    media = asyncio.run(store.create({
+        "id": "interstellar", "title": "Interstellar", "type": "Film", "tmdb_id": 157336,
+    }))
+    asyncio.run(store.upsert_availability(Availability(
+        media_id=media.id,
+        provider="radarr",
+        state="requested",
+        last_synced_at=datetime.now(timezone.utc),
+    )))
+    service = MediaServerService(
+        store,
+        radarr=FakeRadarrWithoutJellyfinMatch(),
+        jellyfin=FakeJellyfinLibrary(),
+    )
+
+    result = asyncio.run(service.sync_media(media.id))
+
+    assert result.state == "requested"
+    assert result.last_error is None
 
 
 def test_sync_all_imports_remote_library_items_before_syncing(tmp_path):

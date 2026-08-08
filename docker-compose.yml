@@ -10,6 +10,7 @@ services:
       TMDB_API_KEY: "${TMDB_API_KEY:-}"
       RADARR_URL: "${RADARR_URL:-http://host.docker.internal:7878}"
       RADARR_API_KEY: "${RADARR_API_KEY:-}"
+      RADARR_DEFAULT_QUALITY_PROFILE_NAME: "${RADARR_DEFAULT_QUALITY_PROFILE_NAME:-1080p FR - max 10 Go}"
       SONARR_URL: "${SONARR_URL:-http://host.docker.internal:8989}"
       SONARR_API_KEY: "${SONARR_API_KEY:-}"
       SEERR_URL: "${SEERR_URL:-http://host.docker.internal:5055}"
