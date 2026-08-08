@@ -3,8 +3,8 @@ from random import Random
 
 from backend.core.models import Media, RecommendationEvent, UserMediaState
 from backend.core.recommendations import (
-    RecommendationCandidate, TasteProfile, build_local_question, build_taste_profile,
-    choose_from_top, score_candidate,
+    RecommendationCandidate, TasteProfile, _rating_value, build_local_question,
+    build_taste_profile, choose_from_top, score_candidate,
 )
 
 
@@ -26,6 +26,70 @@ def test_profile_prefers_genres_with_high_personal_ratings():
     )
 
     assert profile.genre_affinity["Science-Fiction"] > profile.genre_affinity["Drame"]
+
+
+def test_rating_value_parses_the_legacy_ten_point_star_scale():
+    # Notion V1 import left ratings as up to 10 star emoji; the engine must
+    # read them on their native /10 scale, remapped to Backstage's /5.
+    assert _rating_value("⭐️⭐️⭐️⭐️⭐️⭐️⭐️⭐️") == 4.0
+    assert _rating_value("⭐️") == 0.5
+    assert _rating_value("⭐️⭐️⭐️⭐️⭐️⭐️⭐️⭐️⭐️⭐️") == 5.0
+
+
+def test_rating_value_still_parses_the_current_five_point_scale():
+    assert _rating_value("3.5") == 3.5
+    assert _rating_value("5") == 5.0
+
+
+def test_rating_value_returns_none_for_blank_or_unparseable_text():
+    assert _rating_value("") is None
+    assert _rating_value("   ") is None
+    assert _rating_value("n/a") is None
+    assert _rating_value(None) is None
+
+
+def test_a_revoir_status_is_a_strong_positive_signal_even_without_a_rating():
+    # "A revoir" (want to watch again) is the strongest positive verdict a user
+    # can leave without a numeric rating; it must outweigh a plain "Terminé".
+    profile = build_taste_profile(
+        [media("a", "A", ["Horreur"]), media("b", "B", ["Comédie"])],
+        [state("a", status="A revoir"), state("b", status="Terminé")],
+        [], [], datetime.now(timezone.utc),
+    )
+
+    assert profile.genre_affinity["Horreur"] > profile.genre_affinity["Comédie"]
+
+
+def test_a_regarder_status_contributes_no_signal_at_all():
+    # "À regarder" only means "not watched yet" — it is not a verdict, and must
+    # not silently drag the genre's average toward zero.
+    profile = build_taste_profile(
+        [media("a", "A", ["Horreur"])],
+        [state("a", status="À regarder")],
+        [], [], datetime.now(timezone.utc),
+    )
+
+    assert "Horreur" not in profile.genre_affinity
+    assert profile.confidence == 0
+
+
+def test_ratings_are_centered_on_the_users_own_average_not_zero():
+    # The same absolute rating (4/5) for the same genre must read very
+    # differently depending on the user's own baseline: near-neutral for a
+    # generous rater, strongly positive for a harsh one. The personal
+    # baseline matters more than the absolute number.
+    generous_rater = build_taste_profile(
+        [media("a", "A", ["Drame"]), media("b", "B", ["Comédie"]), media("c", "C", ["Action"])],
+        [state("a", "4"), state("b", "4.5"), state("c", "4")],
+        [], [], datetime.now(timezone.utc),
+    )
+    harsh_rater = build_taste_profile(
+        [media("a", "A", ["Drame"]), media("b", "B", ["Comédie"]), media("c", "C", ["Action"])],
+        [state("a", "4"), state("b", "2"), state("c", "2")],
+        [], [], datetime.now(timezone.utc),
+    )
+
+    assert generous_rater.genre_affinity["Drame"] < harsh_rater.genre_affinity["Drame"]
 
 
 def test_less_like_event_reduces_genre_affinity():

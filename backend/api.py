@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta, timezone
 import asyncio
 import logging
+import random
 import sqlite3
 import uuid
 from random import Random
@@ -29,8 +30,8 @@ from backend.core.media_server import MediaServerService
 from backend.core.dashboard import build_dashboard_payload
 from backend.core.backup import create_backup, get_backup_health, get_backup_status, verify_backup
 from backend.core.recommendations import (
-    RecommendationCandidate, TasteProfile, build_local_question,
-    build_taste_profile, choose_from_top, score_candidate,
+    GENRE_IDS, RecommendationCandidate, TasteProfile, apply_session_genre_delta, build_local_question,
+    build_taste_profile, choose_from_top, record_compare_choice, score_candidate,
     score_recommendation_candidate,
 )
 from backend.core.gemini_recommendations import GeminiRecommendationGateway, SUPPORTED_QUESTION_AXES
@@ -232,6 +233,14 @@ def _planned_question(
         question["max_questions"] = max_questions
         session.session_preferences["question_index"] = index
         session.session_preferences["current_question_axis"] = plan[index]
+        if question.get("axis") == "movie_compare" and question.get("type") == "compare":
+            # Remembered so the answer handler can tell which genres were
+            # picked vs. rejected once the choice comes back — see
+            # _resolve_compare_choice and record_compare_choice.
+            session.session_preferences["compare_pair"] = [
+                {"tmdb_id": option.get("tmdb_id"), "genre_ids": option.get("genre_ids") or []}
+                for option in question.get("options", [])
+            ]
         return question
     return None
 
@@ -359,6 +368,7 @@ async def _hydrate_seerr_requests(requests: list[dict[str, Any]]) -> list[dict[s
         return {**request, "media": enriched_media}
 
     return list(await asyncio.gather(*(hydrate(request) for request in requests)))
+
 
 async def _prune_available_seerr_requests(seerr: SeerrClient, requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Remove completed requests from Seerr and return only active queue items."""
@@ -518,11 +528,6 @@ async def dashboard_home(
 ):
     user_id = current.user["id"]
     service = get_media_server_service(store)
-    if service.radarr or service.sonarr:
-        try:
-            await service.import_existing_libraries()
-        except Exception as error:
-            logger.warning("Import bibliothèque serveur indisponible: %s", error)
     medias, states, resume, completed, availabilities, rentals, notifications = await asyncio.gather(
         store.fetch_all(),
         store.list_user_media_states(user_id),
@@ -689,6 +694,97 @@ async def update_personal_media(
     return await _media_for_user(media, current, store)
 
 
+_POOL_SORT_OPTIONS = ("popularity.desc", "vote_average.desc", "vote_count.desc")
+_RECENT_ERA_YEARS = 6
+_CLASSIC_ERA_CUTOFF_YEAR = 2005
+_TOP_PROFILE_GENRES = 3
+_TMDB_IMAGE_PREFIXES = ("https://image.tmdb.org/t/p/w500", "https://image.tmdb.org/t/p/w1280")
+# A watchlisted title has no locally stored TMDB score; a mildly-above-neutral
+# default keeps it from being silently buried behind unrated TMDB popularity
+# results purely for lacking a vote_average.
+_WATCHLIST_CANDIDATE_VOTE_AVERAGE = 6.5
+
+
+def _pool_seed(session_preferences: dict[str, Any]) -> dict[str, Any]:
+    """Pick the TMDB discover page/sort once per session and persist it in
+    session_preferences, instead of always fetching page 1 sorted by
+    popularity — which returned the same ~20 films to every session."""
+    seed = session_preferences.get("pool_seed")
+    if isinstance(seed, dict) and "page" in seed and "sort_by" in seed:
+        return seed
+    seed = {"page": random.randint(1, 5), "sort_by": random.choice(_POOL_SORT_OPTIONS)}
+    session_preferences["pool_seed"] = seed
+    return seed
+
+
+def _steer_pool_params(
+    session_preferences: dict[str, Any], profile: TasteProfile, now: datetime,
+) -> dict[str, Any]:
+    """Turn the session's answers (and, failing that, the durable taste
+    profile) into TMDB discover filters — so answering "Comédie" actually
+    searches for comedies instead of only re-ranking whatever page 1 held."""
+    params: dict[str, Any] = {}
+    answered_genre = session_preferences.get("genre")
+    if answered_genre and answered_genre in GENRE_IDS:
+        params["with_genres"] = [GENRE_IDS[answered_genre]]
+    else:
+        liked_genres = sorted(
+            (item for item in profile.genre_affinity.items() if item[1] > 0 and item[0] in GENRE_IDS),
+            key=lambda item: -item[1],
+        )[:_TOP_PROFILE_GENRES]
+        if liked_genres:
+            params["with_genres"] = [GENRE_IDS[name] for name, _ in liked_genres]
+    era = session_preferences.get("era")
+    if era == "recent":
+        params["release_date_gte"] = f"{now.year - _RECENT_ERA_YEARS}-01-01"
+    elif era == "classic":
+        params["release_date_lte"] = f"{_CLASSIC_ERA_CUTOFF_YEAR}-12-31"
+    return params
+
+
+def _tmdb_path_from_stored_url(url: str | None) -> str | None:
+    """Backstage stores full TMDB image URLs on Media; recommendation
+    candidates carry raw TMDB paths. Strip the known size prefix back off so a
+    locally-sourced candidate's poster renders the same way a TMDB one does."""
+    if not url:
+        return None
+    for prefix in _TMDB_IMAGE_PREFIXES:
+        if url.startswith(prefix):
+            return url[len(prefix):]
+    return None
+
+
+def _watchlist_candidate(media: Media) -> dict[str, Any]:
+    """Shape a locally catalogued watchlist item like a TMDB discover result
+    so it can be scored and shown as a candidate in its own right, instead of
+    only ever acting as a scoring bonus for titles TMDB happened to surface."""
+    return {
+        "tmdb_id": media.tmdb_id,
+        "title": media.title,
+        "overview": media.synopsis or "",
+        "genre_ids": [GENRE_IDS[name] for name in media.categories if name in GENRE_IDS],
+        "release_date": media.release_date.isoformat() if media.release_date else None,
+        "vote_average": _WATCHLIST_CANDIDATE_VOTE_AVERAGE,
+        "poster_path": _tmdb_path_from_stored_url(media.cover_url),
+        "backdrop_path": _tmdb_path_from_stored_url(media.backdrop_url),
+    }
+
+
+def _resolve_compare_choice(
+    compare_pair: list[dict[str, Any]] | None, picked_tmdb_id: int,
+) -> tuple[list[int], list[int]] | None:
+    """Given the two options shown for a movie_compare question and which one
+    was picked, return (picked_genre_ids, rejected_genre_ids) — or None when
+    the stored pair is missing, stale, or doesn't include the picked id."""
+    if not compare_pair or len(compare_pair) != 2:
+        return None
+    picked = next((option for option in compare_pair if option.get("tmdb_id") == picked_tmdb_id), None)
+    rejected = next((option for option in compare_pair if option.get("tmdb_id") != picked_tmdb_id), None)
+    if picked is None or rejected is None:
+        return None
+    return picked.get("genre_ids") or [], rejected.get("genre_ids") or []
+
+
 async def _recommendation_pool(
     current: AuthContext,
     store: MediaStore,
@@ -701,9 +797,16 @@ async def _recommendation_pool(
     playback = await store.list_resume_progress(user_id) + await store.list_recently_completed(user_id)
     now = datetime.now(timezone.utc)
     profile = build_taste_profile(medias, states, playback, events, now)
+    # A movie_compare pick nudges genres for the rest of THIS session only —
+    # the durable, cross-session profile above is never mutated.
+    profile = apply_session_genre_delta(profile, session_preferences, now)
+    seed = _pool_seed(session_preferences)
+    steer = _steer_pool_params(session_preferences, profile, now)
     try:
         tmdb = TMDBClient()
-        candidates = await tmdb.discover_movies(page=1, min_vote_count=25)
+        candidates = await tmdb.discover_movies(
+            page=seed["page"], sort_by=seed["sort_by"], min_vote_count=25, **steer,
+        )
     except (ValueError, httpx.HTTPError):
         return []
     state_by_media = {state.media_id: state for state in states}
@@ -764,6 +867,16 @@ async def _recommendation_pool(
             state_by_media[media.id].is_watchlist or state_by_media[media.id].is_favorite
         )
     }
+    # A watchlisted title only TMDB discover doesn't happen to surface would
+    # otherwise never be a candidate at all — bonus scoring alone can't fix
+    # that if the title never enters the pool in the first place.
+    already_fetched_ids = {candidate["tmdb_id"] for candidate in candidates}
+    candidates = candidates + [
+        _watchlist_candidate(media)
+        for media in medias
+        if media.tmdb_id and media.tmdb_id in watchlisted_tmdb_ids and media.tmdb_id not in already_fetched_ids
+    ]
+
     def score_pool(excluded_ids: set[int]) -> list[RecommendationCandidate]:
         return [
             score_recommendation_candidate(
@@ -942,6 +1055,19 @@ async def answer_recommendation(
         preferences["mood"] = payload.answer
     if payload.answer.startswith("genre:"):
         preferences["genre"] = payload.answer.removeprefix("genre:")
+    if payload.answer.startswith("era:"):
+        era_choice = payload.answer.removeprefix("era:")
+        if era_choice in {"recent", "classic"}:
+            preferences["era"] = era_choice
+    if current_axis == "movie_compare" and payload.answer == "picked" and payload.value:
+        try:
+            picked_tmdb_id = int(payload.value)
+        except ValueError:
+            picked_tmdb_id = None
+        if picked_tmdb_id is not None:
+            choice = _resolve_compare_choice(preferences.get("compare_pair"), picked_tmdb_id)
+            if choice:
+                record_compare_choice(preferences, *choice)
     if payload.value:
         preferred = list(preferences.get("preferred_tmdb_ids", []))
         try:

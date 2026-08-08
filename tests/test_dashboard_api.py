@@ -51,7 +51,7 @@ def test_dashboard_route_survives_optional_recommendation_network_failure(tmp_pa
     assert "availability" in payload
 
 
-def test_dashboard_route_survives_media_library_import_failure(tmp_path, monkeypatch):
+def test_dashboard_route_does_not_import_media_library_on_every_load(tmp_path, monkeypatch):
     store = make_store(tmp_path)
 
     class FailingMediaService:
@@ -60,7 +60,7 @@ def test_dashboard_route_survives_media_library_import_failure(tmp_path, monkeyp
         seerr = None
 
         async def import_existing_libraries(self):
-            raise Exception("Radarr returned an unexpected response")
+            raise AssertionError("The dashboard must not import the media library")
 
     monkeypatch.setattr(api, "get_media_server_service", lambda _store: FailingMediaService())
 

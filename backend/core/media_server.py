@@ -150,7 +150,9 @@ class MediaServerService:
         await self.store.update(media.id, {"support": "Serveur"})
         return saved
 
-    async def sync_media(self, media_id: str, *, jellyfin_items=None) -> Optional[Availability]:
+    async def sync_media(
+        self, media_id: str, *, jellyfin_items=None, arr_items=None, queue_items=None,
+    ) -> Optional[Availability]:
         media = await self.store.fetch_one(media_id)
         if not media or not media.tmdb_id:
             return None
@@ -160,7 +162,9 @@ class MediaServerService:
             jellyfin_item, jellyfin_error = await self._find_jellyfin_match(media, jellyfin_items)
             remote = None
             if arr is not None:
-                remote = next((item for item in await arr.list_library() if item.get("tmdbId") == media.tmdb_id), None)
+                if arr_items is None:
+                    arr_items = await arr.list_library()
+                remote = next((item for item in arr_items if item.get("tmdbId") == media.tmdb_id), None)
             if jellyfin_item:
                 return await self._save_jellyfin_availability(media, provider, jellyfin_item, remote)
             if arr is None or not remote:
@@ -185,10 +189,9 @@ class MediaServerService:
                     }))
                 return current
             queue_id_key = "seriesId" if provider == "sonarr" else "movieId"
-            queue_item = next(
-                (item for item in await arr.list_queue() if item.get(queue_id_key) == remote.get("id")),
-                None,
-            )
+            if queue_items is None:
+                queue_items = await arr.list_queue()
+            queue_item = next((item for item in queue_items if item.get(queue_id_key) == remote.get("id")), None)
             progress_percent = None
             last_error = None
             if queue_item and queue_item.get("errorMessage"):
@@ -332,10 +335,23 @@ class MediaServerService:
             except Exception as error:
                 logger.warning("[jellyfin-sync] Library snapshot failed: %s", error)
                 jellyfin_items = None
+        arr_items_by_provider: dict[str, list[dict[str, Any]]] = {}
+        queue_items_by_provider: dict[str, list[dict[str, Any]]] = {}
+        for provider, client in (("radarr", self.radarr), ("sonarr", self.sonarr)):
+            if client is None:
+                continue
+            arr_items_by_provider[provider] = await client.list_library()
+            queue_items_by_provider[provider] = await client.list_queue()
         synced = 0
         for media in await self.store.fetch_all():
             if media.tmdb_id and media.type in {"Film", "Série"}:
-                if await self.sync_media(media.id, jellyfin_items=jellyfin_items):
+                provider = "sonarr" if media.type != "Film" else "radarr"
+                if await self.sync_media(
+                    media.id,
+                    jellyfin_items=jellyfin_items,
+                    arr_items=arr_items_by_provider.get("sonarr" if media.type != "Film" else "radarr"),
+                    queue_items=queue_items_by_provider.get("sonarr" if media.type != "Film" else "radarr"),
+                ):
                     synced += 1
         return {"synced": synced}
 

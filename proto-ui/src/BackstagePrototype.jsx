@@ -517,15 +517,18 @@ export default function BackstagePrototype() {
     };
 
     const refreshLibraryState = async ({sync = false} = {}) => {
-        if (sync && user?.role === 'admin') {
-            try {
-                await syncMediaServer();
-            } catch (error) {
-                console.error('Erreur de synchronisation du serveur:', error);
-            }
-        }
         await loadRealMedias();
         await refreshAvailabilityByMedia();
+        if (sync && user?.role === 'admin') {
+            syncMediaServer()
+                .then(async () => {
+                    await loadRealMedias();
+                    await refreshAvailabilityByMedia();
+                })
+                .catch((error) => {
+                    console.error('Erreur de synchronisation du serveur:', error);
+                });
+        }
     };
 
     useEffect(() => {

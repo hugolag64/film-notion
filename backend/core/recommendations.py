@@ -19,6 +19,10 @@ TMDB_GENRE_NAMES = {
     10749: "Romance", 10751: "Familial", 10752: "Guerre",
 }
 
+# Reverse lookup, used to turn a genre name (a session answer, or a name in the
+# taste profile) back into the TMDB genre id a /discover query needs.
+GENRE_IDS = {name: genre_id for genre_id, name in TMDB_GENRE_NAMES.items()}
+
 SCORE_WEIGHTS = {
     "taste": 0.65,
     "session": 0.15,
@@ -26,6 +30,14 @@ SCORE_WEIGHTS = {
     "list_bonus": 0.05,
     "novelty": 0.07,
 }
+
+# A dedicated weight for score_recommendation_candidate only — kept separate
+# from SCORE_WEIGHTS["list_bonus"] (used by the legacy score_candidate) so
+# this change doesn't perturb that function's own, already-documented
+# calibration. An explicit watchlist/favorite marking is the strongest
+# intent signal a user can give — meaningfully stronger than the durable
+# taste-profile bonus deserves.
+_INTENT_WEIGHT = 0.18
 
 
 class TasteProfile(BaseModel):
@@ -50,11 +62,24 @@ class RecommendationCandidate(BaseModel):
     vote_average: float = 0
 
 
+_STAR = "⭐"
+_DONE_STATUSES = {"Terminé", "Terminée"}
+_DEFAULT_NEUTRAL_RATING = 2.5  # midpoint of the 0-5 scale, used until the user has rated anything
+
+
 def _rating_value(rating: str | None) -> float | None:
+    """Parse a rating on the current /5 numeric scale, or the legacy /10
+    star-emoji scale inherited from the Notion V1 import (e.g. "⭐️⭐️⭐️⭐️⭐️⭐️⭐️⭐️")."""
     if rating is None:
         return None
+    text = str(rating).strip()
+    if not text:
+        return None
+    stars = text.count(_STAR)
+    if stars:
+        return min(10, stars) / 2.0
     try:
-        return max(0, min(5, float(rating)))
+        return max(0.0, min(5.0, float(text)))
     except (TypeError, ValueError):
         return None
 
@@ -62,6 +87,23 @@ def _rating_value(rating: str | None) -> float | None:
 def _add_signal(values: dict[str, list[float]], key: str, value: float) -> None:
     if key:
         values.setdefault(key, []).append(value)
+
+
+def _verdict_signal(state: UserMediaState, mean_rating: float) -> float | None:
+    """A verdict expresses what the user thought of a title, not merely that
+    they intend to watch it. "À regarder" carries no verdict and must return
+    None rather than a neutral 0 — a 0 would silently pull the genre's average
+    toward "disliked" for every unrated, unwatched title in the catalogue."""
+    rating = _rating_value(state.rating)
+    if rating is not None:
+        # Centered on the user's own average rating, not on an absolute 0,
+        # so a 4/5 film reads as neutral for someone who rates everything 4+.
+        return max(-1.0, min(1.0, (rating - mean_rating) / 2.5))
+    if state.status == "A revoir":
+        return 0.5  # the strongest signal available without a numeric rating
+    if state.status in _DONE_STATUSES:
+        return 0.1  # watched, but no opinion recorded
+    return None
 
 
 def build_taste_profile(
@@ -79,14 +121,20 @@ def build_taste_profile(
     signals = 0
     runtimes: list[int] = []
 
+    ratings = [
+        value for state in state_by_media.values()
+        if (value := _rating_value(state.rating)) is not None
+    ]
+    mean_rating = sum(ratings) / len(ratings) if ratings else _DEFAULT_NEUTRAL_RATING
+
     for media_id, state in state_by_media.items():
         item = media_by_id.get(media_id)
         if not item:
             continue
-        rating = _rating_value(state.rating)
-        signal = rating / 5 if rating is not None else (0.65 if state.status in {"Terminé", "Terminée"} else 0)
-        if state.status in {"Terminé", "Terminée"} or rating is not None:
-            signals += 1
+        signal = _verdict_signal(state, mean_rating)
+        if signal is None:
+            continue
+        signals += 1
         for genre in item.categories:
             _add_signal(genre_values, genre, signal)
         _add_signal(director_values, item.director or "", signal)
@@ -159,10 +207,78 @@ def apply_recommendation_signal(
     return updated
 
 
+_COMPARE_PICK_WEIGHT = 0.30
+_COMPARE_REJECT_WEIGHT = -0.20
+
+
+def record_compare_choice(
+    session_preferences: dict[str, Any], picked_genre_ids: list[int], rejected_genre_ids: list[int],
+) -> None:
+    """Accumulate the genre delta from an A-vs-B movie_compare pick into
+    session_preferences (mutated in place, JSON-serializable), so a later
+    scoring pass in THIS session can prefer/avoid those genres. Genres shared
+    by both films say nothing about that genre specifically and are left out
+    of the penalty side. The durable, cross-session taste profile is never
+    touched here — see apply_session_genre_delta."""
+    delta: dict[str, float] = session_preferences.setdefault("genre_delta", {})
+    all_picked_names = {TMDB_GENRE_NAMES.get(genre_id, str(genre_id)) for genre_id in picked_genre_ids}
+    all_rejected_names = {TMDB_GENRE_NAMES.get(genre_id, str(genre_id)) for genre_id in rejected_genre_ids}
+    picked_only_names = all_picked_names - all_rejected_names
+    rejected_only_names = all_rejected_names - all_picked_names
+    for name in picked_only_names:
+        delta[name] = round(max(-1.0, min(1.0, delta.get(name, 0.0) + _COMPARE_PICK_WEIGHT)), 4)
+    for name in rejected_only_names:
+        delta[name] = round(max(-1.0, min(1.0, delta.get(name, 0.0) + _COMPARE_REJECT_WEIGHT)), 4)
+
+
+def apply_session_genre_delta(
+    profile: TasteProfile, session_preferences: dict[str, Any], now: datetime,
+) -> TasteProfile:
+    """Blend accumulated in-session compare choices (see record_compare_choice)
+    into a COPY of the durable profile, for scoring only. The persisted,
+    cross-session profile built from user_media_state is never mutated."""
+    delta = session_preferences.get("genre_delta") or {}
+    adjusted = profile
+    for name, weight in delta.items():
+        adjusted = apply_recommendation_signal(adjusted, "compare_choice", name, weight, now)
+    return adjusted
+
+
 def _candidate_field(candidate: dict[str, Any] | RecommendationCandidate, field: str, default: Any = None) -> Any:
     if isinstance(candidate, RecommendationCandidate):
         return getattr(candidate, field, default)
     return candidate.get(field, default)
+
+
+def _known_genre_affinities(genres: list[str], profile: TasteProfile) -> list[float]:
+    """Only genres the profile actually has an opinion on — a genre absent
+    from genre_affinity is unknown, not neutral-zero, and must not dilute the
+    average with genres the candidate happens to also carry."""
+    return [profile.genre_affinity[genre] for genre in genres if genre in profile.genre_affinity]
+
+
+def _taste_score(known_affinities: list[float], confidence: float) -> float:
+    """Blend the strongest opinion (positive or negative) with the average of
+    known genres, then remap from the affinity's [-1, 1] range into a [0, 1]
+    taste contribution centered on neutral (0.5) — so a film in a loved genre
+    plus several unrated ones still scores close to that loved genre alone,
+    instead of being penalized for genres the profile has no opinion on."""
+    if not known_affinities:
+        return 0.5 * (1 - confidence)
+    dominant = max(known_affinities, key=abs)
+    average = sum(known_affinities) / len(known_affinities)
+    blended = 0.65 * dominant + 0.35 * average
+    return max(0.0, min(1.0, 0.5 + blended / 2))
+
+
+def _novelty_score(genre_count: int, known_count: int, confidence: float) -> float:
+    """The share of a candidate's genres the profile has no opinion on. A
+    profile with no confidence yet cannot judge novelty either way."""
+    if confidence <= 0:
+        return 0.5
+    if genre_count == 0:
+        return 1.0
+    return 1 - (known_count / genre_count)
 
 
 def score_recommendation_candidate(
@@ -181,8 +297,8 @@ def score_recommendation_candidate(
         )
     genre_ids = _candidate_field(candidate, "genre_ids", []) or []
     genres = [TMDB_GENRE_NAMES.get(genre_id, str(genre_id)) for genre_id in genre_ids]
-    matching_affinities = [profile.genre_affinity.get(genre, 0) for genre in genres]
-    taste = sum(matching_affinities) / len(matching_affinities) if matching_affinities else 0.5 * (1 - profile.confidence)
+    known_affinities = _known_genre_affinities(genres, profile)
+    taste = _taste_score(known_affinities, profile.confidence)
     session = 1 if session_preferences.get("genre") in genres else 0
     if tmdb_id in session_preferences.get("preferred_tmdb_ids", []):
         session = 1
@@ -192,22 +308,26 @@ def score_recommendation_candidate(
         session += 0.5
     session = min(1, session)
     quality = min(1, max(0, float(_candidate_field(candidate, "vote_average", 0) or 0) / 10))
-    list_bonus = 1 if tmdb_id in set(exclusions.get("watchlisted_tmdb_ids", set())) else 0
-    novelty = 1 if profile.confidence > 0 and not matching_affinities else 0.5
+    intent = 1 if tmdb_id in set(exclusions.get("watchlisted_tmdb_ids", set())) else 0
+    novelty = _novelty_score(len(genres), len(known_affinities), profile.confidence)
     exploration = 0.09 if profile.confidence else 0.18
     temporary_penalty = float(exclusions.get("temporary_negative_tmdb_ids", {}).get(tmdb_id, 0))
     score = (
         SCORE_WEIGHTS["taste"] * taste + (SCORE_WEIGHTS["session"] + 0.07) * session
-        + SCORE_WEIGHTS["tmdb_quality"] * quality + SCORE_WEIGHTS["list_bonus"] * list_bonus
+        + SCORE_WEIGHTS["tmdb_quality"] * quality + _INTENT_WEIGHT * intent
         + SCORE_WEIGHTS["novelty"] * novelty + exploration * novelty - temporary_penalty
     )
     reasons = ["not_seen"]
-    if matching_affinities and max(matching_affinities) >= 0.7:
+    # Calibrated to the centered affinity scale (roughly ±0.5 in practice, not
+    # ±1): 0.25 already means "meaningfully above this user's own neutral point".
+    if known_affinities and max(known_affinities) >= 0.25:
         reasons.insert(0, "genre_match")
-    if list_bonus:
+    if intent:
         reasons.append("watchlist_bonus")
     if session:
         reasons.append("session_match")
+    if novelty >= 0.75:
+        reasons.append("discovery_pick")
     reasons.append("exploration")
     explanation = build_recommendation_explanation(
         {

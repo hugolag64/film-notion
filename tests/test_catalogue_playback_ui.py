@@ -130,6 +130,14 @@ def test_catalogue_refreshes_after_server_action():
     assert "await loadRealMedias()" in source
 
 
+def test_catalogue_loads_before_background_media_server_sync():
+    source = UI_SOURCE.read_text(encoding="utf-8")
+    refresh = source[source.index("const refreshLibraryState"):source.index("useEffect", source.index("const refreshLibraryState"))]
+
+    assert refresh.index("await loadRealMedias();") < refresh.index("syncMediaServer()")
+    assert ".then(async () =>" in refresh
+
+
 def test_available_media_uses_a_status_check_instead_of_a_second_play_icon():
     source = UI_SOURCE.read_text(encoding="utf-8")
 

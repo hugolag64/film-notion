@@ -84,6 +84,21 @@ class FakeRadarrWithoutJellyfinMatch(FakeRadarr):
         return []
 
 
+class CountingRadarr(FakeRadarr):
+    def __init__(self, queue=None):
+        super().__init__(queue)
+        self.library_calls = 0
+        self.queue_calls = 0
+
+    async def list_library(self):
+        self.library_calls += 1
+        return await super().list_library()
+
+    async def list_queue(self):
+        self.queue_calls += 1
+        return await super().list_queue()
+
+
 class FailingArr:
     async def list_library(self):
         raise httpx.HTTPError("radarr offline")
@@ -450,6 +465,22 @@ def test_sync_all_imports_remote_library_items_before_syncing(tmp_path):
 
     assert result["synced"] == 1
     assert asyncio.run(store.fetch_all())[0].tmdb_id == 438631
+
+
+def test_sync_all_reuses_arr_snapshots_for_each_media(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    for index in range(3):
+        asyncio.run(store.create({
+            "id": f"dune-{index}", "title": f"Dune {index}", "type": "Film", "tmdb_id": 438631,
+        }))
+    radarr = CountingRadarr([{"movieId": 42, "size": 100, "sizeleft": 50}])
+    service = MediaServerService(store, radarr=radarr)
+
+    asyncio.run(service.sync_all())
+
+    assert radarr.library_calls == 2
+    assert radarr.queue_calls == 1
 
 
 async def _async_result(value):

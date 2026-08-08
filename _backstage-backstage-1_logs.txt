@@ -1,0 +1,100 @@
+    from backend.api import health_router, router as api_router
+  File "/app/backend/api.py", line 14, in <module>
+    from backend.core.tmdb_relink import build_relink_updates
+ModuleNotFoundError: No module named 'backend.core.tmdb_relink'
+Traceback (most recent call last):
+  File "/app/main.py", line 12, in <module>
+    from backend.api import health_router, router as api_router
+  File "/app/backend/api.py", line 14, in <module>
+    from backend.core.tmdb_relink import build_relink_updates
+ModuleNotFoundError: No module named 'backend.core.tmdb_relink'
+Traceback (most recent call last):
+  File "/app/main.py", line 12, in <module>
+    from backend.api import health_router, router as api_router
+  File "/app/backend/api.py", line 14, in <module>
+    from backend.core.tmdb_relink import build_relink_updates
+ModuleNotFoundError: No module named 'backend.core.tmdb_relink'
+Traceback (most recent call last):
+  File "/app/main.py", line 12, in <module>
+    from backend.api import health_router, router as api_router
+  File "/app/backend/api.py", line 14, in <module>
+    from backend.core.tmdb_relink import build_relink_updates
+ModuleNotFoundError: No module named 'backend.core.tmdb_relink'
+Traceback (most recent call last):
+  File "/app/main.py", line 12, in <module>
+    from backend.api import health_router, router as api_router
+  File "/app/backend/api.py", line 14, in <module>
+    from backend.core.tmdb_relink import build_relink_updates
+ModuleNotFoundError: No module named 'backend.core.tmdb_relink'
+Traceback (most recent call last):
+  File "/app/main.py", line 12, in <module>
+    from backend.api import health_router, router as api_router
+  File "/app/backend/api.py", line 14, in <module>
+    from backend.core.tmdb_relink import build_relink_updates
+ModuleNotFoundError: No module named 'backend.core.tmdb_relink'
+Traceback (most recent call last):
+  File "/app/main.py", line 12, in <module>
+    from backend.api import health_router, router as api_router
+  File "/app/backend/api.py", line 14, in <module>
+    from backend.core.tmdb_relink import build_relink_updates
+ModuleNotFoundError: No module named 'backend.core.tmdb_relink'
+Traceback (most recent call last):
+  File "/app/main.py", line 12, in <module>
+    from backend.api import health_router, router as api_router
+  File "/app/backend/api.py", line 14, in <module>
+    from backend.core.tmdb_relink import build_relink_updates
+ModuleNotFoundError: No module named 'backend.core.tmdb_relink'
+Traceback (most recent call last):
+  File "/app/main.py", line 12, in <module>
+    from backend.api import health_router, router as api_router
+  File "/app/backend/api.py", line 14, in <module>
+    from backend.core.tmdb_relink import build_relink_updates
+ModuleNotFoundError: No module named 'backend.core.tmdb_relink'
+Traceback (most recent call last):
+  File "/app/main.py", line 12, in <module>
+    from backend.api import health_router, router as api_router
+  File "/app/backend/api.py", line 14, in <module>
+    from backend.core.tmdb_relink import build_relink_updates
+ModuleNotFoundError: No module named 'backend.core.tmdb_relink'
+Traceback (most recent call last):
+  File "/app/main.py", line 12, in <module>
+    from backend.api import health_router, router as api_router
+  File "/app/backend/api.py", line 14, in <module>
+    from backend.core.tmdb_relink import build_relink_updates
+ModuleNotFoundError: No module named 'backend.core.tmdb_relink'
+Traceback (most recent call last):
+  File "/app/main.py", line 12, in <module>
+    from backend.api import health_router, router as api_router
+  File "/app/backend/api.py", line 14, in <module>
+    from backend.core.tmdb_relink import build_relink_updates
+ModuleNotFoundError: No module named 'backend.core.tmdb_relink'
+Traceback (most recent call last):
+  File "/app/main.py", line 12, in <module>
+    from backend.api import health_router, router as api_router
+  File "/app/backend/api.py", line 14, in <module>
+    from backend.core.tmdb_relink import build_relink_updates
+ModuleNotFoundError: No module named 'backend.core.tmdb_relink'
+Traceback (most recent call last):
+  File "/app/main.py", line 12, in <module>
+    from backend.api import health_router, router as api_router
+  File "/app/backend/api.py", line 14, in <module>
+    from backend.core.tmdb_relink import build_relink_updates
+ModuleNotFoundError: No module named 'backend.core.tmdb_relink'
+Traceback (most recent call last):
+  File "/app/main.py", line 12, in <module>
+    from backend.api import health_router, router as api_router
+  File "/app/backend/api.py", line 14, in <module>
+    from backend.core.tmdb_relink import build_relink_updates
+ModuleNotFoundError: No module named 'backend.core.tmdb_relink'
+Traceback (most recent call last):
+  File "/app/main.py", line 12, in <module>
+    from backend.api import health_router, router as api_router
+  File "/app/backend/api.py", line 14, in <module>
+    from backend.core.tmdb_relink import build_relink_updates
+ModuleNotFoundError: No module named 'backend.core.tmdb_relink'
+Traceback (most recent call last):
+  File "/app/main.py", line 12, in <module>
+    from backend.api import health_router, router as api_router
+  File "/app/backend/api.py", line 14, in <module>
+    from backend.core.tmdb_relink import build_relink_updates
+ModuleNotFoundError: No module named 'backend.core.tmdb_relink'

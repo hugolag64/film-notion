@@ -71,6 +71,8 @@ class TMDBClient:
         page: int = 1,
         sort_by: str = "popularity.desc",
         min_vote_count: int = 50,
+        release_date_gte: Optional[str] = None,
+        release_date_lte: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Discover French-language movie candidates for recommendations."""
         url = f"{self.BASE_URL}/discover/movie"
@@ -82,6 +84,10 @@ class TMDBClient:
         }
         if with_genres:
             params["with_genres"] = "|".join(str(genre_id) for genre_id in with_genres)
+        if release_date_gte:
+            params["primary_release_date.gte"] = release_date_gte
+        if release_date_lte:
+            params["primary_release_date.lte"] = release_date_lte
         try:
             response = await http.request_with_retry("GET", url, params=params)
             response.raise_for_status()
