@@ -7,7 +7,7 @@ import FilmDetailView from './components/FilmDetailView';
 import DashboardHome from './components/DashboardHome';
 import TMDBMoviePreview from './components/TMDBMoviePreview';
 import { useAuth } from './auth-context';
-import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncPlayback, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest } from './api';
+import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncMediaServer, syncPlayback, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
 
@@ -381,13 +381,6 @@ export default function BackstagePrototype() {
     }, [actorQuery]);
 
     useEffect(() => {
-        fetchMediaServerActivity().then((activity) => {
-            const items = activity.items || [];
-            setAvailabilityByMedia(Object.fromEntries(items.map(item => [item.media_id, item])));
-        }).catch(() => {});
-    }, []);
-
-    useEffect(() => {
         if (!user?.id) return;
         loadRentals();
         loadDashboard();
@@ -418,7 +411,7 @@ export default function BackstagePrototype() {
             }
             setMediaServerOptions(options);
             setAcquisitionForm({
-                quality_profile_id: options.quality_profiles?.[0]?.id || '',
+                quality_profile_id: options.default_quality_profile_id || options.quality_profiles?.[0]?.id || '',
                 language_profile_id: options.language_profiles?.[0]?.id || '',
                 root_folder: options.root_folders?.[0]?.path || '', monitor: 'all',
             });
@@ -442,10 +435,7 @@ export default function BackstagePrototype() {
             if (result.rental) setRentalsByMedia((current) => ({...current, [selectedMedia.id]: result.rental}));
             setShowAcquisitionModal(false);
             showToast(`"${selectedMedia?.title}" a bien été ajouté au serveur !`, 'success');
-            fetchMediaServerActivity().then((activity) => {
-                const items = activity.items || [];
-                setAvailabilityByMedia(Object.fromEntries(items.map(item => [item.media_id, item])));
-            }).catch(() => {});
+            await refreshLibraryState({sync: user?.role === 'admin'});
         } catch (error) {
             const errorMsg = error.message || 'Erreur lors de l\'ajout au serveur.';
             setMediaServerError(errorMsg);
@@ -513,6 +503,44 @@ export default function BackstagePrototype() {
             setLoading(false);
         }
     };
+
+    const refreshAvailabilityByMedia = async () => {
+        if (user?.role !== 'admin') return;
+        try {
+            const activity = await fetchMediaServerActivity();
+            const items = activity.items || [];
+            setAvailabilityByMedia(Object.fromEntries(items.map(item => [item.media_id, item])));
+        } catch {
+            setAvailabilityByMedia({});
+        }
+    };
+
+    const refreshLibraryState = async ({sync = false} = {}) => {
+        if (sync && user?.role === 'admin') {
+            try {
+                await syncMediaServer();
+            } catch (error) {
+                console.error('Erreur de synchronisation du serveur:', error);
+            }
+        }
+        await loadRealMedias();
+        await refreshAvailabilityByMedia();
+    };
+
+    useEffect(() => {
+        if (!user?.id) return undefined;
+        const refresh = (sync = false) => refreshLibraryState({sync}).catch((error) => {
+            console.error('Erreur de rafraîchissement du catalogue:', error);
+        });
+        refresh(user.role === 'admin');
+        const interval = window.setInterval(() => refresh(false), 60000);
+        const handleFocus = () => refresh(false);
+        window.addEventListener('focus', handleFocus);
+        return () => {
+            window.clearInterval(interval);
+            window.removeEventListener('focus', handleFocus);
+        };
+    }, [user?.id, user?.role]);
 
     const openDashboardMedia = (media) => {
         if (!media) return;
@@ -594,10 +622,6 @@ export default function BackstagePrototype() {
         showToast(recommendation.explanation || 'Ce film correspond à ton profil de visionnage.');
     };
 
-
-    useEffect(() => {
-        loadRealMedias();
-    }, []);
 
     const collectionMedias = movies.filter((movie) => movie.type === (collection === 'Séries' ? 'Série' : 'Film'));
     const filteredMovies = filterAndSortMovies(collectionMedias, { ...filters, query: searchQuery }, sort)
