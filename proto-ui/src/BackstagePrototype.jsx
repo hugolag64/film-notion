@@ -55,7 +55,8 @@ const getMediaAction = (mediaType, availability) => {
         return { label: 'Téléchargement en cours', canPlay: false, disabled: true };
     }
     if (availability?.state === 'imported') {
-        return { label: 'Indexation Jellyfin en cours', canPlay: false, disabled: true };
+        const provider = mediaType === 'Série' ? 'Sonarr' : 'Radarr';
+        return { label: `Téléchargé côté ${provider} — Jellyfin non confirmé`, canPlay: false, disabled: true };
     }
     if (['requested', 'searching'].includes(availability?.state)) {
         return { label: 'Demande en cours', canPlay: false, disabled: true };

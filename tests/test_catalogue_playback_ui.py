@@ -27,11 +27,22 @@ def test_media_action_labels_are_user_facing_and_cover_pending_states():
     assert "Demander cette série" in source or "Demander cette sÃ©rie" in source
     assert "Demande en cours" in source
     assert "Téléchargement en cours" in source or "TÃ©lÃ©chargement en cours" in source
-    assert "Indexation Jellyfin en cours" in source
+    assert "Téléchargé côté ${provider} — Jellyfin non confirmé" in source
+    assert "Indexation Jellyfin en cours" not in source
     assert "mediaAction.canPlay ? '▶' : '+'" not in source
     assert "user?.role === 'admin'" in source
     assert "Demander à conserver" in source or "Demander Ã  conserver" in source
     assert "fetchRentals" in source
+
+
+def test_media_server_errors_accept_plain_text_backend_responses():
+    source = API_SOURCE.read_text(encoding="utf-8")
+    for function_name in ("syncMediaServer", "importMediaServerLibrary", "fetchMediaServerActivity"):
+        start = source.index(f"export async function {function_name}")
+        end = source.find("\nexport ", start + 1)
+        block = source[start:] if end == -1 else source[start:end]
+        assert "const body = await readResponseBody(response);" in block
+        assert "body?.detail" in block
 
 
 def test_retention_admin_controls_and_notifications_are_present():

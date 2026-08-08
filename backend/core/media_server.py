@@ -1,6 +1,7 @@
 """Shared models for the local media-server integration."""
 from datetime import datetime, timedelta
 from datetime import timezone
+import logging
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -8,6 +9,9 @@ from pydantic import BaseModel, Field
 from backend.core.playback import PlaybackProgress
 from backend.config import Config
 from backend.core.tmdb import TMDBClient
+
+
+logger = logging.getLogger(__name__)
 
 
 AvailabilityState = Literal[
@@ -93,25 +97,31 @@ class MediaServerService:
     async def add_with_defaults(self, media) -> Availability:
         return await self.add(media, **(await self.acquisition_defaults(media)))
 
-    async def _find_jellyfin_match(self, media, library_items=None) -> Optional[dict[str, Any]]:
+    async def _find_jellyfin_match(self, media, library_items=None) -> tuple[Optional[dict[str, Any]], Optional[str]]:
         if not self.jellyfin:
-            return None
+            return None, None
+        jellyfin_error = None
         if library_items is None and hasattr(self.jellyfin, "list_library"):
             try:
                 library_items = await self.jellyfin.list_library()
-            except Exception:
+            except Exception as error:
                 library_items = None
+                jellyfin_error = "Jellyfin indisponible"
+                logger.warning("[jellyfin-sync] Library lookup failed for %s: %s", media.id, error)
         if library_items is not None:
-            return next((item for item in library_items
-                         if item.get("tmdb_id") == media.tmdb_id and item.get("media_type") == media.type), None)
+            match = next((item for item in library_items
+                          if item.get("tmdb_id") == media.tmdb_id and item.get("media_type") == media.type), None)
+            if match:
+                return match, None
         if hasattr(self.jellyfin, "find_by_tmdb"):
             try:
                 item = await self.jellyfin.find_by_tmdb(media.tmdb_id, media.type)
-            except Exception:
-                return None
+            except Exception as error:
+                logger.warning("[jellyfin-sync] Item lookup failed for %s: %s", media.id, error)
+                return None, "Jellyfin indisponible"
             if item and item.get("Id"):
-                return {"jellyfin_id": str(item["Id"]), "tmdb_id": media.tmdb_id, "media_type": media.type}
-        return None
+                return {"jellyfin_id": str(item["Id"]), "tmdb_id": media.tmdb_id, "media_type": media.type}, None
+        return None, jellyfin_error
 
     async def _save_jellyfin_availability(
         self, media, provider: Provider, jellyfin_item: dict[str, Any], remote: Optional[dict[str, Any]] = None,
@@ -146,14 +156,17 @@ class MediaServerService:
         provider = "sonarr" if media.type == "Série" else "radarr"
         arr = self.sonarr if provider == "sonarr" else self.radarr
         try:
-            jellyfin_item = await self._find_jellyfin_match(media, jellyfin_items)
+            jellyfin_item, jellyfin_error = await self._find_jellyfin_match(media, jellyfin_items)
             remote = None
             if arr is not None:
                 remote = next((item for item in await arr.list_library() if item.get("tmdbId") == media.tmdb_id), None)
             if jellyfin_item:
                 return await self._save_jellyfin_availability(media, provider, jellyfin_item, remote)
             if arr is None or not remote:
-                return await self.store.get_availability(media_id)
+                current = await self.store.get_availability(media_id)
+                if current and jellyfin_error:
+                    return await self.store.upsert_availability(current.model_copy(update={"last_error": jellyfin_error}))
+                return current
             queue_id_key = "seriesId" if provider == "sonarr" else "movieId"
             queue_item = next(
                 (item for item in await arr.list_queue() if item.get(queue_id_key) == remote.get("id")),
@@ -173,7 +186,7 @@ class MediaServerService:
                 state = "imported" if remote.get("hasFile") else "requested"
             availability = Availability(
                 media_id=media.id, provider=provider, arr_id=remote.get("id"),
-                state=state, progress_percent=progress_percent, last_error=last_error,
+                state=state, progress_percent=progress_percent, last_error=jellyfin_error or last_error,
                 last_synced_at=datetime.now(timezone.utc),
             )
             if availability.arr_id is not None:
@@ -182,7 +195,8 @@ class MediaServerService:
             if remote.get("hasFile"):
                 await self.store.update(media.id, {"support": "Serveur"})
             return saved
-        except Exception:
+        except Exception as error:
+            logger.warning("[jellyfin-sync] Media sync failed for %s: %s", media_id, error)
             current = await self.store.get_availability(media_id)
             if current:
                 return await self.store.upsert_availability(current.model_copy(update={
@@ -269,7 +283,8 @@ class MediaServerService:
         if self.jellyfin and hasattr(self.jellyfin, "list_library"):
             try:
                 jellyfin_items = await self.jellyfin.list_library()
-            except Exception:
+            except Exception as error:
+                logger.warning("[jellyfin-sync] Library import failed: %s", error)
                 jellyfin_items = []
             for item in jellyfin_items:
                 tmdb_id = item.get("tmdb_id")
@@ -297,7 +312,8 @@ class MediaServerService:
         if self.jellyfin and hasattr(self.jellyfin, "list_library"):
             try:
                 jellyfin_items = await self.jellyfin.list_library()
-            except Exception:
+            except Exception as error:
+                logger.warning("[jellyfin-sync] Library snapshot failed: %s", error)
                 jellyfin_items = None
         synced = 0
         for media in await self.store.fetch_all():
@@ -316,8 +332,16 @@ class MediaServerService:
                     disks.append({"provider": provider, **disk})
             except Exception:
                 continue
+        medias = {media.id: media for media in await self.store.fetch_all()}
+        items = []
+        for availability in await self.store.list_availabilities():
+            item = availability.model_dump(mode="json")
+            media = medias.get(availability.media_id)
+            if media:
+                item.update({"title": media.title, "media_type": media.type, "tmdb_id": media.tmdb_id})
+            items.append(item)
         return {
-            "items": [availability.model_dump(mode="json") for availability in await self.store.list_availabilities()],
+            "items": items,
             "disks": disks,
         }
 
