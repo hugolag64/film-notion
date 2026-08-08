@@ -24,6 +24,8 @@ class ArrClient:
             else:
                 response = await http.get_client().request(method, f"{self.base_url}{path}", timeout=10.0, **request_kwargs)
             response.raise_for_status()
+            if response.status_code == 204:
+                return {}
             return response.json()
         except (httpx.HTTPError, ValueError) as error:
             raise MediaServerError("Service média inaccessible ou réponse invalide") from error
@@ -53,6 +55,16 @@ class RadarrClient(ArrClient):
             "rootFolderPath": root_folder, "monitored": True,
             "addOptions": {"searchForMovie": True},
         })
+
+    async def delete_movie(self, movie_id: int, *, delete_files: bool = True) -> dict[str, Any]:
+        """Remove a movie from Radarr and optionally delete its imported files."""
+        return await self._request(
+            "DELETE", f"{self.library_path}/{movie_id}",
+            params={
+                "deleteFiles": str(delete_files).lower(),
+                "addImportExclusion": "false",
+            },
+        )
 
 
 class SonarrClient(ArrClient):

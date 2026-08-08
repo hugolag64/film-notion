@@ -35,6 +35,21 @@ class Availability(BaseModel):
     last_synced_at: Optional[datetime] = None
 
 
+class StorageCandidate(BaseModel):
+    media_id: str
+    title: str
+    tmdb_id: Optional[int] = None
+    radarr_id: int
+    path: Optional[str] = None
+    size_bytes: int = Field(default=0, ge=0)
+    added_at: Optional[datetime] = None
+    last_played_at: Optional[datetime] = None
+    is_favorite: bool = False
+    has_active_rental: bool = False
+    protected: bool = False
+    protection_reasons: list[str] = Field(default_factory=list)
+
+
 class MediaServerService:
     """Maps Arr/Jellyfin state into durable, UI-safe availability records."""
 
@@ -388,6 +403,125 @@ class MediaServerService:
             "temporary_max_gb": Config.TEMPORARY_MAX_GB,
             "low_space": min_free_bytes is not None and min_free_bytes < Config.min_free_bytes(),
             "temporary_quota_reached": temporary_bytes >= Config.temporary_max_bytes(),
+        }
+
+    @staticmethod
+    def _remote_datetime(value: Any) -> Optional[datetime]:
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return None
+
+    async def storage_candidates(self, *, now: Optional[datetime] = None) -> list[StorageCandidate]:
+        """List imported Radarr films that an administrator may review for deletion."""
+        if self.radarr is None:
+            raise RuntimeError("Radarr n'est pas configuré")
+        now = now or datetime.now(timezone.utc)
+        remotes = await self.radarr.list_library()
+        medias = {
+            media.tmdb_id: media
+            for media in await self.store.fetch_all()
+            if media.type == "Film" and media.tmdb_id
+        }
+        context = await self.store.storage_context(now - timedelta(days=30))
+        candidates = []
+        for remote in remotes:
+            tmdb_id = remote.get("tmdbId")
+            media = medias.get(tmdb_id)
+            size_bytes = remote.get("sizeOnDisk")
+            if not media or not remote.get("id") or not remote.get("hasFile"):
+                continue
+            if not isinstance(size_bytes, (int, float)) or size_bytes <= 0:
+                continue
+            added_at = self._remote_datetime(remote.get("added")) or media.created_at
+            reasons = []
+            if media.id in context["favorite_media_ids"]:
+                reasons.append("favorite")
+            has_active_rental = media.id in context["rental_media_ids"]
+            if has_active_rental:
+                reasons.append("active_rental")
+            if added_at and added_at >= now - timedelta(days=14):
+                reasons.append("recently_added")
+            last_played_at = context["last_playback"].get(media.id)
+            if media.id in context["recent_playback"]:
+                reasons.append("recently_watched")
+            if media.id in context["protected_media_ids"]:
+                reasons.append("manual")
+            candidates.append(StorageCandidate(
+                media_id=media.id,
+                title=media.title,
+                tmdb_id=media.tmdb_id,
+                radarr_id=int(remote["id"]),
+                path=remote.get("path"),
+                size_bytes=int(size_bytes),
+                added_at=added_at,
+                last_played_at=last_played_at,
+                is_favorite=media.id in context["favorite_media_ids"],
+                has_active_rental=has_active_rental,
+                protected=bool(reasons),
+                protection_reasons=reasons,
+            ))
+        return sorted(candidates, key=lambda item: (-item.size_bytes, item.title.lower()))
+
+    async def set_storage_protection(self, media_id: str, protected: bool) -> bool:
+        return await self.store.set_storage_protection(media_id, protected)
+
+    async def delete_storage_candidate(self, media_id: str, admin_user_id: str) -> dict[str, Any]:
+        candidates = await self.storage_candidates()
+        candidate = next((item for item in candidates if item.media_id == media_id), None)
+        if candidate is None:
+            raise LookupError("Film absent de Radarr ou non éligible à la suppression")
+        if candidate.protected:
+            raise PermissionError("Ce film est protégé et ne peut pas être supprimé")
+        if self.radarr is None:
+            raise RuntimeError("Radarr n'est pas configuré")
+
+        await self.radarr.delete_movie(candidate.radarr_id, delete_files=True)
+        now = datetime.now(timezone.utc)
+        current = await self.store.get_availability(media_id)
+        availability = Availability(
+            media_id=media_id,
+            provider="radarr",
+            arr_id=None,
+            jellyfin_id=None,
+            state="error",
+            root_folder=current.root_folder if current else None,
+            quality_profile_id=current.quality_profile_id if current else None,
+            language_profile_id=current.language_profile_id if current else None,
+            last_error="Film supprimé du stockage par l'administrateur",
+            last_synced_at=now,
+        )
+        await self.store.upsert_availability(availability)
+
+        sync_warning = None
+        try:
+            # Use an empty snapshot so an eventual Jellyfin index refresh cannot
+            # immediately turn the fiche back into a playable item.
+            await self.sync_media(media_id, jellyfin_items=[])
+        except Exception as error:  # deletion already succeeded; report the warning
+            sync_warning = str(error)
+
+        await self.store.record_storage_cleanup({
+            "admin_user_id": admin_user_id,
+            "media_id": media_id,
+            "media_title": candidate.title,
+            "size_bytes": candidate.size_bytes,
+            "deleted_at": now,
+            "status": "deleted",
+            "error": sync_warning,
+        })
+        return {
+            "media_id": media_id,
+            "title": candidate.title,
+            "freed_bytes": candidate.size_bytes,
+            "availability": "error",
+            "synced": sync_warning is None,
+            "sync_warning": sync_warning,
         }
 
     async def sync_playback(self, backstage_user_id: str, jellyfin_user_id: str) -> dict[str, int]:

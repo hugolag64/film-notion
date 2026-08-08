@@ -1,6 +1,7 @@
 import asyncio
 
 import httpx
+import pytest
 from datetime import datetime, timedelta, timezone
 
 import backend.core.media_server as media_server_module
@@ -84,6 +85,23 @@ class FakeRadarrWithoutJellyfinMatch(FakeRadarr):
         return []
 
 
+class StorageRadarr:
+    def __init__(self, movies):
+        self.movies = list(movies)
+        self.deleted = []
+
+    async def list_library(self):
+        return list(self.movies)
+
+    async def delete_movie(self, movie_id, *, delete_files=True):
+        self.deleted.append((movie_id, delete_files))
+        self.movies = [movie for movie in self.movies if movie.get("id") != movie_id]
+        return {}
+
+    async def list_queue(self):
+        return []
+
+
 class FailingArr:
     async def list_library(self):
         raise httpx.HTTPError("radarr offline")
@@ -134,6 +152,74 @@ def test_imported_arr_item_becomes_available_when_jellyfin_matches(tmp_path):
     assert availability.state == "available"
     assert availability.jellyfin_id == "jelly-dune"
     assert asyncio.run(store.fetch_one(media.id)).support == "Serveur"
+
+
+def test_storage_candidates_explain_protection_reasons(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    now = datetime.now(timezone.utc)
+    eligible = asyncio.run(store.create({
+        "id": "eligible", "title": "Eligible", "type": "Film", "tmdb_id": 1,
+        "created_at": now - timedelta(days=30),
+    }))
+    favorite = asyncio.run(store.create({
+        "id": "favorite", "title": "Favorite", "type": "Film", "tmdb_id": 2,
+        "created_at": now - timedelta(days=30),
+    }))
+    asyncio.run(store.upsert_user_media_state("ophelie", favorite.id, {"is_favorite": True}))
+    radarr = StorageRadarr([
+        {"id": 10, "tmdbId": 1, "hasFile": True, "sizeOnDisk": 5 * 1024**3, "added": (now - timedelta(days=30)).isoformat()},
+        {"id": 11, "tmdbId": 2, "hasFile": True, "sizeOnDisk": 2 * 1024**3, "added": (now - timedelta(days=30)).isoformat()},
+    ])
+    service = MediaServerService(store, radarr=radarr)
+
+    candidates = asyncio.run(service.storage_candidates(now=now))
+
+    assert [item.title for item in candidates] == ["Eligible", "Favorite"]
+    assert candidates[0].protected is False
+    assert candidates[1].protection_reasons == ["favorite"]
+
+
+def test_delete_storage_candidate_uses_radarr_and_keeps_backstage_fiche(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    now = datetime.now(timezone.utc) - timedelta(days=30)
+    media = asyncio.run(store.create({
+        "id": "delete-me", "title": "Delete me", "type": "Film", "tmdb_id": 7,
+        "created_at": now,
+    }))
+    radarr = StorageRadarr([{
+        "id": 42, "tmdbId": 7, "hasFile": True, "sizeOnDisk": 3 * 1024**3,
+        "added": now.isoformat(),
+    }])
+    service = MediaServerService(store, radarr=radarr)
+
+    result = asyncio.run(service.delete_storage_candidate(media.id, "hugo"))
+
+    assert radarr.deleted == [(42, True)]
+    assert result["freed_bytes"] == 3 * 1024**3
+    assert asyncio.run(store.fetch_one(media.id)).title == "Delete me"
+    availability = asyncio.run(store.get_availability(media.id))
+    assert availability.state == "error"
+    assert availability.arr_id is None
+
+
+def test_delete_storage_candidate_rejects_protected_or_missing_films(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    now = datetime.now(timezone.utc) - timedelta(days=30)
+    media = asyncio.run(store.create({
+        "id": "protected", "title": "Protected", "type": "Film", "tmdb_id": 8,
+        "created_at": now,
+    }))
+    radarr = StorageRadarr([{"id": 43, "tmdbId": 8, "hasFile": True, "sizeOnDisk": 100, "added": now.isoformat()}])
+    service = MediaServerService(store, radarr=radarr)
+    asyncio.run(store.set_storage_protection(media.id, True))
+
+    with pytest.raises(PermissionError):
+        asyncio.run(service.delete_storage_candidate(media.id, "hugo"))
+    with pytest.raises(LookupError):
+        asyncio.run(service.delete_storage_candidate("missing", "hugo"))
 
 
 def test_sync_media_starts_a_rental_when_jellyfin_has_the_film(tmp_path):

@@ -330,6 +330,34 @@ class MediaStore:
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_media_availability_arr "
                 "ON media_availability(provider, arr_id) WHERE arr_id IS NOT NULL"
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS media_storage_protection (
+                    media_id TEXT PRIMARY KEY,
+                    protected INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS storage_cleanup_log (
+                    id TEXT PRIMARY KEY,
+                    admin_user_id TEXT NOT NULL,
+                    media_id TEXT NOT NULL,
+                    media_title TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL DEFAULT 0,
+                    deleted_at TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    error TEXT
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_storage_cleanup_log_deleted_at "
+                "ON storage_cleanup_log(deleted_at DESC)"
+            )
             # Migration en douceur si les colonnes n'existent pas encore
             cursor = conn.execute("PRAGMA table_info(media)")
             columns = [column[1] for column in cursor.fetchall()]
@@ -621,6 +649,92 @@ class MediaStore:
                 (user_id,),
             ).fetchall()
         return [self._row_to_user_media_state(row) for row in rows]
+
+    def _storage_context_sync(self, watched_since: datetime) -> Dict[str, Any]:
+        """Return cross-user signals used to protect media from deletion."""
+        with sqlite3.connect(self.db_path) as conn:
+            favorite_rows = conn.execute(
+                "SELECT DISTINCT media_id FROM user_media_state WHERE is_favorite = 1"
+            ).fetchall()
+            protection_rows = conn.execute(
+                "SELECT media_id, protected FROM media_storage_protection"
+            ).fetchall()
+            rental_rows = conn.execute(
+                "SELECT DISTINCT media_id FROM media_rentals "
+                "WHERE status IN ('requested', 'downloading', 'available', 'keep_requested', 'kept') "
+                "OR storage_policy = 'permanent'"
+            ).fetchall()
+            playback_rows = conn.execute(
+                "SELECT media_id, MAX(last_played_at) FROM playback_progress "
+                "WHERE media_id IS NOT NULL AND last_played_at IS NOT NULL "
+                "GROUP BY media_id"
+            ).fetchall()
+
+        last_playback = {}
+        recent_playback = {}
+        for media_id, last_played_at in playback_rows:
+            played_at = datetime.fromisoformat(last_played_at)
+            if played_at.tzinfo is None:
+                played_at = played_at.replace(tzinfo=timezone.utc)
+            last_playback[media_id] = played_at
+            if played_at >= watched_since:
+                recent_playback[media_id] = played_at
+        return {
+            "favorite_media_ids": {row[0] for row in favorite_rows},
+            "protected_media_ids": {row[0] for row in protection_rows if row[1]},
+            "rental_media_ids": {row[0] for row in rental_rows},
+            "last_playback": last_playback,
+            "recent_playback": recent_playback,
+        }
+
+    def _set_storage_protection_sync(self, media_id: str, protected: bool) -> bool:
+        now = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            media = conn.execute("SELECT 1 FROM media WHERE id = ?", (media_id,)).fetchone()
+            if not media:
+                return False
+            conn.execute(
+                "INSERT INTO media_storage_protection (media_id, protected, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(media_id) DO UPDATE SET protected = excluded.protected, updated_at = excluded.updated_at",
+                (media_id, int(protected), now),
+            )
+        return True
+
+    def _record_storage_cleanup_sync(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        deleted_at = payload.get("deleted_at") or datetime.now(timezone.utc)
+        if isinstance(deleted_at, datetime):
+            deleted_at = deleted_at.isoformat()
+        values = {
+            "id": payload.get("id") or str(uuid.uuid4()),
+            "admin_user_id": payload["admin_user_id"],
+            "media_id": payload["media_id"],
+            "media_title": payload["media_title"],
+            "size_bytes": int(payload.get("size_bytes") or 0),
+            "deleted_at": deleted_at,
+            "status": payload.get("status", "deleted"),
+            "error": payload.get("error"),
+        }
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO storage_cleanup_log "
+                "(id, admin_user_id, media_id, media_title, size_bytes, deleted_at, status, error) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                tuple(values[column] for column in (
+                    "id", "admin_user_id", "media_id", "media_title", "size_bytes",
+                    "deleted_at", "status", "error",
+                )),
+            )
+        return values
+
+    def _list_storage_cleanup_log_sync(self, limit: int = 50) -> List[Dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT id, admin_user_id, media_id, media_title, size_bytes, deleted_at, status, error "
+                "FROM storage_cleanup_log ORDER BY deleted_at DESC LIMIT ?",
+                (max(1, min(limit, 200)),),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def _upsert_user_media_state_sync(
         self, user_id: str, media_id: str, fields: Dict[str, Any],
@@ -1413,6 +1527,18 @@ class MediaStore:
 
     async def list_user_media_states(self, user_id: str) -> List[UserMediaState]:
         return await asyncio.to_thread(self._list_user_media_states_sync, user_id)
+
+    async def storage_context(self, watched_since: datetime) -> Dict[str, Any]:
+        return await asyncio.to_thread(self._storage_context_sync, watched_since)
+
+    async def set_storage_protection(self, media_id: str, protected: bool) -> bool:
+        return await asyncio.to_thread(self._set_storage_protection_sync, media_id, protected)
+
+    async def record_storage_cleanup(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return await asyncio.to_thread(self._record_storage_cleanup_sync, payload)
+
+    async def list_storage_cleanup_log(self, limit: int = 50) -> List[Dict[str, Any]]:
+        return await asyncio.to_thread(self._list_storage_cleanup_log_sync, limit)
 
     async def upsert_user_media_state(
         self, user_id: str, media_id: str, fields: Dict[str, Any],

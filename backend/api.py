@@ -306,6 +306,10 @@ class SeerrRequestCreate(BaseModel):
     media_type: str = "movie"
 
 
+class StorageProtectionRequest(BaseModel):
+    protected: bool
+
+
 MAX_ACTIVE_RENTALS = 5
 
 
@@ -1679,6 +1683,49 @@ async def admin_storage_status(
     service: MediaServerService = Depends(get_media_server_service),
 ):
     return await service.storage_status()
+
+
+@router.get("/admin/storage/candidates")
+async def admin_storage_candidates(
+    _: AuthContext = Depends(require_admin),
+    service: MediaServerService = Depends(get_media_server_service),
+    store: MediaStore = Depends(get_store),
+):
+    candidates = await service.storage_candidates()
+    return {
+        "candidates": [item.model_dump(mode="json") for item in candidates],
+        "history": await store.list_storage_cleanup_log(),
+    }
+
+
+@router.post("/admin/storage/candidates/{media_id}/protection")
+async def admin_storage_candidate_protection(
+    media_id: str,
+    payload: StorageProtectionRequest,
+    _: AuthContext = Depends(require_admin),
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    if not await service.set_storage_protection(media_id, payload.protected):
+        raise HTTPException(status_code=404, detail="Film non trouvé")
+    return {"media_id": media_id, "protected": payload.protected}
+
+
+@router.delete("/admin/storage/candidates/{media_id}")
+async def admin_delete_storage_candidate(
+    media_id: str,
+    current: AuthContext = Depends(require_admin),
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    try:
+        return await service.delete_storage_candidate(media_id, current.user["id"])
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except PermissionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except MediaServerError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
 
 
 @router.get("/admin/dashboard")
