@@ -93,24 +93,72 @@ class MediaServerService:
     async def add_with_defaults(self, media) -> Availability:
         return await self.add(media, **(await self.acquisition_defaults(media)))
 
-    async def sync_media(self, media_id: str) -> Optional[Availability]:
+    async def _find_jellyfin_match(self, media, library_items=None) -> Optional[dict[str, Any]]:
+        if not self.jellyfin:
+            return None
+        if library_items is None and hasattr(self.jellyfin, "list_library"):
+            try:
+                library_items = await self.jellyfin.list_library()
+            except Exception:
+                library_items = None
+        if library_items is not None:
+            return next((item for item in library_items
+                         if item.get("tmdb_id") == media.tmdb_id and item.get("media_type") == media.type), None)
+        if hasattr(self.jellyfin, "find_by_tmdb"):
+            try:
+                item = await self.jellyfin.find_by_tmdb(media.tmdb_id, media.type)
+            except Exception:
+                return None
+            if item and item.get("Id"):
+                return {"jellyfin_id": str(item["Id"]), "tmdb_id": media.tmdb_id, "media_type": media.type}
+        return None
+
+    async def _save_jellyfin_availability(
+        self, media, provider: Provider, jellyfin_item: dict[str, Any], remote: Optional[dict[str, Any]] = None,
+    ) -> Availability:
+        current = await self.store.get_availability(media.id)
+        availability = Availability(
+            media_id=media.id,
+            provider=provider,
+            arr_id=(remote or {}).get("id") if remote else (current.arr_id if current else None),
+            jellyfin_id=jellyfin_item.get("jellyfin_id") or jellyfin_item.get("Id"),
+            state="available",
+            last_synced_at=datetime.now(timezone.utc),
+        )
+        if availability.arr_id is not None:
+            await self.store.clear_arr_id_conflict(provider, availability.arr_id, media.id)
+        saved = await self.store.upsert_availability(availability)
+        available_at = datetime.now(timezone.utc)
+        size_bytes = (remote or {}).get("sizeOnDisk")
+        if not isinstance(size_bytes, (int, float)) or size_bytes < 0:
+            size_bytes = None
+        await self.store.mark_rentals_available(
+            media.id, available_at, available_at + timedelta(days=21),
+            int(size_bytes) if size_bytes is not None else None,
+        )
+        await self.store.update(media.id, {"support": "Serveur"})
+        return saved
+
+    async def sync_media(self, media_id: str, *, jellyfin_items=None) -> Optional[Availability]:
         media = await self.store.fetch_one(media_id)
         if not media or not media.tmdb_id:
             return None
         provider = "sonarr" if media.type == "Série" else "radarr"
         arr = self.sonarr if provider == "sonarr" else self.radarr
-        if arr is None:
-            return await self.store.get_availability(media_id)
         try:
-            remote = next((item for item in await arr.list_library() if item.get("tmdbId") == media.tmdb_id), None)
-            if not remote:
+            jellyfin_item = await self._find_jellyfin_match(media, jellyfin_items)
+            remote = None
+            if arr is not None:
+                remote = next((item for item in await arr.list_library() if item.get("tmdbId") == media.tmdb_id), None)
+            if jellyfin_item:
+                return await self._save_jellyfin_availability(media, provider, jellyfin_item, remote)
+            if arr is None or not remote:
                 return await self.store.get_availability(media_id)
             queue_id_key = "seriesId" if provider == "sonarr" else "movieId"
             queue_item = next(
                 (item for item in await arr.list_queue() if item.get(queue_id_key) == remote.get("id")),
                 None,
             )
-            jellyfin_item = await self.jellyfin.find_by_tmdb(media.tmdb_id, media.type) if self.jellyfin else None
             progress_percent = None
             last_error = None
             if queue_item and queue_item.get("errorMessage"):
@@ -122,26 +170,16 @@ class MediaServerService:
             elif queue_item:
                 state = "searching"
             else:
-                state = "available" if jellyfin_item else "imported" if remote.get("hasFile") else "requested"
+                state = "imported" if remote.get("hasFile") else "requested"
             availability = Availability(
                 media_id=media.id, provider=provider, arr_id=remote.get("id"),
-                jellyfin_id=jellyfin_item.get("Id") if jellyfin_item else None,
                 state=state, progress_percent=progress_percent, last_error=last_error,
                 last_synced_at=datetime.now(timezone.utc),
             )
             if availability.arr_id is not None:
                 await self.store.clear_arr_id_conflict(provider, availability.arr_id, media.id)
             saved = await self.store.upsert_availability(availability)
-            if availability.state == "available" and availability.jellyfin_id:
-                available_at = datetime.now(timezone.utc)
-                size_bytes = remote.get("sizeOnDisk")
-                if not isinstance(size_bytes, (int, float)) or size_bytes < 0:
-                    size_bytes = None
-                await self.store.mark_rentals_available(
-                    media.id, available_at, available_at + timedelta(days=21),
-                    int(size_bytes) if size_bytes is not None else None,
-                )
-            if remote.get("hasFile") or availability.jellyfin_id:
+            if remote.get("hasFile"):
                 await self.store.update(media.id, {"support": "Serveur"})
             return saved
         except Exception:
@@ -173,6 +211,28 @@ class MediaServerService:
             return None
         return await self.jellyfin.fetch_playback_resource(availability.jellyfin_id, resource_path, query)
 
+    async def _enrich_media(self, media, media_type: str, tmdb):
+        if not tmdb or not media.tmdb_id or (media.cover_url and media.synopsis):
+            return media
+        try:
+            details = await tmdb.get_details(media.tmdb_id, is_series=media_type == "Série")
+            if details:
+                updates = {
+                    "cover_url": media.cover_url or tmdb.get_poster_url(details),
+                    "backdrop_url": media.backdrop_url or tmdb.get_backdrop_url(details),
+                    "synopsis": media.synopsis or details.get("overview") or None,
+                    "director": media.director or tmdb.get_director(details),
+                    "categories": media.categories or tmdb.get_genres(details),
+                    "cast": media.cast or tmdb.get_cast(details, limit=5),
+                    "release_date": media.release_date or details.get("release_date") or details.get("first_air_date") or None,
+                    "tmdb_ok": True,
+                }
+                await self.store.update(media.id, {key: value for key, value in updates.items() if value is not None})
+                return await self.store.fetch_one(media.id) or media
+        except Exception:
+            pass
+        return media
+
     async def import_existing_libraries(self) -> dict[str, int]:
         """Link already-managed Arr items to local TMDB-linked records."""
         medias = await self.store.fetch_all()
@@ -199,38 +259,50 @@ class MediaServerService:
                     })
                     medias.append(media)
                     created += 1
-                if tmdb and tmdb_id and (not media.cover_url or not media.synopsis):
-                    try:
-                        details = await tmdb.get_details(tmdb_id, is_series=media_type == "Série")
-                        if details:
-                            updates = {
-                                "cover_url": media.cover_url or tmdb.get_poster_url(details),
-                                "backdrop_url": media.backdrop_url or tmdb.get_backdrop_url(details),
-                                "synopsis": media.synopsis or details.get("overview") or None,
-                                "director": media.director or tmdb.get_director(details),
-                                "categories": media.categories or tmdb.get_genres(details),
-                                "cast": media.cast or tmdb.get_cast(details, limit=5),
-                                "release_date": media.release_date or details.get("release_date") or None,
-                                "tmdb_ok": True,
-                            }
-                            await self.store.update(media.id, {key: value for key, value in updates.items() if value is not None})
-                            media = await self.store.fetch_one(media.id) or media
-                    except Exception:
-                        pass
+                media = await self._enrich_media(media, media_type, tmdb)
                 await self.store.upsert_availability(Availability(
                     media_id=media.id, provider=provider, arr_id=remote.get("id"),
                     state="imported" if remote.get("hasFile") else "requested",
                     last_synced_at=datetime.now(timezone.utc),
                 ))
                 linked += 1
+        if self.jellyfin and hasattr(self.jellyfin, "list_library"):
+            try:
+                jellyfin_items = await self.jellyfin.list_library()
+            except Exception:
+                jellyfin_items = []
+            for item in jellyfin_items:
+                tmdb_id = item.get("tmdb_id")
+                media_type = item.get("media_type")
+                if not tmdb_id or media_type not in {"Film", "Série"}:
+                    continue
+                media = next((entry for entry in medias if entry.type == media_type and entry.tmdb_id == tmdb_id), None)
+                if not media:
+                    media = await self.store.create({
+                        "title": item.get("title") or "Sans titre", "type": media_type,
+                        "tmdb_id": tmdb_id, "tmdb_ok": True, "status": "À regarder",
+                    })
+                    medias.append(media)
+                    created += 1
+                media = await self._enrich_media(media, media_type, tmdb)
+                await self._save_jellyfin_availability(
+                    media, "sonarr" if media_type == "Série" else "radarr", item,
+                )
+                linked += 1
         return {"linked": linked, "created": created}
 
     async def sync_all(self) -> dict[str, int]:
         await self.import_existing_libraries()
+        jellyfin_items = None
+        if self.jellyfin and hasattr(self.jellyfin, "list_library"):
+            try:
+                jellyfin_items = await self.jellyfin.list_library()
+            except Exception:
+                jellyfin_items = None
         synced = 0
         for media in await self.store.fetch_all():
             if media.tmdb_id and media.type in {"Film", "Série"}:
-                if await self.sync_media(media.id):
+                if await self.sync_media(media.id, jellyfin_items=jellyfin_items):
                     synced += 1
         return {"synced": synced}
 

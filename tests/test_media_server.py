@@ -64,6 +64,39 @@ class FakeJellyfin:
         return f"https://jellyfin.test/Videos/{item_id}/master.m3u8"
 
 
+class FakeJellyfinLibrary:
+    def __init__(self, items=None, error=None):
+        self.items = items or []
+        self.error = error
+
+    async def list_library(self):
+        if self.error:
+            raise self.error
+        return self.items
+
+    async def find_by_tmdb(self, tmdb_id, media_type):
+        item = next((item for item in self.items if item["tmdb_id"] == tmdb_id and item["media_type"] == media_type), None)
+        return {"Id": item["jellyfin_id"]} if item else None
+
+
+class FakeRadarrWithoutJellyfinMatch(FakeRadarr):
+    async def list_library(self):
+        return []
+
+
+class FailingArr:
+    async def list_library(self):
+        raise httpx.HTTPError("radarr offline")
+
+    async def list_queue(self):
+        raise httpx.HTTPError("radarr offline")
+
+
+class FailingJellyfin(FakeJellyfinLibrary):
+    def __init__(self):
+        super().__init__(error=httpx.HTTPError("jellyfin offline"))
+
+
 class FakePlaybackJellyfin(FakeJellyfin):
     error = None
 
@@ -268,6 +301,96 @@ def test_import_creates_missing_film_with_tmdb_poster_and_metadata(tmp_path, mon
     imported = asyncio.run(store.fetch_all())[0]
     assert imported.cover_url == "https://image.tmdb.org/t/p/w500/dune.jpg"
     assert imported.synopsis == "Une histoire de sable."
+
+
+def test_import_creates_missing_series_from_jellyfin(tmp_path, monkeypatch):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+
+    class FakeTMDB:
+        async def get_details(self, tmdb_id, is_series=False):
+            assert tmdb_id == 1399
+            assert is_series is True
+            return {
+                "name": "Game of Thrones", "first_air_date": "2011-04-17",
+                "overview": "Westeros.", "poster_path": "/poster.jpg",
+                "backdrop_path": "/backdrop.jpg", "genres": [{"name": "Drame"}],
+                "credits": {"cast": [{"name": "Acteur"}], "crew": []},
+            }
+
+        def get_poster_url(self, details):
+            return "https://image.tmdb.org/t/p/w500/poster.jpg"
+
+        def get_backdrop_url(self, details):
+            return "https://image.tmdb.org/t/p/w1280/backdrop.jpg"
+
+        def get_genres(self, details):
+            return ["Drame"]
+
+        def get_cast(self, details, limit=5):
+            return ["Acteur"]
+
+        def get_director(self, details):
+            return "Créateur"
+
+    monkeypatch.setattr(media_server_module, "TMDBClient", FakeTMDB)
+    jellyfin = FakeJellyfinLibrary([{
+        "jellyfin_id": "series-1", "tmdb_id": 1399, "title": "Game of Thrones",
+        "media_type": "Série", "year": 2011, "overview": "Westeros.",
+        "poster_tag": None, "backdrop_tag": None,
+    }])
+    service = MediaServerService(store, jellyfin=jellyfin)
+
+    summary = asyncio.run(service.import_existing_libraries())
+
+    media = asyncio.run(store.fetch_all())[0]
+    availability = asyncio.run(store.get_availability(media.id))
+    assert summary["created"] == 1
+    assert media.type == "Série"
+    assert media.tmdb_id == 1399
+    assert media.cover_url.endswith("poster.jpg")
+    assert availability.state == "available"
+    assert availability.jellyfin_id == "series-1"
+
+
+def test_jellyfin_presence_overrides_stale_arr_state(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    media = asyncio.run(store.create({
+        "id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631,
+    }))
+    asyncio.run(store.upsert_availability(Availability(
+        media_id=media.id, provider="radarr", arr_id=42, state="imported",
+    )))
+    service = MediaServerService(
+        store,
+        radarr=FakeRadarrWithoutJellyfinMatch(),
+        jellyfin=FakeJellyfinLibrary([{
+            "jellyfin_id": "jelly-dune", "tmdb_id": 438631, "title": "Dune",
+            "media_type": "Film", "year": 2021, "overview": "Sable.",
+            "poster_tag": None, "backdrop_tag": None,
+        }]),
+    )
+
+    result = asyncio.run(service.sync_media(media.id))
+
+    assert result.state == "available"
+    assert result.jellyfin_id == "jelly-dune"
+
+
+def test_sync_media_keeps_existing_state_when_jellyfin_is_unavailable(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    existing = Availability(media_id="dune", provider="radarr", state="downloading", progress_percent=42)
+    asyncio.run(store.upsert_availability(existing))
+    service = MediaServerService(store, radarr=FailingArr(), jellyfin=FailingJellyfin())
+
+    result = asyncio.run(service.sync_media("dune"))
+
+    assert result.state == "downloading"
+    assert result.progress_percent == 42
+    assert result.last_error == "Synchronisation indisponible"
 
 
 def test_sync_all_imports_remote_library_items_before_syncing(tmp_path):
