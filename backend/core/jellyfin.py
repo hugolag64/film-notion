@@ -105,6 +105,58 @@ class JellyfinClient:
                 }
         return list(normalized.values())
 
+    async def list_library(self) -> list[dict[str, Any]]:
+        """Return TMDB-linked movies and series present in Jellyfin."""
+        client = self.client or http.get_client()
+        limit = 1000
+        start_index = 0
+        normalized: list[dict[str, Any]] = []
+
+        while True:
+            response = await client.get(
+                f"{self.base_url}/Items",
+                headers={"X-Emby-Token": self.api_key},
+                params={
+                    "IncludeItemTypes": "Movie,Series",
+                    "Recursive": "true",
+                    "Fields": "ProviderIds,Overview,ProductionYear,ImageTags,BackdropImageTags",
+                    "Limit": limit,
+                    "StartIndex": start_index,
+                },
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            items = payload.get("Items", []) if isinstance(payload, dict) else []
+            if not isinstance(items, list):
+                raise ValueError("invalid Jellyfin library response")
+
+            for item in items:
+                if not isinstance(item, dict) or not item.get("Id"):
+                    continue
+                if item.get("Type") not in {"Movie", "Series"}:
+                    continue
+                provider_ids = item.get("ProviderIds") or {}
+                raw_tmdb_id = provider_ids.get("Tmdb")
+                if not str(raw_tmdb_id or "").isdigit():
+                    continue
+                normalized.append({
+                    "jellyfin_id": str(item["Id"]),
+                    "tmdb_id": int(raw_tmdb_id),
+                    "title": str(item.get("Name") or item["Id"]),
+                    "media_type": "Série" if item.get("Type") == "Series" else "Film",
+                    "year": item.get("ProductionYear"),
+                    "overview": item.get("Overview") or None,
+                    "poster_tag": (item.get("ImageTags") or {}).get("Primary"),
+                    "backdrop_tag": (item.get("BackdropImageTags") or {}).get("Backdrop"),
+                })
+
+            if len(items) < limit:
+                break
+            start_index += len(items)
+
+        return normalized
+
     async def find_by_tmdb(self, tmdb_id: int, media_type: str) -> Optional[dict[str, Any]]:
         item_type = "Series" if media_type == "Série" else "Movie"
         client = self.client or http.get_client()
