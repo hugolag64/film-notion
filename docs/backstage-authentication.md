@@ -66,6 +66,20 @@ Pour publier une nouvelle version :
 4. attendre l’état `running` ;
 5. vérifier `http://192.168.1.5:8090/health`.
 
+Dans les variables de la stack Portainer, Radarr, Sonarr et Jellyfin sont des
+services externes au conteneur Backstage. Utiliser `host.docker.internal` (ou
+l’adresse IP/DNS du serveur qui les héberge), par exemple :
+
+```env
+RADARR_URL=http://host.docker.internal:7878
+SONARR_URL=http://host.docker.internal:8989
+JELLYFIN_URL=http://host.docker.internal:8096
+```
+
+`127.0.0.1` dans le conteneur désigne Backstage lui-même et empêche la
+synchronisation Jellyfin. Si ces services sont dans un autre réseau Docker,
+utiliser leurs noms de service à la place.
+
 Les tables `users` et `auth_sessions`, ainsi que la colonne de liaison Jellyfin, sont ajoutées automatiquement. Elles ne modifient pas les tables `media`, `episode` et `media_availability`.
 
 ## Récupération d’une session

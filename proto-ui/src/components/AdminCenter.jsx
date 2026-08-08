@@ -18,6 +18,17 @@ function formatDate(value) {
     return new Date(value).toLocaleString('fr-FR');
 }
 
+function availabilityLabel(state) {
+    return {
+        requested: 'Demandé',
+        searching: 'Recherche',
+        downloading: 'Téléchargement',
+        imported: 'Téléchargé — Jellyfin non confirmé',
+        available: 'Disponible sur Jellyfin',
+        error: 'Erreur',
+    }[state] || state;
+}
+
 export default function AdminCenter({isDarkMode, onClose, onMediaChanged}) {
     const {user} = useAuth();
     const [section, setSection] = useState('overview');
@@ -190,7 +201,7 @@ export default function AdminCenter({isDarkMode, onClose, onMediaChanged}) {
                                     </div>
                                 </div>}
 
-                                {section === 'activity' && <div className="space-y-4"><div className="flex flex-wrap gap-2"><button type="button" className="rounded-lg bg-[#635bff] px-3 py-2 text-xs font-semibold text-white" onClick={syncAndRefresh} disabled={refreshing}>Synchroniser les services</button><button type="button" className="rounded-lg border px-3 py-2 text-xs font-semibold" onClick={importAndRefresh} disabled={refreshing}>Importer la bibliothèque</button></div><div className="space-y-2">{(activity?.items || []).length === 0 && <p className={muted}>Aucune activité serveur.</p>}{(activity?.items || []).map((item) => <div key={`${item.provider}-${item.media_id}`} className={`rounded-xl border p-4 ${card}`}><div className="flex flex-wrap items-center justify-between gap-2"><strong>{item.title || item.media_id}</strong><span className={`text-xs font-semibold ${item.state === 'error' ? 'text-rose-500' : 'text-[#635bff]'}`}>{item.state}</span></div><p className={`mt-1 text-xs ${muted}`}>{item.provider}{item.progress_percent != null ? ` · ${item.progress_percent}%` : ''}{item.last_synced_at ? ` · ${formatDate(item.last_synced_at)}` : ''}</p>{item.last_error && <p className="mt-2 text-xs text-rose-500">{item.last_error}</p>}</div>)}</div></div>}
+                                {section === 'activity' && <div className="space-y-4"><div className="flex flex-wrap gap-2"><button type="button" className="rounded-lg bg-[#635bff] px-3 py-2 text-xs font-semibold text-white" onClick={syncAndRefresh} disabled={refreshing}>Synchroniser les services</button><button type="button" className="rounded-lg border px-3 py-2 text-xs font-semibold" onClick={importAndRefresh} disabled={refreshing}>Importer la bibliothèque</button></div><div className="space-y-2">{(activity?.items || []).length === 0 && <p className={muted}>Aucune activité serveur.</p>}{(activity?.items || []).map((item) => <div key={`${item.provider}-${item.media_id}`} className={`rounded-xl border p-4 ${card}`}><div className="flex flex-wrap items-center justify-between gap-2"><strong>{item.title || item.media_id}</strong><span className={`text-xs font-semibold ${item.state === 'error' ? 'text-rose-500' : 'text-[#635bff]'}`}>{availabilityLabel(item.state)}</span></div><p className={`mt-1 text-xs ${muted}`}>{item.media_type || 'Média'} · {item.provider}{item.progress_percent != null ? ` · ${item.progress_percent}%` : ''}{item.last_synced_at ? ` · ${formatDate(item.last_synced_at)}` : ''}</p>{item.last_error && <p className="mt-2 text-xs text-rose-500">{item.last_error}</p>}</div>)}</div></div>}
 
                                 {section === 'requests' && <div className="space-y-3"><h3 className="text-lg font-semibold">Demandes de conservation</h3>{keepRequests.length === 0 && <p className={`rounded-lg border p-3 text-sm ${muted}`}>Aucune demande en attente.</p>}{keepRequests.map((item) => <div key={item.rental.id} className={`rounded-xl border p-4 ${card}`}><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-semibold">{item.media_title}</p><p className={`mt-1 text-xs ${muted}`}>{item.requester_name} · expire le {formatDate(item.rental.expires_at)}</p></div><div className="flex flex-wrap gap-2"><button type="button" className="rounded bg-emerald-600 px-2 py-1 text-xs font-semibold text-white" onClick={() => handleRetentionAction(item.rental.id, acceptKeepRequest, 'Film conservé définitivement.')}>Conserver</button><button type="button" className="rounded border border-rose-500 px-2 py-1 text-xs text-rose-500" onClick={() => handleRetentionAction(item.rental.id, refuseKeepRequest, 'Demande refusée.')}>Refuser</button><button type="button" className="rounded border border-[#635bff] px-2 py-1 text-xs text-[#635bff]" onClick={() => handleRetentionAction(item.rental.id, extendRental, 'Location prolongée de 7 jours.')}>Prolonger</button></div></div></div>)}</div>}
 

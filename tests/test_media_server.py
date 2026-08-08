@@ -411,11 +411,31 @@ async def _async_result(value):
 def test_activity_returns_availability_items_and_disks(tmp_path):
     store = MediaStore(str(tmp_path / "test.db"))
     store.init_schema()
+    media = asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    asyncio.run(store.upsert_availability(Availability(
+        media_id=media.id, provider="radarr", arr_id=42, state="imported",
+    )))
     service = MediaServerService(store, radarr=FakeRadarr())
 
     activity = asyncio.run(service.activity())
 
     assert set(activity) == {"items", "disks"}
+    assert activity["items"][0]["title"] == "Dune"
+    assert activity["items"][0]["media_type"] == "Film"
+    assert activity["items"][0]["tmdb_id"] == 438631
+
+
+def test_sync_records_when_radarr_has_file_but_jellyfin_is_unavailable(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    media = asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    service = MediaServerService(store, radarr=FakeRadarr(), jellyfin=FailingJellyfin())
+
+    availability = asyncio.run(service.sync_media(media.id))
+
+    assert availability.state == "imported"
+    assert availability.jellyfin_id is None
+    assert availability.last_error == "Jellyfin indisponible"
 
 
 def test_storage_status_uses_data_disk_and_active_temporary_bytes(tmp_path):

@@ -328,20 +328,23 @@ export async function fetchMediaServerStatus() {
 
 export async function syncMediaServer() {
     const response = await fetch(`${API_BASE_URL}/media-server/sync`, {method: 'POST'});
-    if (!response.ok) throw new Error((await response.json()).detail || 'Synchronisation impossible');
-    return response.json();
+    const body = await readResponseBody(response);
+    if (!response.ok) throw new Error(body?.detail || 'Synchronisation impossible');
+    return body;
 }
 
 export async function importMediaServerLibrary() {
     const response = await fetch(`${API_BASE_URL}/media-server/import`, {method: 'POST'});
-    if (!response.ok) throw new Error((await response.json()).detail || 'Import impossible');
-    return response.json();
+    const body = await readResponseBody(response);
+    if (!response.ok) throw new Error(body?.detail || 'Import impossible');
+    return body;
 }
 
 export async function fetchMediaServerActivity() {
     const response = await fetch(`${API_BASE_URL}/media-server/activity`);
-    if (!response.ok) throw new Error((await response.json()).detail || 'Activité indisponible');
-    return response.json();
+    const body = await readResponseBody(response);
+    if (!response.ok) throw new Error(body?.detail || 'Activité indisponible');
+    return body;
 }
 
 export async function syncPlayback() {
