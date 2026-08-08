@@ -351,6 +351,12 @@ def test_regular_user_can_submit_an_acquisition_request(tmp_path, monkeypatch):
         store = MediaStore(Config.DB_PATH)
         calls = []
 
+        async def acquisition_defaults(self, media):
+            return {
+                "quality_profile_id": 5, "root_folder": "/media/movies",
+                "language_profile_id": None, "monitor": "all",
+            }
+
         async def add(self, media, quality_profile_id, root_folder, language_profile_id, monitor):
             self.calls.append((media.id, quality_profile_id, root_folder))
             return Availability(media_id=media.id, provider="radarr", state="requested")
@@ -368,6 +374,76 @@ def test_regular_user_can_submit_an_acquisition_request(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert service.calls == [("dune", 5, "/media/movies")]
+
+
+def test_non_admin_acquisition_rejects_a_non_default_quality_profile(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    client.post("/api/auth/users", json={
+        "display_name": "Paul", "email": "paul@example.com", "password": "12345678",
+    })
+    media = asyncio.run(MediaStore(Config.DB_PATH).create({
+        "id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631,
+    }))
+
+    class RecordingService:
+        store = MediaStore(Config.DB_PATH)
+        add_calls = []
+
+        async def acquisition_defaults(self, media):
+            return {
+                "quality_profile_id": 9, "root_folder": "/media/movies",
+                "language_profile_id": None, "monitor": "all",
+            }
+
+        async def add(self, *args):
+            self.add_calls.append(args)
+            return Availability(media_id=media.id, provider="radarr", state="requested")
+
+    service = RecordingService()
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: service
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={
+        "email": "paul@example.com", "password": "12345678", "remember_device": False,
+    })
+
+    response = client.post(f"/api/medias/{media.id}/acquisition", json={
+        "quality_profile_id": 4, "root_folder": "/media/movies",
+    })
+
+    assert response.status_code == 422
+    assert "1080 FR - max 10go" in response.json()["detail"]
+    assert service.add_calls == []
+
+
+def test_availability_read_refreshes_the_targeted_media(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    media = asyncio.run(MediaStore(Config.DB_PATH).create({
+        "id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631,
+    }))
+
+    class RecordingService:
+        store = MediaStore(Config.DB_PATH)
+        synced_media_ids = []
+
+        async def sync_media(self, media_id):
+            self.synced_media_ids.append(media_id)
+            return await self.store.upsert_availability(Availability(
+                media_id=media_id, provider="radarr", state="available", jellyfin_id="jelly-dune",
+            ))
+
+        async def playback_url(self, media_id):
+            return None
+
+    service = RecordingService()
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: service
+
+    response = client.get(f"/api/medias/{media.id}/availability")
+
+    assert response.status_code == 200
+    assert service.synced_media_ids == ["dune"]
+    assert response.json()["availability"]["state"] == "available"
 
 
 def test_admin_acquisition_is_permanent_and_creates_no_rental(tmp_path, monkeypatch):

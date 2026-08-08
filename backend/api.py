@@ -1362,6 +1362,7 @@ async def get_availability(
     service: MediaServerService = Depends(get_media_server_service),
 ):
     await _ensure_playback_access(current, media_id, service.store)
+    await service.sync_media(media_id)
     availability = await service.store.get_availability(media_id)
     playback_url = await service.playback_url(media_id)
     return {"availability": availability, "playback_url": playback_url}
@@ -1426,6 +1427,18 @@ async def request_acquisition(
     if not media.tmdb_id:
         raise HTTPException(status_code=409, detail="Associez d'abord ce média à TMDB")
     is_admin = current.user.get("role") == "admin"
+    if not is_admin and media.type == "Film" and hasattr(service, "acquisition_defaults"):
+        defaults = await service.acquisition_defaults(media)
+        default_profile_id = defaults.get("quality_profile_id")
+        if default_profile_id is not None and payload.quality_profile_id not in {None, default_profile_id}:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Les utilisateurs non-admin doivent utiliser le profil {Config.RADARR_DEFAULT_QUALITY_PROFILE_NAME}",
+            )
+        payload = payload.model_copy(update={
+            "quality_profile_id": payload.quality_profile_id or default_profile_id,
+            "root_folder": payload.root_folder or defaults.get("root_folder"),
+        })
     owner_id = current.user["id"]
     if not is_admin:
         existing_rental = await service.store.find_active_rental(owner_id, media_id)
@@ -1618,12 +1631,27 @@ async def mark_notification_read(
 @router.get("/media-server/options")
 async def media_server_options(
     media_type: str,
+    current: AuthContext = Depends(get_current_user),
     service: MediaServerService = Depends(get_media_server_service),
 ):
     client = service.sonarr if media_type == "Série" else service.radarr
     if not client:
         raise HTTPException(status_code=503, detail="Service non configuré")
-    return await client.list_options()
+    options = await client.list_options()
+    if media_type == "Film":
+        profile_name = Config.RADARR_DEFAULT_QUALITY_PROFILE_NAME
+        default_profile = next(
+            (item for item in options.get("quality_profiles", []) if item.get("name") == profile_name),
+            None,
+        )
+        options = {
+            **options,
+            "default_quality_profile_id": default_profile.get("id") if default_profile else None,
+            "default_quality_profile_name": profile_name,
+        }
+        if current.user.get("role") != "admin":
+            options["quality_profiles"] = [default_profile] if default_profile else []
+    return options
 
 
 @router.post("/media-server/sync", dependencies=[Depends(require_admin)])

@@ -8,7 +8,7 @@ from backend.core.media_server import Availability, MediaServerService
 from backend.core.models import Rental
 from backend.core.models import Notification
 from backend.core.store import MediaStore
-from backend.core.scheduler import notify_automatic_events
+from backend.core.scheduler import notify_automatic_events, should_sync_media_servers
 from backend.config import Config
 
 
@@ -562,3 +562,10 @@ def test_playback_sync_error_does_not_erase_existing_state(tmp_path):
     else:
         raise AssertionError("Jellyfin error should be visible to the API layer")
     assert asyncio.run(service.playback_summary("hugo"))["resume"][0].percent == 50
+
+
+def test_scheduler_syncs_when_only_jellyfin_is_configured(monkeypatch):
+    monkeypatch.setattr(Config, "media_server_enabled", classmethod(lambda cls: False))
+    monkeypatch.setattr(Config, "jellyfin_enabled", classmethod(lambda cls: True))
+
+    assert should_sync_media_servers() is True
