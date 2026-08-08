@@ -76,6 +76,19 @@ def test_storage_quota_controls_are_visible():
     assert "fetchStorageStatus" in api
 
 
+def test_storage_cleanup_controls_are_admin_only_and_explicit():
+    admin = ADMIN_SOURCE.read_text(encoding="utf-8")
+    api = API_SOURCE.read_text(encoding="utf-8")
+
+    assert "Libérer de l’espace" in admin
+    assert "Supprimer du disque" in admin
+    assert "La fiche Backstage sera conservée." in admin
+    assert "window.confirm" in admin
+    assert "fetchStorageCandidates" in api
+    assert "setStorageProtection" in api
+    assert "deleteStorageCandidate" in api
+
+
 def test_admin_dashboard_controls_are_visible():
     admin = ADMIN_SOURCE.read_text(encoding="utf-8")
     api = API_SOURCE.read_text(encoding="utf-8")

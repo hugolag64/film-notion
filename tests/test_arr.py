@@ -35,6 +35,28 @@ def test_radarr_add_movie_posts_tmdb_profile_and_root():
     }
 
 
+def test_radarr_delete_movie_removes_files_without_import_exclusion():
+    captured = {}
+
+    async def handler(request):
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["query"] = dict(request.url.params)
+        return httpx.Response(204)
+
+    async def run():
+        async with _client(handler) as client:
+            result = await RadarrClient("http://127.0.0.1:7878", "secret", client).delete_movie(42)
+        assert result == {}
+
+    asyncio.run(run())
+    assert captured == {
+        "method": "DELETE",
+        "path": "/api/v3/movie/42",
+        "query": {"deleteFiles": "true", "addImportExclusion": "false"},
+    }
+
+
 def test_sonarr_rejects_unknown_monitor_value():
     async def run():
         async with _client(lambda request: httpx.Response(200, json={})) as client:

@@ -16,7 +16,7 @@ from backend.config import Config
 from backend.core.auth import AuthStore
 from backend.core.store import MediaStore
 from backend.core.models import Rental
-from backend.core.media_server import Availability
+from backend.core.media_server import Availability, StorageCandidate
 from backend.core.arr import MediaServerError
 from backend.core.rate_limit import RateLimiter
 
@@ -715,6 +715,44 @@ def test_storage_status_is_admin_only(tmp_path, monkeypatch):
         "email": "paul@example.com", "password": "12345678", "remember_device": False,
     })
     assert client.get("/api/admin/storage/status").status_code == 403
+
+
+def test_storage_cleanup_routes_are_admin_only_and_support_protection(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    candidate = StorageCandidate(
+        media_id="film-1", title="Film 1", tmdb_id=1, radarr_id=42,
+        size_bytes=2 * 1024**3,
+    )
+
+    class CleanupService:
+        async def storage_candidates(self):
+            return [candidate]
+
+        async def set_storage_protection(self, media_id, protected):
+            assert media_id == "film-1"
+            return True
+
+        async def delete_storage_candidate(self, media_id, admin_user_id):
+            assert media_id == "film-1"
+            assert admin_user_id
+            return {"media_id": media_id, "freed_bytes": candidate.size_bytes}
+
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: CleanupService()
+    assert client.get("/api/admin/storage/candidates").json()["candidates"][0]["title"] == "Film 1"
+    assert client.post("/api/admin/storage/candidates/film-1/protection", json={"protected": True}).status_code == 200
+    assert client.delete("/api/admin/storage/candidates/film-1").status_code == 200
+
+    client.post("/api/auth/users", json={
+        "display_name": "Paul", "email": "paul@example.com", "password": "12345678",
+    })
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={
+        "email": "paul@example.com", "password": "12345678", "remember_device": False,
+    })
+    assert client.get("/api/admin/storage/candidates").status_code == 403
+    assert client.post("/api/admin/storage/candidates/film-1/protection", json={"protected": True}).status_code == 403
+    assert client.delete("/api/admin/storage/candidates/film-1").status_code == 403
 
 
 def test_admin_dashboard_summarizes_rentals_downloads_and_errors(tmp_path, monkeypatch):

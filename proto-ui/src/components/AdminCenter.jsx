@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { acceptKeepRequest, createBackup, extendRental, fetchAdminDashboard, fetchBackupStatus, fetchCleanupPreview, fetchKeepRequests, fetchMediaServerActivity, fetchMediaServerStatus, fetchStorageStatus, fetchUsers, refuseKeepRequest, verifyBackup, importMediaServerLibrary, syncMediaServer } from '../api';
+import { acceptKeepRequest, createBackup, deleteStorageCandidate, extendRental, fetchAdminDashboard, fetchBackupStatus, fetchCleanupPreview, fetchKeepRequests, fetchMediaServerActivity, fetchMediaServerStatus, fetchStorageOverview, fetchStorageStatus, fetchUsers, refuseKeepRequest, setStorageProtection, verifyBackup, importMediaServerLibrary, syncMediaServer } from '../api';
 import { useAuth } from '../auth-context';
 import UserManagement from './UserManagement';
 
@@ -29,6 +29,64 @@ function availabilityLabel(state) {
     }[state] || state;
 }
 
+function formatBytes(value) {
+    if (!value) return '0 octet';
+    const units = ['octets', 'Ko', 'Mo', 'Go', 'To'];
+    let amount = value;
+    let unit = 0;
+    while (amount >= 1024 && unit < units.length - 1) {
+        amount /= 1024;
+        unit += 1;
+    }
+    return `${amount >= 10 || unit === 0 ? Math.round(amount) : amount.toFixed(1)} ${units[unit]}`;
+}
+
+const protectionLabels = {
+    favorite: 'Favori',
+    active_rental: 'Location active',
+    recently_added: 'Ajouté il y a moins de 14 jours',
+    recently_watched: 'Visionné il y a moins de 30 jours',
+    manual: 'Protection manuelle',
+};
+
+function StorageCleanup({candidates, history, card, muted, onChanged, onError, onNotice}) {
+    const [busyId, setBusyId] = useState(null);
+    const [filter, setFilter] = useState('all');
+    const visibleCandidates = candidates.filter((candidate) => filter === 'all' || (filter === 'protected' ? candidate.protected : !candidate.protected));
+
+    const toggleProtection = async (candidate) => {
+        try {
+            setBusyId(candidate.media_id);
+            await setStorageProtection(candidate.media_id, !candidate.protection_reasons.includes('manual'));
+            await onChanged();
+        } catch (requestError) {
+            onError(requestError.message);
+        } finally {
+            setBusyId(null);
+        }
+    };
+
+    const removeCandidate = async (candidate) => {
+        if (candidate.protected || !window.confirm(`Supprimer « ${candidate.title} » de Radarr et du disque ?\n\nEspace libéré estimé : ${formatBytes(candidate.size_bytes)}\nLa fiche Backstage sera conservée.`)) return;
+        try {
+            setBusyId(candidate.media_id);
+            const result = await deleteStorageCandidate(candidate.media_id);
+            onNotice(`${candidate.title} supprimé. ${formatBytes(result.freed_bytes)} libérés.`);
+            await onChanged();
+        } catch (requestError) {
+            onError(requestError.message);
+        } finally {
+            setBusyId(null);
+        }
+    };
+
+    return <div className={`rounded-xl border p-4 ${card}`}>
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-lg font-semibold">Libérer de l’espace</h3><p className={`mt-1 text-sm ${muted}`}>Films présents sur le disque. Les protections empêchent toute suppression accidentelle.</p></div><div className="flex items-center gap-2"><select className="rounded border bg-transparent px-2 py-1 text-xs" value={filter} onChange={(event) => setFilter(event.target.value)} aria-label="Filtrer le nettoyage"><option value="all">Tous</option><option value="protected">Protégés</option><option value="deletable">Supprimables</option></select><button type="button" className="rounded border px-2 py-1 text-xs" onClick={onChanged}>Actualiser</button></div></div>
+        {visibleCandidates.length === 0 ? <p className={`mt-4 rounded-lg border p-3 text-sm ${muted}`}>Aucun film dans ce filtre.</p> : <div className="mt-4 space-y-2">{visibleCandidates.map((candidate) => <div key={candidate.media_id} className="rounded-lg border p-3"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-semibold">{candidate.title}</p><p className={`mt-1 text-xs ${muted}`}>{formatBytes(candidate.size_bytes)}{candidate.last_played_at ? ` · dernière lecture ${formatDate(candidate.last_played_at)}` : ''}{candidate.added_at ? ` · ajouté le ${formatDate(candidate.added_at)}` : ''}</p></div><span className={candidate.protected ? 'text-xs font-semibold text-amber-600' : 'text-xs font-semibold text-emerald-600'}>{candidate.protected ? 'Protégé' : 'Supprimable'}</span></div>{candidate.protected && <p className={`mt-2 text-xs ${muted}`}>{candidate.protection_reasons.map((reason) => protectionLabels[reason] || reason).join(' · ')}</p>}<div className="mt-3 flex flex-wrap gap-2"><button type="button" className="rounded border px-2 py-1 text-xs" onClick={() => toggleProtection(candidate)} disabled={busyId === candidate.media_id}>{candidate.protection_reasons.includes('manual') ? 'Retirer la protection' : 'Protéger manuellement'}</button><button type="button" className="rounded bg-rose-600 px-2 py-1 text-xs font-semibold text-white disabled:opacity-50" onClick={() => removeCandidate(candidate)} disabled={busyId === candidate.media_id || candidate.protected}>{busyId === candidate.media_id ? 'Opération…' : 'Supprimer du disque'}</button></div></div>)}</div>}
+        {history.length > 0 && <div className="mt-5"><h4 className="text-sm font-semibold">Historique des suppressions</h4><div className="mt-2 space-y-1">{history.slice(0, 5).map((entry) => <p key={entry.id} className={`text-xs ${muted}`}>{entry.media_title} · {formatBytes(entry.size_bytes)} · {formatDate(entry.deleted_at)}</p>)}</div></div>}
+    </div>;
+}
+
 export default function AdminCenter({isDarkMode, onClose, onMediaChanged}) {
     const {user} = useAuth();
     const [section, setSection] = useState('overview');
@@ -37,6 +95,8 @@ export default function AdminCenter({isDarkMode, onClose, onMediaChanged}) {
     const [keepRequests, setKeepRequests] = useState([]);
     const [users, setUsers] = useState([]);
     const [storage, setStorage] = useState(null);
+    const [storageCandidates, setStorageCandidates] = useState([]);
+    const [storageCleanupHistory, setStorageCleanupHistory] = useState([]);
     const [services, setServices] = useState(null);
     const [backupStatus, setBackupStatus] = useState(null);
     const [cleanupPreview, setCleanupPreview] = useState(null);
@@ -51,7 +111,7 @@ export default function AdminCenter({isDarkMode, onClose, onMediaChanged}) {
     const load = useCallback(async () => {
         try {
             setError('');
-            const [nextDashboard, nextActivity, nextKeepRequests, nextUsers, nextStorage, nextServices, nextBackup] = await Promise.all([
+            const [nextDashboard, nextActivity, nextKeepRequests, nextUsers, nextStorage, nextServices, nextBackup, nextStorageOverview] = await Promise.all([
                 fetchAdminDashboard(),
                 fetchMediaServerActivity(),
                 fetchKeepRequests(),
@@ -59,6 +119,7 @@ export default function AdminCenter({isDarkMode, onClose, onMediaChanged}) {
                 fetchStorageStatus(),
                 fetchMediaServerStatus(),
                 fetchBackupStatus().catch(() => null),
+                fetchStorageOverview().catch(() => ({candidates: [], history: []})),
             ]);
             setDashboard(nextDashboard);
             setActivity(nextActivity);
@@ -67,6 +128,8 @@ export default function AdminCenter({isDarkMode, onClose, onMediaChanged}) {
             setStorage(nextStorage);
             setServices(nextServices);
             setBackupStatus(nextBackup);
+            setStorageCandidates(nextStorageOverview.candidates || []);
+            setStorageCleanupHistory(nextStorageOverview.history || []);
         } catch (requestError) {
             setError(requestError.message || 'Impossible de charger le centre d’administration.');
         } finally {
@@ -207,7 +270,7 @@ export default function AdminCenter({isDarkMode, onClose, onMediaChanged}) {
 
                                 {section === 'users' && <UserManagement isDarkMode={isDarkMode} currentUser={user} onError={setError} onNotice={setNotice} onChanged={load} />}
 
-                                {section === 'storage' && <div className="space-y-4"><h3 className="text-lg font-semibold">Stockage et quotas</h3><div className={`rounded-xl border p-4 ${card}`}>{storage ? <><p className="text-sm">Espace temporaire : {storage.temporary_gb} Go / {storage.temporary_max_gb} Go</p><p className={`mt-1 text-sm ${muted}`}>Espace libre : {storage.min_free_gb ?? '—'} Go · seuil : {storage.min_free_threshold_gb ?? '—'} Go</p></> : <p className={muted}>État du stockage indisponible.</p>}</div>{(dashboard?.quotas || []).map((quota) => <div key={quota.user_id} className={`rounded-xl border p-4 ${card}`}><p className="font-semibold">{quota.display_name}</p><p className={`mt-1 text-xs ${muted}`}>{quota.active_rentals}/{quota.max_active_rentals} locations · {quota.temporary_bytes} octets temporaires</p></div>)}</div>}
+                                {section === 'storage' && <div className="space-y-4"><h3 className="text-lg font-semibold">Stockage et quotas</h3><div className={`rounded-xl border p-4 ${card}`}>{storage ? <><p className="text-sm">Espace temporaire : {storage.temporary_gb} Go / {storage.temporary_max_gb} Go</p><p className={`mt-1 text-sm ${muted}`}>Espace libre : {storage.min_free_gb ?? '—'} Go · seuil : {storage.min_free_threshold_gb ?? '—'} Go</p></> : <p className={muted}>État du stockage indisponible.</p>}</div>{(dashboard?.quotas || []).map((quota) => <div key={quota.user_id} className={`rounded-xl border p-4 ${card}`}><p className="font-semibold">{quota.display_name}</p><p className={`mt-1 text-xs ${muted}`}>{quota.active_rentals}/{quota.max_active_rentals} locations · {quota.temporary_bytes} octets temporaires</p></div>)}<StorageCleanup candidates={storageCandidates} history={storageCleanupHistory} card={card} muted={muted} onChanged={load} onError={setError} onNotice={setNotice} /></div>}
 
                                 {section === 'services' && <div className="grid gap-3 sm:grid-cols-2">{Object.entries(services || {}).map(([name, status]) => <div key={name} className={`rounded-xl border p-4 ${card}`}><p className="font-semibold capitalize">{name}</p><p className={`mt-2 text-sm ${status.configured ? 'text-emerald-500' : muted}`}>{status.configured ? 'Configuré' : 'Non configuré'}</p></div>)}</div>}
 

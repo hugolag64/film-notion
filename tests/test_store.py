@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from backend.core.store import MediaStore
 from backend.core.media_server import Availability
 from backend.core.models import Notification, Rental
+from backend.core.playback import PlaybackProgress
 
 
 def _store(tmp_path) -> MediaStore:
@@ -314,3 +315,43 @@ def test_series_rental_scope_is_persisted(tmp_path):
     rental = asyncio.run(store.get_rental("series-rental"))
 
     assert rental.rental_scope == "series"
+
+
+def test_storage_context_collects_protections_across_users(tmp_path):
+    store = _store(tmp_path)
+    favorite = asyncio.run(store.create({"id": "favorite", "title": "Favorite", "type": "Film"}))
+    rental = asyncio.run(store.create({"id": "rental", "title": "Rental", "type": "Film"}))
+    watched = asyncio.run(store.create({"id": "watched", "title": "Watched", "type": "Film"}))
+    manual = asyncio.run(store.create({"id": "manual", "title": "Manual", "type": "Film"}))
+    now = datetime.now(timezone.utc)
+    asyncio.run(store.upsert_user_media_state("ophelie", favorite.id, {"is_favorite": True}))
+    asyncio.run(store.create_rental(Rental(
+        id="storage-rental", media_id=rental.id, backstage_user_id="hugo", status="available",
+        requested_at=now, created_at=now, updated_at=now,
+    )))
+    asyncio.run(store.upsert_playback(PlaybackProgress(
+        backstage_user_id="hugo", jellyfin_id="jf-watched", media_id=watched.id,
+        title="Watched", last_played_at=now - timedelta(days=2),
+    )))
+    assert asyncio.run(store.set_storage_protection(manual.id, True)) is True
+
+    context = asyncio.run(store.storage_context(now - timedelta(days=30)))
+
+    assert favorite.id in context["favorite_media_ids"]
+    assert rental.id in context["rental_media_ids"]
+    assert watched.id in context["recent_playback"]
+    assert manual.id in context["protected_media_ids"]
+
+
+def test_storage_protection_and_cleanup_log_survive_store_reopen(tmp_path):
+    store = _store(tmp_path)
+    media = asyncio.run(store.create({"id": "logged", "title": "Logged", "type": "Film"}))
+    assert asyncio.run(store.set_storage_protection(media.id, True))
+    asyncio.run(store.record_storage_cleanup({
+        "admin_user_id": "hugo", "media_id": media.id, "media_title": media.title,
+        "size_bytes": 123, "status": "deleted",
+    }))
+
+    reopened = MediaStore(store.db_path)
+    context = asyncio.run(reopened.storage_context(datetime.now(timezone.utc) - timedelta(days=30)))
+    assert media.id in context["protected_media_ids"]

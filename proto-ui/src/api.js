@@ -274,6 +274,38 @@ export async function fetchStorageStatus() {
     return response.json();
 }
 
+export async function fetchStorageOverview() {
+    const response = await fetch(`${API_BASE_URL}/admin/storage/candidates`);
+    const body = await readResponseBody(response);
+    if (!response.ok) throw new Error(body?.detail || 'Candidats de stockage indisponibles');
+    return body || {candidates: [], history: []};
+}
+
+export async function fetchStorageCandidates() {
+    return (await fetchStorageOverview()).candidates || [];
+}
+
+export async function fetchStorageCleanupHistory() {
+    return (await fetchStorageOverview()).history || [];
+}
+
+export async function setStorageProtection(mediaId, protectedValue) {
+    const response = await fetch(`${API_BASE_URL}/admin/storage/candidates/${encodeURIComponent(mediaId)}/protection`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({protected: protectedValue}),
+    });
+    const body = await readResponseBody(response);
+    if (!response.ok) throw new Error(body?.detail || 'Protection impossible');
+    return body;
+}
+
+export async function deleteStorageCandidate(mediaId) {
+    const response = await fetch(`${API_BASE_URL}/admin/storage/candidates/${encodeURIComponent(mediaId)}`, {method: 'DELETE'});
+    const body = await readResponseBody(response);
+    if (!response.ok) throw new Error(body?.detail || 'Suppression impossible');
+    return body;
+}
+
 export async function fetchAdminDashboard() {
     const response = await fetch(`${API_BASE_URL}/admin/dashboard`);
     if (!response.ok) throw new Error((await response.json()).detail || 'Tableau de bord indisponible');
