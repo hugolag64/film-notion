@@ -237,6 +237,26 @@ def test_delete_storage_candidate_rejects_protected_or_missing_films(tmp_path):
         asyncio.run(service.delete_storage_candidate("missing", "hugo"))
 
 
+def test_recent_admin_managed_film_can_be_deleted_manually(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    now = datetime.now(timezone.utc)
+    media = asyncio.run(store.create({
+        "id": "recent-admin-film", "title": "Recent admin film", "type": "Film", "tmdb_id": 9,
+        "created_at": now,
+    }))
+    radarr = StorageRadarr([{
+        "id": 44, "tmdbId": 9, "hasFile": True, "sizeOnDisk": 100,
+        "added": now.isoformat(),
+    }])
+    service = MediaServerService(store, radarr=radarr)
+
+    result = asyncio.run(service.delete_storage_candidate(media.id, "admin-id"))
+
+    assert result["media_id"] == media.id
+    assert radarr.deleted == [(44, True)]
+
+
 def test_sync_media_starts_a_rental_when_jellyfin_has_the_film(tmp_path):
     store = MediaStore(str(tmp_path / "test.db"))
     store.init_schema()

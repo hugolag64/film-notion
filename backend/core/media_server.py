@@ -13,6 +13,7 @@ from backend.core.tmdb import TMDBClient
 
 logger = logging.getLogger(__name__)
 STALE_REQUEST_GRACE = timedelta(hours=1)
+HARD_STORAGE_PROTECTION_REASONS = {"favorite", "active_rental", "manual"}
 
 
 AvailabilityState = Literal[
@@ -479,7 +480,7 @@ class MediaServerService:
                 last_played_at=last_played_at,
                 is_favorite=media.id in context["favorite_media_ids"],
                 has_active_rental=has_active_rental,
-                protected=bool(reasons),
+                protected=bool(HARD_STORAGE_PROTECTION_REASONS.intersection(reasons)),
                 protection_reasons=reasons,
             ))
         return sorted(candidates, key=lambda item: (-item.size_bytes, item.title.lower()))
