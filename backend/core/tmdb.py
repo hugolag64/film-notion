@@ -1,9 +1,16 @@
 import logging
+import unicodedata
 from typing import Optional, Dict, Any, List
 from backend.config import Config
 from backend.core import http
 
 logger = logging.getLogger(__name__)
+
+
+def _search_title_key(value: str) -> str:
+    """Normalize title punctuation for exact-search ranking."""
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return "".join(character for character in normalized if character.isalnum())
 
 
 class TMDBClient:
@@ -27,10 +34,10 @@ class TMDBClient:
             response = await http.request_with_retry("GET", url, params=params)
             response.raise_for_status()
             results = response.json().get("results", [])
-            query_key = query.strip().casefold()
-            results.sort(key=lambda result: 0 if (
-                (result.get("title") or result.get("original_title") or "").strip().casefold() == query_key
-            ) else 1)
+            query_key = _search_title_key(query.strip())
+            results.sort(key=lambda result: 0 if _search_title_key(
+                result.get("title") or result.get("original_title") or ""
+            ) == query_key else 1)
             return results[:20]
         except Exception as e:
             logger.error("Erreur recherche film '%s': %s", query, e)

@@ -35,3 +35,21 @@ def test_search_movie_promotes_exact_title_beyond_first_five(monkeypatch):
 
     assert results[0]["title"] == "Play"
     assert len(results) == 8
+
+
+def test_search_movie_keeps_tmdb_relevance_for_punctuation_variant(monkeypatch):
+    candidates = [
+        {"id": 252178, "title": "'71"},
+        {"id": 1018488, "title": "71"},
+        {"id": 881525, "title": "71"},
+    ]
+
+    async def fake_request(*args, **kwargs):
+        return FakeResponse({"results": candidates})
+
+    monkeypatch.setattr(Config, "TMDB_API_KEY", "test-key")
+    monkeypatch.setattr(tmdb.http, "request_with_retry", fake_request)
+
+    results = asyncio.run(TMDBClient().search_movie("71"))
+
+    assert results[0]["id"] == 252178
