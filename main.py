@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from backend.config import Config
-from backend.core import http, scheduler
+from backend.core import http, log_redaction, scheduler
 from backend.core.store import MediaStore
 from backend.core.auth import AuthStore
 from backend.api import health_router, router as api_router
@@ -16,6 +16,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+log_redaction.install()
 logger = logging.getLogger(__name__)
 
 # Inclure les routes de santé et de l'API REST

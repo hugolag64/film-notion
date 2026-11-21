@@ -175,3 +175,37 @@ def test_seerr_cancel_request_accepts_empty_delete_response():
 
     asyncio.run(run())
     assert captured == {"method": "DELETE", "path": "/api/v1/request/14"}
+
+
+def test_seerr_409_is_reported_as_a_duplicate_request():
+    from backend.core.seerr import SeerrDuplicateRequest
+
+    async def handler(request):
+        return httpx.Response(409, json={"message": "Request for this media already exists."})
+
+    async def run():
+        async with _client(handler) as client:
+            await SeerrClient("http://seerr:5055", "secret", client).request_media(
+                tmdb_id=27205, media_type="Film", quality_profile_id=None,
+                root_folder=None, language_profile_id=None, monitor="all",
+            )
+
+    try:
+        asyncio.run(run())
+    except SeerrDuplicateRequest as error:
+        assert isinstance(error, MediaServerError)
+    else:
+        raise AssertionError("Expected a duplicate-request error")
+
+
+def test_api_is_wired_to_seerr_when_its_key_is_set(monkeypatch):
+    from backend import api
+    from backend.config import Config
+
+    monkeypatch.setattr(Config, "SEERR_URL", "http://host.docker.internal:5055")
+    monkeypatch.setattr(Config, "SEERR_API_KEY", "seerr-secret")
+    service = api.get_media_server_service(store=object())
+    assert service.seerr.base_url == "http://host.docker.internal:5055"
+
+    monkeypatch.setattr(Config, "SEERR_API_KEY", None)
+    assert api.get_media_server_service(store=object()).seerr is None

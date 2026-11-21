@@ -458,7 +458,9 @@ export default function BackstagePrototype() {
             setMediaAvailability({ availability: result.availability, playback_url: null });
             if (result.rental) setRentalsByMedia((current) => ({...current, [selectedMedia.id]: result.rental}));
             setShowAcquisitionModal(false);
-            if (isAdmin) showToast(`"${selectedMedia?.title}" a bien été ajouté au serveur !`, 'success');
+            if (isAdmin) showToast(result.already_requested
+                ? `« ${selectedMedia?.title} » est déjà demandé ou sur le serveur : aucune nouvelle demande envoyée.`
+                : `"${selectedMedia?.title}" a bien été ajouté au serveur !`, 'success');
             else if (!result.rental) showToast(`« ${selectedMedia?.title} » est déjà dans la bibliothèque commune : bonne séance !`, 'success');
             else showToast(result.rental.status === 'available'
                 ? `« ${selectedMedia?.title} » est loué et déjà disponible.`
@@ -646,11 +648,13 @@ export default function BackstagePrototype() {
         if (!recommendation?.tmdb_id) return;
         try {
             setSeerrRequestBusy(true);
-            await createSeerrRequest(recommendation.tmdb_id, 'movie');
+            const result = await createSeerrRequest(recommendation.tmdb_id, 'movie');
             await Promise.all([loadDashboard(), isAdmin ? null : loadRentals(), isAdmin ? null : loadRealMedias()]);
             setTMDBPreview((current) => ({...current, open: false}));
             showToast(isAdmin
-                ? `« ${recommendation.title} » a été demandé à Seerr.`
+                ? (result?.already_requested
+                    ? `« ${recommendation.title} » est déjà demandé ou disponible : pas de doublon.`
+                    : `« ${recommendation.title} » a été demandé à Seerr.`)
                 : `« ${recommendation.title} » est loué : retrouve-le dans « Mes locations » sur l’accueil.`);
         } catch (error) {
             showToast(error.message || 'Demande Seerr impossible.', 'error');

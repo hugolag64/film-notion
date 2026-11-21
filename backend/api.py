@@ -24,7 +24,7 @@ from backend.core.tmdb import TMDBClient
 from backend.core.mapping import is_series
 from backend.core.tmdb_relink import build_relink_updates
 from backend.core.arr import RadarrClient, SonarrClient, MediaServerError
-from backend.core.seerr import SeerrClient
+from backend.core.seerr import SeerrClient, SeerrDuplicateRequest
 from backend.core.jellyfin import JellyfinClient
 from backend.core.media_server import Availability, MediaServerService
 from backend.core.dashboard import build_dashboard_payload
@@ -321,6 +321,8 @@ class StorageProtectionRequest(BaseModel):
 
 MAX_ACTIVE_RENTALS = 5
 MAX_QUEUED_RENTALS = 10
+# A request or download is already running for these states: never send a second one.
+IN_PROGRESS_STATES = {"requested", "searching", "downloading", "imported"}
 
 
 def _rental_status_for(availability_state: str) -> str:
@@ -593,12 +595,13 @@ async def create_seerr_request(
         raise HTTPException(status_code=503, detail="Seerr n'est pas configuré")
     if payload.media_type not in {"movie", "tv"}:
         raise HTTPException(status_code=422, detail="Type de média Seerr invalide")
-    if current.user.get("role") != "admin":
-        # Flatmates never hit Seerr directly: their request becomes a temporary rental.
-        if payload.media_type != "movie":
-            raise HTTPException(status_code=403, detail="Demandez cette série à l'administrateur")
+    if payload.media_type == "movie":
+        # Go through the catalogue: Jellyfin/pending state is checked, so no duplicate,
+        # and flatmates get a temporary rental instead of a raw Seerr request.
         media = await _find_or_create_movie(service.store, payload.tmdb_id)
         return await _acquire_media(media, AcquisitionRequest(), current, service)
+    if current.user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Demandez cette série à l'administrateur")
     try:
         return await service.seerr.request_media(
             tmdb_id=payload.tmdb_id,
@@ -608,6 +611,8 @@ async def create_seerr_request(
             language_profile_id=None,
             monitor="all",
         )
+    except SeerrDuplicateRequest:
+        return {"already_requested": True}
     except (MediaServerError, RuntimeError, ValueError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
@@ -1649,6 +1654,20 @@ async def _acquire_media(
                 created_at=now, updated_at=now,
             ))
             return {"availability": availability, "rental": _serialize_rental(rental)}
+    existing = await service.store.get_availability(media_id)
+    if existing and (existing.state in IN_PROGRESS_STATES or existing.jellyfin_id):
+        # Already on Jellyfin, or a request/download exists: show its state, no duplicate.
+        response: dict[str, Any] = {"availability": existing, "already_requested": True}
+        if not is_admin:
+            now = datetime.now(timezone.utc)
+            rental = await service.store.create_rental(Rental(
+                id=str(uuid.uuid4()), media_id=media_id, backstage_user_id=owner_id,
+                status=_rental_status_for(existing.state),
+                rental_scope="series" if media.type == "Série" else "movie",
+                requested_at=now, created_at=now, updated_at=now,
+            ))
+            response["rental"] = _serialize_rental(rental)
+        return response
     if not is_admin and media.type == "Film" and hasattr(service, "acquisition_defaults"):
         defaults = await service.acquisition_defaults(media)
         default_profile_id = defaults.get("quality_profile_id")

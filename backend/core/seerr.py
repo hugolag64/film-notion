@@ -7,6 +7,10 @@ from backend.core import http
 from backend.core.arr import MediaServerError
 
 
+class SeerrDuplicateRequest(MediaServerError):
+    """Seerr already holds a request for this media (HTTP 409): not an error for Backstage."""
+
+
 class SeerrClient:
     def __init__(self, base_url: str, api_key: str, client: Optional[httpx.AsyncClient] = None):
         self.base_url = base_url.rstrip("/")
@@ -32,6 +36,8 @@ class SeerrClient:
             except ValueError:
                 reason = response.text
             reason = (reason or response.reason_phrase or "réponse invalide").strip()[:300]
+            if response.status_code == 409:
+                raise SeerrDuplicateRequest(f"Seerr HTTP 409: {reason}") from error
             raise MediaServerError(f"Seerr HTTP {response.status_code}: {reason}") from error
         except (httpx.HTTPError, ValueError) as error:
             raise MediaServerError("Seerr inaccessible ou réponse invalide") from error

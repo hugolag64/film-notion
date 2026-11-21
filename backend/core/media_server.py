@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from backend.core.playback import PlaybackProgress
 from backend.config import Config
+from backend.core.seerr import SeerrDuplicateRequest
 from backend.core.tmdb import TMDBClient
 
 
@@ -70,11 +71,15 @@ class MediaServerService:
             raise ValueError("Associez d'abord ce média à TMDB")
         provider = "sonarr" if media.type == "Série" else "radarr"
         if self.seerr:
-            remote = await self.seerr.request_media(
-                tmdb_id=media.tmdb_id, media_type=media.type,
-                quality_profile_id=None, root_folder=None,
-                language_profile_id=None, monitor=monitor,
-            )
+            try:
+                remote = await self.seerr.request_media(
+                    tmdb_id=media.tmdb_id, media_type=media.type,
+                    quality_profile_id=None, root_folder=None,
+                    language_profile_id=None, monitor=monitor,
+                )
+            except SeerrDuplicateRequest:
+                # Already requested in Seerr (from Backstage or elsewhere): track it, don't fail.
+                remote = {}
         elif media.type == "Série":
             if not self.sonarr or quality_profile_id is None or not root_folder or language_profile_id is None:
                 raise RuntimeError("Sonarr n'est pas configuré")

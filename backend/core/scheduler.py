@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from backend.config import Config
 from backend.core.arr import RadarrClient, SonarrClient
 from backend.core.jellyfin import JellyfinClient
+from backend.core.seerr import SeerrClient
 from backend.core.media_server import MediaServerService
 from backend.core.store import MediaStore
 from backend.core.auth import AuthStore
@@ -29,6 +30,7 @@ async def _media_loop():
                 MediaStore(Config.DB_PATH),
                 radarr=RadarrClient(Config.RADARR_URL, Config.RADARR_API_KEY) if Config.radarr_enabled() else None,
                 sonarr=SonarrClient(Config.SONARR_URL, Config.SONARR_API_KEY) if Config.sonarr_enabled() else None,
+                seerr=SeerrClient(Config.SEERR_URL, Config.SEERR_API_KEY) if Config.seerr_enabled() else None,
                 jellyfin=JellyfinClient(
                     Config.JELLYFIN_URL, Config.JELLYFIN_API_KEY,
                     server_id=Config.JELLYFIN_SERVER_ID,

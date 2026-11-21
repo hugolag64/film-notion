@@ -521,3 +521,59 @@ def test_rentals_expose_the_download_state(tmp_path, monkeypatch):
     [rental] = client.get("/api/rentals").json()["rentals"]
 
     assert rental["download_state"] == "requested"
+
+
+def test_a_film_already_downloading_is_not_requested_twice(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    store = MediaStore(Config.DB_PATH)
+    asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    asyncio.run(store.upsert_availability(Availability(media_id="dune", provider="radarr", state="downloading")))
+    service = RecordingService(store)
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: service
+
+    admin = client.post("/api/seerr/requests", json={"tmdb_id": 438631, "media_type": "movie"})
+    _login_as_new_user(client)
+    flatmate = client.post("/api/medias/dune/acquisition", json={})
+
+    assert admin.status_code == 200 and admin.json()["already_requested"] is True
+    assert admin.json()["availability"]["state"] == "downloading"
+    assert flatmate.status_code == 200 and flatmate.json()["already_requested"] is True
+    assert flatmate.json()["rental"]["status"] == "downloading"
+    assert service.calls == []
+
+
+def test_admin_film_request_goes_through_the_catalogue(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    store = MediaStore(Config.DB_PATH)
+    asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    service = RecordingService(store)
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: service
+
+    response = client.post("/api/seerr/requests", json={"tmdb_id": 438631, "media_type": "movie"})
+
+    assert response.status_code == 200
+    assert response.json()["availability"]["state"] == "requested"
+    assert "rental" not in response.json()
+    assert [call[0] for call in service.calls] == ["dune"]
+
+
+def test_seerr_duplicate_still_records_the_pending_request(tmp_path):
+    from backend.core.media_server import MediaServerService
+    from backend.core.models import Media
+    from backend.core.seerr import SeerrDuplicateRequest
+
+    class DuplicateSeerr:
+        async def request_media(self, **kwargs):
+            raise SeerrDuplicateRequest("Seerr HTTP 409: Request for this media already exists")
+
+    store = MediaStore(str(tmp_path / "db.sqlite"))
+    store.init_schema()
+    media = asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    service = MediaServerService(store, seerr=DuplicateSeerr())
+
+    availability = asyncio.run(service.add(media, None, None, None, "all"))
+
+    assert isinstance(media, Media)
+    assert availability.state == "requested"
