@@ -36,6 +36,7 @@ async def _media_loop():
             )
             if should_sync_media_servers():
                 await service.sync_all()
+            await service.store.expire_rentals(datetime.now(timezone.utc))
             if Config.media_server_enabled() or Config.jellyfin_enabled():
                 await notify_automatic_events(service, service.store, AuthStore(Config.DB_PATH))
             if service.jellyfin:

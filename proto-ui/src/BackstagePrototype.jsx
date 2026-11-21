@@ -601,7 +601,9 @@ export default function BackstagePrototype() {
             await createSeerrRequest(recommendation.tmdb_id, 'movie');
             await loadDashboard();
             setTMDBPreview((current) => ({...current, open: false}));
-            showToast(`« ${recommendation.title} » a été demandé à Seerr.`);
+            showToast(user?.role === 'admin'
+                ? `« ${recommendation.title} » a été demandé à Seerr.`
+                : `« ${recommendation.title} » est loué : retrouve-le dans tes locations.`);
         } catch (error) {
             showToast(error.message || 'Demande Seerr impossible.', 'error');
         } finally {
@@ -1103,6 +1105,7 @@ export default function BackstagePrototype() {
                 onClose={() => setTMDBPreview((current) => ({...current, open: false}))}
                 onAddWatchlist={addDashboardRecommendationToWatchlist}
                 onRequestSeerr={requestRecommendationOnSeerr}
+                isAdmin={user?.role === 'admin'}
             />}
 
                 {/* Main App Layout */}
@@ -1229,6 +1232,7 @@ export default function BackstagePrototype() {
                         onOpenTMDBDetails={openTMDBPreview}
                         onCancelRequest={cancelDashboardRequest}
                         cancellingRequest={cancellingRequest}
+                        isAdmin={user?.role === 'admin'}
                         onOpenLibrary={() => setActiveView('library')}
                         onOpenRecommendations={() => setShowRecommendationFlow(true)}
                     /> : <>

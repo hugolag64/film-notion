@@ -66,6 +66,23 @@ class FakeAcquisition:
         availability = Availability(media_id=media.id, provider="radarr", state="requested")
         return await self.store.upsert_availability(availability)
 
+    async def add(self, media, *_options):
+        # Non-admin picks go through the rental flow, which calls add() directly.
+        return await self.add_with_defaults(media)
+
+
+def test_non_admin_confirmed_recommendation_is_a_temporary_rental(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    session = completed_session(store)
+    monkeypatch.setattr(api, "TMDBClient", FakeTMDB)
+
+    response = asyncio.run(api.confirm_recommendation(
+        session.id, api.RecommendationConfirmRequest(tmdb_id=42), current_user(), store, FakeAcquisition(store),
+    ))
+
+    rentals = asyncio.run(store.list_rentals_for_media(response["media"]["id"]))
+    assert [(rental.backstage_user_id, rental.storage_policy) for rental in rentals] == [("hugo", "temporary")]
+
 
 def test_confirm_recommendation_creates_media_and_requests_download(tmp_path, monkeypatch):
     store = make_store(tmp_path)

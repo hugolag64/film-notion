@@ -551,7 +551,7 @@ async def dashboard_home(
         logger.warning("Recommandations dashboard indisponibles: %s", error)
         recommendations = []
     requests = []
-    if service.seerr:
+    if service.seerr and current.user.get("role") == "admin":
         try:
             requests = await service.seerr.list_requests(take=100, sort="modified", sort_direction="desc")
             requests = await _prune_available_seerr_requests(service.seerr, requests)
@@ -567,12 +567,19 @@ async def dashboard_home(
 @router.post("/seerr/requests")
 async def create_seerr_request(
     payload: SeerrRequestCreate,
+    current: AuthContext = Depends(get_current_user),
     service: MediaServerService = Depends(get_media_server_service),
 ):
     if not service.seerr:
         raise HTTPException(status_code=503, detail="Seerr n'est pas configuré")
     if payload.media_type not in {"movie", "tv"}:
         raise HTTPException(status_code=422, detail="Type de média Seerr invalide")
+    if current.user.get("role") != "admin":
+        # Flatmates never hit Seerr directly: their request becomes a temporary rental.
+        if payload.media_type != "movie":
+            raise HTTPException(status_code=403, detail="Demandez cette série à l'administrateur")
+        media = await _find_or_create_movie(service.store, payload.tmdb_id)
+        return await _acquire_media(media, AcquisitionRequest(), current, service)
     try:
         return await service.seerr.request_media(
             tmdb_id=payload.tmdb_id,
@@ -586,7 +593,7 @@ async def create_seerr_request(
         raise HTTPException(status_code=502, detail=str(error)) from error
 
 
-@router.delete("/seerr/requests/{request_id}")
+@router.delete("/seerr/requests/{request_id}", dependencies=[Depends(require_admin)])
 async def cancel_seerr_request(
     request_id: int,
     service: MediaServerService = Depends(get_media_server_service),
@@ -1142,6 +1149,26 @@ async def answer_recommendation(
     return {"session_id": session_id, "state": "question", "question": question, "result": None}
 
 
+async def _find_or_create_movie(store: MediaStore, tmdb_id: int) -> Media:
+    media = next((item for item in await store.fetch_all() if item.type == "Film" and item.tmdb_id == tmdb_id), None)
+    if media is not None:
+        return media
+    tmdb = TMDBClient()
+    details = await tmdb.get_movie_details(tmdb_id)
+    if not details:
+        raise HTTPException(status_code=400, detail="Impossible de récupérer les détails TMDB")
+    return await store.create({
+        "title": details.get("title") or details.get("original_title") or "Sans titre",
+        "original_title": details.get("original_title") or None,
+        "type": "Film", "status": "À regarder", "rating": None,
+        "release_date": details.get("release_date") or None,
+        "director": tmdb.get_director(details), "categories": tmdb.get_genres(details),
+        "synopsis": (details.get("overview") or "")[:2000],
+        "cover_url": tmdb.get_poster_url(details), "backdrop_url": tmdb.get_backdrop_url(details),
+        "cast": tmdb.get_cast(details, limit=5), "tmdb_ok": True, "tmdb_id": tmdb_id,
+    })
+
+
 @router.post("/recommendations/sessions/{session_id}/confirm")
 async def confirm_recommendation(
     session_id: str,
@@ -1163,26 +1190,20 @@ async def confirm_recommendation(
     if not selected:
         raise HTTPException(status_code=403, detail="Ce film ne correspond pas à la recommandation validée")
 
-    media = next((item for item in await store.fetch_all() if item.type == "Film" and item.tmdb_id == payload.tmdb_id), None)
-    if media is None:
-        tmdb = TMDBClient()
-        details = await tmdb.get_movie_details(payload.tmdb_id)
-        if not details:
-            raise HTTPException(status_code=400, detail="Impossible de récupérer les détails TMDB")
-        media = await store.create({
-            "title": details.get("title") or details.get("original_title") or "Sans titre",
-            "original_title": details.get("original_title") or None,
-            "type": "Film", "status": "À regarder", "rating": None,
-            "release_date": details.get("release_date") or None,
-            "director": tmdb.get_director(details), "categories": tmdb.get_genres(details),
-            "synopsis": (details.get("overview") or "")[:2000],
-            "cover_url": tmdb.get_poster_url(details), "backdrop_url": tmdb.get_backdrop_url(details),
-            "cast": tmdb.get_cast(details, limit=5), "tmdb_ok": True, "tmdb_id": payload.tmdb_id,
-        })
+    media = await _find_or_create_movie(store, payload.tmdb_id)
 
     availability = await store.get_availability(media.id)
     download_error = None
-    if payload.download and not availability:
+    if payload.download and current.user.get("role") != "admin":
+        # A flatmate's pick is a temporary rental, validated later by the admin.
+        try:
+            acquired = await _acquire_media(media, AcquisitionRequest(), current, service)
+            availability = acquired["availability"]
+        except HTTPException as error:
+            download_error = str(error.detail)
+        except (MediaServerError, RuntimeError, ValueError) as error:
+            download_error = str(error)
+    elif payload.download and not availability:
         try:
             availability = await service.add_with_defaults(media)
         except (MediaServerError, RuntimeError, ValueError) as error:
@@ -1482,6 +1503,9 @@ async def _ensure_playback_access(
     if not all_rentals:
         # Administratively managed permanent media has no user rental row.
         return None
+    if any(rental.status == "kept" or rental.storage_policy == "permanent" for rental in all_rentals):
+        # A rental the admin decided to keep joins the shared library.
+        return None
     raise HTTPException(status_code=403, detail="Vous n'avez pas accès à ce contenu")
 
 
@@ -1554,9 +1578,46 @@ async def request_acquisition(
     media = await service.store.fetch_one(media_id)
     if not media:
         raise HTTPException(status_code=404, detail="Média non trouvé")
+    return await _acquire_media(media, payload, current, service)
+
+
+async def _acquire_media(
+    media: Media, payload: AcquisitionRequest, current: AuthContext, service: MediaServerService,
+) -> dict[str, Any]:
+    """Download a media: permanent for the admin, a temporary rental for everyone else."""
+    media_id = media.id
     if not media.tmdb_id:
         raise HTTPException(status_code=409, detail="Associez d'abord ce média à TMDB")
     is_admin = current.user.get("role") == "admin"
+    owner_id = current.user["id"]
+    if not is_admin:
+        now = datetime.now(timezone.utc)
+        await service.store.expire_rentals(now)
+        existing_rental = await service.store.find_active_rental(owner_id, media_id)
+        if existing_rental:
+            return {
+                "availability": await service.store.get_availability(media_id),
+                "rental": _serialize_rental(existing_rental),
+            }
+        availability = await service.store.get_availability(media_id)
+        if availability and availability.state == "available":
+            media_rentals = await service.store.list_rentals_for_media(media_id)
+            if not media_rentals or any(
+                rental.status == "kept" or rental.storage_policy == "permanent" for rental in media_rentals
+            ):
+                # Already in the shared library: nothing to download, nothing to rent.
+                return {"availability": availability}
+        if await service.store.count_active_rentals(owner_id) >= MAX_ACTIVE_RENTALS:
+            raise HTTPException(status_code=409, detail="Limite de 5 locations actives atteinte")
+        if availability and availability.state == "available":
+            # The file is already on disk for another flatmate's rental: share it.
+            rental = await service.store.create_rental(Rental(
+                id=str(uuid.uuid4()), media_id=media_id, backstage_user_id=owner_id,
+                status="available", rental_scope="series" if media.type == "Série" else "movie",
+                requested_at=now, available_at=now, expires_at=now + timedelta(days=21),
+                created_at=now, updated_at=now,
+            ))
+            return {"availability": availability, "rental": _serialize_rental(rental)}
     if not is_admin and media.type == "Film" and hasattr(service, "acquisition_defaults"):
         defaults = await service.acquisition_defaults(media)
         default_profile_id = defaults.get("quality_profile_id")
@@ -1567,18 +1628,9 @@ async def request_acquisition(
             )
         payload = payload.model_copy(update={
             "quality_profile_id": payload.quality_profile_id or default_profile_id,
-            "root_folder": payload.root_folder or defaults.get("root_folder"),
+            "root_folder": defaults.get("root_folder"),
         })
-    owner_id = current.user["id"]
     if not is_admin:
-        existing_rental = await service.store.find_active_rental(owner_id, media_id)
-        if existing_rental:
-            return {
-                "availability": await service.store.get_availability(media_id),
-                "rental": _serialize_rental(existing_rental),
-            }
-        if await service.store.count_active_rentals(owner_id) >= MAX_ACTIVE_RENTALS:
-            raise HTTPException(status_code=409, detail="Limite de 5 locations actives atteinte")
         if hasattr(service, "storage_status"):
             storage = await service.storage_status()
             if storage.get("low_space") or (
@@ -1610,7 +1662,7 @@ async def request_acquisition(
     except MediaServerError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
     except RuntimeError as error:
-        raise HTTPException(status_code=503, detail="Service non configuré") from error
+        raise HTTPException(status_code=503, detail=str(error) or "Service non configuré") from error
 
 
 @router.get("/rentals")
@@ -1620,6 +1672,7 @@ async def list_rentals(
 ):
     if current.user.get("role") == "admin":
         return {"rentals": []}
+    await store.expire_rentals(datetime.now(timezone.utc))
     rentals = await store.list_user_rentals(current.user["id"])
     return {"rentals": [_serialize_rental(rental) for rental in rentals]}
 

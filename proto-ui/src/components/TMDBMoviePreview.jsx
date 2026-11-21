@@ -5,7 +5,7 @@ function panelClass(isDarkMode) {
 }
 
 export default function TMDBMoviePreview({
-    movie, recommendation, isDarkMode, loading, error, watchlistBusy, requestBusy, onClose, onAddWatchlist, onRequestSeerr,
+    movie, recommendation, isDarkMode, loading, error, watchlistBusy, requestBusy, onClose, onAddWatchlist, onRequestSeerr, isAdmin = false,
 }) {
     return <div
         className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-3 backdrop-blur-md sm:p-6"
@@ -62,7 +62,7 @@ export default function TMDBMoviePreview({
                         {watchlistBusy ? 'Ajout…' : 'Ajouter à ma watchlist'}
                     </button>
                     <button type="button" onClick={() => onRequestSeerr(recommendation)} disabled={requestBusy} className="rounded-lg bg-[#635bff] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">
-                        {requestBusy ? 'Demande…' : 'Demander à Seerr'}
+                        {requestBusy ? 'Demande…' : (isAdmin ? 'Demander à Seerr' : 'Louer ce film')}
                     </button>
                 </div>
             </div>}

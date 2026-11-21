@@ -1225,6 +1225,17 @@ class MediaStore:
             for row in rows
         ]
 
+    def _expire_rentals_sync(self, now: datetime) -> int:
+        """Close overdue temporary rentals; pending keep requests wait for the admin."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "UPDATE media_rentals SET status = 'expired', updated_at = ? "
+                "WHERE status = 'available' AND storage_policy = 'temporary' "
+                "AND expires_at IS NOT NULL AND expires_at <= ?",
+                (now.isoformat(), now.isoformat()),
+            )
+        return cursor.rowcount
+
     def _decide_rental_sync(self, rental_id: str, decision: str, admin_id: str, decided_at: datetime) -> Optional[Rental]:
         if decision not in {"accepted", "refused"}:
             raise ValueError("invalid rental decision")
@@ -1677,6 +1688,9 @@ class MediaStore:
         self, rental_id: str, decision: str, admin_id: str, decided_at: datetime,
     ) -> Optional[Rental]:
         return await asyncio.to_thread(self._decide_rental_sync, rental_id, decision, admin_id, decided_at)
+
+    async def expire_rentals(self, now: datetime) -> int:
+        return await asyncio.to_thread(self._expire_rentals_sync, now)
 
     async def extend_rental(self, rental_id: str, now: datetime) -> Optional[Rental]:
         return await asyncio.to_thread(self._extend_rental_sync, rental_id, now)

@@ -150,7 +150,7 @@ function DashboardSkeleton({ isDarkMode }) {
 export default function DashboardHome({
     data, isDarkMode, loading, error, onRetry, onOpenMedia, onResume,
     onAddWatchlist, onWhyRecommendation, onOpenLibrary, onOpenRecommendations, onOpenTMDBDetails,
-    onCancelRequest, cancellingRequest,
+    onCancelRequest, cancellingRequest, isAdmin = false,
 }) {
     const [selectedRequest, setSelectedRequest] = useState(null);
     const [showRequestsManager, setShowRequestsManager] = useState(false);
@@ -169,10 +169,10 @@ export default function DashboardHome({
             {continueWatching.length ? <div className="flex gap-3 overflow-x-auto pb-3 snap-x snap-mandatory" aria-label="Reprises en cours">{continueWatching.map((item) => <ContinueCard key={`${item.jellyfin_id}-${item.media_id || item.title}`} item={item} isDarkMode={isDarkMode} onOpenMedia={onOpenMedia} onResume={onResume} />)}</div> : <div className={`rounded-2xl border p-8 ${panelClass(isDarkMode)}`}><p className="text-sm font-semibold">Aucun programme en cours.</p><p className="mt-1 text-xs opacity-60">Commence un film ou une série depuis ta bibliothèque, et ta reprise apparaîtra ici.</p><button type="button" onClick={onOpenLibrary} className="mt-4 rounded-lg border border-[#635bff]/40 px-3 py-2 text-xs font-semibold text-[#635bff]">Explorer la bibliothèque</button></div>}
         </section>
 
-        <section>
+        {isAdmin && <section>
             <SectionHeading eyebrow="TÉLÉCHARGEMENTS" title="Mes demandes" action="Gérer les demandes" onAction={() => setShowRequestsManager(true)} isDarkMode={isDarkMode} />
             {requests.length ? <div className="flex gap-3 overflow-x-auto pb-3" aria-label="Mes demandes Seerr">{requests.map((item) => <RequestCard key={item.id} item={item} isDarkMode={isDarkMode} onCancelRequest={onCancelRequest} cancellingRequest={cancellingRequest} onOpenRequest={setSelectedRequest} />)}</div> : <div className={`rounded-2xl border p-6 ${panelClass(isDarkMode)}`}><p className="text-sm font-semibold">Aucune demande en cours.</p><p className="mt-1 text-xs opacity-60">Ouvre la fiche d’un film et demande-le à Seerr pour le retrouver ici.</p></div>}
-        </section>
+        </section>}
 
         <section>
             <SectionHeading eyebrow="SÉLECTION PERSONNELLE" title="Pour vous" action="Choisir un film" onAction={onOpenRecommendations} isDarkMode={isDarkMode} />

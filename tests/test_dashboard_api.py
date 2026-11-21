@@ -69,7 +69,7 @@ def test_dashboard_route_does_not_import_media_library_on_every_load(tmp_path, m
     assert "continue_watching" in payload
 
 
-def test_dashboard_loads_the_full_active_seerr_queue(tmp_path, monkeypatch):
+def test_admin_dashboard_loads_the_full_active_seerr_queue(tmp_path, monkeypatch):
     store = make_store(tmp_path)
     captured = {}
 
@@ -92,7 +92,8 @@ def test_dashboard_loads_the_full_active_seerr_queue(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "get_media_server_service", lambda _store: FakeMediaService())
     monkeypatch.setattr(api, "_recommendation_pool", empty_recommendation_pool)
 
-    payload = asyncio.run(api.dashboard_home(current_user(), store))
+    admin = AuthContext(user={"id": "hugo", "role": "admin"}, session_id="session", token="token")
+    payload = asyncio.run(api.dashboard_home(admin, store))
 
     assert captured["take"] == 100
     assert payload["requests"][0]["title"] == "L'Odyssée"
