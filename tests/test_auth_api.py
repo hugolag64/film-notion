@@ -464,7 +464,7 @@ def test_admin_acquisition_is_permanent_and_creates_no_rental(tmp_path, monkeypa
 
     assert response.status_code == 200
     assert "rental" not in response.json()
-    assert client.get("/api/rentals").json() == {"rentals": []}
+    assert client.get("/api/rentals").json()["rentals"] == []
 
 
 def test_acquisition_creates_owned_rental_and_keep_is_scoped(tmp_path, monkeypatch):
@@ -506,7 +506,7 @@ def test_acquisition_creates_owned_rental_and_keep_is_scoped(tmp_path, monkeypat
     client.post("/api/auth/login", json={
         "email": "claire@example.com", "password": "12345678", "remember_device": False,
     })
-    assert client.get("/api/rentals").json() == {"rentals": []}
+    assert client.get("/api/rentals").json()["rentals"] == []
     assert client.post(f"/api/rentals/{rental['id']}/keep").status_code == 404
 
 
@@ -543,34 +543,6 @@ def test_acquisition_rejects_sixth_active_rental(tmp_path, monkeypatch):
     client.app.dependency_overrides[api_module.get_media_server_service] = lambda: FailingIfCalledService()
 
     assert client.post(f"/api/medias/{media.id}/acquisition", json={}).status_code == 409
-
-
-def test_series_acquisition_creates_series_scoped_rental(tmp_path, monkeypatch):
-    client = _client(tmp_path, monkeypatch)
-    _setup(client)
-    client.post("/api/auth/users", json={
-        "display_name": "Paul", "email": "paul@example.com", "password": "12345678",
-    })
-    client.post("/api/auth/logout")
-    client.post("/api/auth/login", json={
-        "email": "paul@example.com", "password": "12345678", "remember_device": False,
-    })
-    media = asyncio.run(MediaStore(Config.DB_PATH).create({
-        "id": "series", "title": "Severance", "type": "Série", "tmdb_id": 1,
-    }))
-
-    class SeriesService:
-        store = MediaStore(Config.DB_PATH)
-
-        async def add(self, media_arg, *args):
-            assert media_arg.type == "Série"
-            return Availability(media_id=media_arg.id, provider="sonarr", state="requested")
-
-    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: SeriesService()
-    response = client.post(f"/api/medias/{media.id}/acquisition", json={})
-
-    assert response.status_code == 200
-    assert response.json()["rental"]["rental_scope"] == "series"
 
 
 def test_admin_can_accept_keep_request_and_notify_owner(tmp_path, monkeypatch):

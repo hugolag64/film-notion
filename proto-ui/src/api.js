@@ -299,6 +299,19 @@ export async function setStorageProtection(mediaId, protectedValue) {
     return body;
 }
 
+export async function deleteExpiredRentals() {
+    const response = await fetch(`${API_BASE_URL}/admin/storage/expired/delete`, {method: 'POST'});
+    const body = await readResponseBody(response);
+    if (!response.ok) throw new Error(body?.detail || 'Suppression impossible');
+    return body;
+}
+
+export async function fetchAvailableMediaIds() {
+    const response = await fetch(`${API_BASE_URL}/library/available`);
+    if (!response.ok) throw new Error('Disponibilités indisponibles');
+    return (await response.json()).media_ids || [];
+}
+
 export async function deleteStorageCandidate(mediaId) {
     const response = await fetch(`${API_BASE_URL}/admin/storage/candidates/${encodeURIComponent(mediaId)}`, {method: 'DELETE'});
     const body = await readResponseBody(response);

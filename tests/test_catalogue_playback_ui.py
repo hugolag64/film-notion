@@ -54,7 +54,9 @@ def test_retention_admin_controls_and_notifications_are_present():
     assert "Conserver" in admin
     assert "Refuser" in admin
     assert "Prolonger" in admin
-    assert "Conserv" in source
+    rentals = (UI_SOURCE.parent / "rentals.js").read_text(encoding="utf-8")
+    assert "rentalStatusLabel" in source
+    assert "Conservé définitivement" in rentals
     assert "fetchKeepRequests" in api
     assert "fetchNotifications" in api
 

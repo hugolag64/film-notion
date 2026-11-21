@@ -272,3 +272,120 @@ def test_non_admin_recommendation_download_creates_a_rental(tmp_path, monkeypatc
     assert response.status_code == 200
     assert response.json()["download_error"] is None
     assert [rental.backstage_user_id for rental in asyncio.run(store.list_rentals_for_media("dune"))] == [user_id]
+
+
+# --- 5. Rental status and limit exposed to the flatmate UI ----------------
+
+@pytest.mark.parametrize("download_state, rental_status", [
+    ("searching", "requested"), ("imported", "downloading"), ("downloading", "downloading"),
+])
+def test_rental_status_follows_radarr_vocabulary(tmp_path, monkeypatch, download_state, rental_status):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    _login_as_new_user(client)
+    store = MediaStore(Config.DB_PATH)
+    asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    service = RecordingService(store, state=download_state)
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: service
+
+    response = client.post("/api/medias/dune/acquisition", json={})
+
+    assert response.status_code == 200
+    assert response.json()["rental"]["status"] == rental_status
+
+
+def test_rentals_endpoint_exposes_the_active_rental_limit(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    _login_as_new_user(client)
+
+    payload = client.get("/api/rentals").json()
+
+    assert payload == {"rentals": [], "max_active_rentals": api_module.MAX_ACTIVE_RENTALS}
+
+
+# --- 6. Series, decisions, availability and expired cleanup --------------
+
+def test_non_admin_cannot_rent_a_series(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    _login_as_new_user(client)
+    store = MediaStore(Config.DB_PATH)
+    asyncio.run(store.create({"id": "lost", "title": "Lost", "type": "Série", "tmdb_id": 4607}))
+    service = RecordingService(store)
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: service
+
+    response = client.post("/api/medias/lost/acquisition", json={})
+
+    assert response.status_code == 403
+    assert service.calls == []
+
+
+def test_keep_decision_notification_names_the_film(tmp_path):
+    store = MediaStore(str(tmp_path / "b.db"))
+    store.init_schema()
+    asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film"}))
+    asyncio.run(store.create_rental(_rental(
+        "r", "dune", "paul", status="keep_requested", expires_at=NOW + timedelta(days=4),
+    )))
+    admin = AuthContext(user={"id": "admin", "role": "admin"}, session_id="s", token="t")
+
+    asyncio.run(api_module.refuse_keep_request("r", admin, store))
+
+    [notification] = asyncio.run(store.list_notifications("paul"))
+    assert notification.kind == "retention_refused"
+    assert "« Dune » ne sera pas conservé" in notification.message
+
+
+def test_library_available_lists_only_media_ready_on_jellyfin(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    _login_as_new_user(client)
+    store = MediaStore(Config.DB_PATH)
+    for media_id in ("ready", "pending"):
+        asyncio.run(store.create({"id": media_id, "title": media_id, "type": "Film"}))
+    asyncio.run(store.upsert_availability(Availability(
+        media_id="ready", provider="radarr", state="available", jellyfin_id="jf-1",
+    )))
+    asyncio.run(store.upsert_availability(Availability(media_id="pending", provider="radarr", state="downloading")))
+
+    assert client.get("/api/library/available").json() == {"media_ids": ["ready"]}
+
+
+class ExpiredRadarr:
+    def __init__(self, library):
+        self.library = library
+        self.deleted = []
+
+    async def list_library(self):
+        return [item for item in self.library if item["id"] not in {deleted for deleted, _ in self.deleted}]
+
+    async def delete_movie(self, movie_id, delete_files=False):
+        self.deleted.append((movie_id, delete_files))
+
+
+def test_delete_expired_rentals_only_removes_films_nobody_rents_anymore(tmp_path):
+    from backend.core.media_server import MediaServerService
+
+    store = MediaStore(str(tmp_path / "b.db"))
+    store.init_schema()
+    old = NOW - timedelta(days=60)
+    for media_id, tmdb_id in (("gone", 1), ("shared", 2), ("admin", 3)):
+        asyncio.run(store.create({"id": media_id, "title": media_id, "type": "Film", "tmdb_id": tmdb_id, "created_at": old}))
+    asyncio.run(store.create_rental(_rental("r1", "gone", "paul", status="expired")))
+    asyncio.run(store.create_rental(_rental("r2", "shared", "paul", status="expired")))
+    asyncio.run(store.create_rental(_rental("r3", "shared", "claire", status="available", expires_at=NOW + timedelta(days=3))))
+    radarr = ExpiredRadarr([
+        {"id": tmdb_id * 10, "tmdbId": tmdb_id, "hasFile": True, "sizeOnDisk": 1024**3, "added": old.isoformat()}
+        for tmdb_id in (1, 2, 3)
+    ])
+    service = MediaServerService(store, radarr=radarr)
+
+    candidates = {item.media_id: item for item in asyncio.run(service.storage_candidates())}
+    assert [candidates[key].rental_expired for key in ("gone", "shared", "admin")] == [True, False, False]
+
+    result = asyncio.run(service.delete_expired_rentals("admin-id"))
+
+    assert result["deleted"] == [{"media_id": "gone", "title": "gone"}]
+    assert result["failed"] == []
+    assert radarr.deleted == [(10, True)]

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { acceptKeepRequest, createBackup, deleteStorageCandidate, extendRental, fetchAdminDashboard, fetchBackupStatus, fetchCleanupPreview, fetchKeepRequests, fetchMediaServerActivity, fetchMediaServerStatus, fetchStorageOverview, fetchStorageStatus, fetchUsers, refuseKeepRequest, setStorageProtection, verifyBackup, importMediaServerLibrary, syncMediaServer } from '../api';
+import { acceptKeepRequest, createBackup, deleteExpiredRentals, deleteStorageCandidate, extendRental, fetchAdminDashboard, fetchBackupStatus, fetchCleanupPreview, fetchKeepRequests, fetchMediaServerActivity, fetchMediaServerStatus, fetchStorageOverview, fetchStorageStatus, fetchUsers, refuseKeepRequest, setStorageProtection, verifyBackup, importMediaServerLibrary, syncMediaServer } from '../api';
 import { useAuth } from '../auth-context';
 import UserManagement from './UserManagement';
 
@@ -52,7 +52,28 @@ const protectionLabels = {
 function StorageCleanup({candidates, history, card, muted, onChanged, onError, onNotice}) {
     const [busyId, setBusyId] = useState(null);
     const [filter, setFilter] = useState('all');
-    const visibleCandidates = candidates.filter((candidate) => filter === 'all' || (filter === 'protected' ? candidate.protected : !candidate.protected));
+    const [bulkBusy, setBulkBusy] = useState(false);
+    const visibleCandidates = candidates.filter((candidate) => filter === 'all'
+        || (filter === 'expired' ? candidate.rental_expired : filter === 'protected' ? candidate.protected : !candidate.protected));
+    const expiredCandidates = candidates.filter((candidate) => candidate.rental_expired && !candidate.protected);
+    const expiredBytes = expiredCandidates.reduce((total, candidate) => total + (candidate.size_bytes || 0), 0);
+
+    const removeExpired = async () => {
+        if (!expiredCandidates.length) return;
+        const titles = expiredCandidates.map((candidate) => `• ${candidate.title}`).join('\n');
+        if (!window.confirm(`Supprimer ${expiredCandidates.length} film${expiredCandidates.length > 1 ? 's' : ''} dont la location a expiré ?\n\n${titles}\n\nEspace libéré estimé : ${formatBytes(expiredBytes)}\nLes fiches Backstage seront conservées.`)) return;
+        try {
+            setBulkBusy(true);
+            const result = await deleteExpiredRentals();
+            const failed = result.failed?.length ? ` ${result.failed.length} échec(s) : ${result.failed.map((item) => item.title).join(', ')}.` : '';
+            onNotice(`${result.deleted.length} film(s) supprimé(s), ${formatBytes(result.freed_bytes)} libérés.${failed}`);
+            await onChanged();
+        } catch (requestError) {
+            onError(requestError.message);
+        } finally {
+            setBulkBusy(false);
+        }
+    };
 
     const toggleProtection = async (candidate) => {
         try {
@@ -81,8 +102,9 @@ function StorageCleanup({candidates, history, card, muted, onChanged, onError, o
     };
 
     return <div className={`rounded-xl border p-4 ${card}`}>
-        <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-lg font-semibold">Libérer de l’espace</h3><p className={`mt-1 text-sm ${muted}`}>Films présents sur le disque. Les protections empêchent toute suppression accidentelle.</p></div><div className="flex items-center gap-2"><select className="rounded border bg-transparent px-2 py-1 text-xs" value={filter} onChange={(event) => setFilter(event.target.value)} aria-label="Filtrer le nettoyage"><option value="all">Tous</option><option value="protected">Protégés</option><option value="deletable">Supprimables</option></select><button type="button" className="rounded border px-2 py-1 text-xs" onClick={onChanged}>Actualiser</button></div></div>
-        {visibleCandidates.length === 0 ? <p className={`mt-4 rounded-lg border p-3 text-sm ${muted}`}>Aucun film dans ce filtre.</p> : <div className="mt-4 space-y-2">{visibleCandidates.map((candidate) => <div key={candidate.media_id} className="rounded-lg border p-3"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-semibold">{candidate.title}</p><p className={`mt-1 text-xs ${muted}`}>{formatBytes(candidate.size_bytes)}{candidate.last_played_at ? ` · dernière lecture ${formatDate(candidate.last_played_at)}` : ''}{candidate.added_at ? ` · ajouté le ${formatDate(candidate.added_at)}` : ''}</p></div><span className={candidate.protected ? 'text-xs font-semibold text-amber-600' : 'text-xs font-semibold text-emerald-600'}>{candidate.protected ? 'Protégé' : 'Supprimable'}</span></div>{candidate.protection_reasons.length > 0 && <p className={`mt-2 text-xs ${muted}`}>{candidate.protected ? candidate.protection_reasons.map((reason) => protectionLabels[reason] || reason).join(' · ') : `Suggestion de conservation : ${candidate.protection_reasons.map((reason) => protectionLabels[reason] || reason).join(' · ')}`}</p>}<div className="mt-3 flex flex-wrap gap-2"><button type="button" className="rounded border px-2 py-1 text-xs" onClick={() => toggleProtection(candidate)} disabled={busyId === candidate.media_id}>{candidate.protection_reasons.includes('manual') ? 'Retirer la protection' : 'Protéger manuellement'}</button><button type="button" className="rounded bg-rose-600 px-2 py-1 text-xs font-semibold text-white disabled:opacity-50" onClick={() => removeCandidate(candidate)} disabled={busyId === candidate.media_id || candidate.protected}>{busyId === candidate.media_id ? 'Opération…' : 'Supprimer du disque'}</button></div></div>)}</div>}
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-lg font-semibold">Libérer de l’espace</h3><p className={`mt-1 text-sm ${muted}`}>Films présents sur le disque. Les protections empêchent toute suppression accidentelle.</p></div><div className="flex items-center gap-2"><select className="rounded border bg-transparent px-2 py-1 text-xs" value={filter} onChange={(event) => setFilter(event.target.value)} aria-label="Filtrer le nettoyage"><option value="all">Tous</option><option value="protected">Protégés</option><option value="deletable">Supprimables</option><option value="expired">Locations expirées</option></select><button type="button" className="rounded border px-2 py-1 text-xs" onClick={onChanged}>Actualiser</button></div></div>
+        {expiredCandidates.length > 0 && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rose-500/30 bg-rose-500/5 p-3"><p className="text-sm"><strong>{expiredCandidates.length} location{expiredCandidates.length > 1 ? 's' : ''} expirée{expiredCandidates.length > 1 ? 's' : ''}</strong> occupe{expiredCandidates.length > 1 ? 'nt' : ''} {formatBytes(expiredBytes)} sur le disque.</p><button type="button" className="rounded bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50" onClick={removeExpired} disabled={bulkBusy}>{bulkBusy ? 'Suppression…' : 'Supprimer les locations expirées'}</button></div>}
+        {visibleCandidates.length === 0 ? <p className={`mt-4 rounded-lg border p-3 text-sm ${muted}`}>Aucun film dans ce filtre.</p> : <div className="mt-4 space-y-2">{visibleCandidates.map((candidate) => <div key={candidate.media_id} className="rounded-lg border p-3"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-semibold">{candidate.title}</p><p className={`mt-1 text-xs ${muted}`}>{formatBytes(candidate.size_bytes)}{candidate.last_played_at ? ` · dernière lecture ${formatDate(candidate.last_played_at)}` : ''}{candidate.added_at ? ` · ajouté le ${formatDate(candidate.added_at)}` : ''}</p></div><span className={candidate.protected ? 'text-xs font-semibold text-amber-600' : candidate.rental_expired ? 'text-xs font-semibold text-rose-600' : 'text-xs font-semibold text-emerald-600'}>{candidate.protected ? 'Protégé' : candidate.rental_expired ? 'Location expirée' : 'Supprimable'}</span></div>{candidate.protection_reasons.length > 0 && <p className={`mt-2 text-xs ${muted}`}>{candidate.protected ? candidate.protection_reasons.map((reason) => protectionLabels[reason] || reason).join(' · ') : `Suggestion de conservation : ${candidate.protection_reasons.map((reason) => protectionLabels[reason] || reason).join(' · ')}`}</p>}<div className="mt-3 flex flex-wrap gap-2"><button type="button" className="rounded border px-2 py-1 text-xs" onClick={() => toggleProtection(candidate)} disabled={busyId === candidate.media_id}>{candidate.protection_reasons.includes('manual') ? 'Retirer la protection' : 'Protéger manuellement'}</button><button type="button" className="rounded bg-rose-600 px-2 py-1 text-xs font-semibold text-white disabled:opacity-50" onClick={() => removeCandidate(candidate)} disabled={busyId === candidate.media_id || candidate.protected}>{busyId === candidate.media_id ? 'Opération…' : 'Supprimer du disque'}</button></div></div>)}</div>}
         {history.length > 0 && <div className="mt-5"><h4 className="text-sm font-semibold">Historique des suppressions</h4><div className="mt-2 space-y-1">{history.slice(0, 5).map((entry) => <p key={entry.id} className={`text-xs ${muted}`}>{entry.media_title} · {formatBytes(entry.size_bytes)} · {formatDate(entry.deleted_at)}</p>)}</div></div>}
     </div>;
 }

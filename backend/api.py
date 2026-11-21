@@ -322,6 +322,15 @@ class StorageProtectionRequest(BaseModel):
 MAX_ACTIVE_RENTALS = 5
 
 
+def _rental_status_for(availability_state: str) -> str:
+    """Map a download state (Radarr/Sonarr vocabulary) onto a rental status."""
+    if availability_state == "available":
+        return "available"
+    if availability_state in {"downloading", "imported"}:
+        return "downloading"
+    return "requested"
+
+
 def _serialize_rental(rental: Rental) -> dict[str, Any]:
     return rental.model_dump(mode="json")
 
@@ -523,6 +532,15 @@ async def list_medias(
 ):
     medias = await store.fetch_all()
     return [await _media_for_user(media, current, store) for media in medias]
+
+
+@router.get("/library/available")
+async def list_available_media(
+    _: AuthContext = Depends(get_current_user),
+    store: MediaStore = Depends(get_store),
+):
+    """Media whose file is ready on Jellyfin: playable now, or rentable instantly."""
+    return {"media_ids": [item.media_id for item in await store.list_availabilities() if item.jellyfin_id]}
 
 
 @router.get("/dashboard")
@@ -1590,6 +1608,8 @@ async def _acquire_media(
         raise HTTPException(status_code=409, detail="Associez d'abord ce média à TMDB")
     is_admin = current.user.get("role") == "admin"
     owner_id = current.user["id"]
+    if not is_admin and media.type == "Série":
+        raise HTTPException(status_code=403, detail="Demandez cette série à l'administrateur")
     if not is_admin:
         now = datetime.now(timezone.utc)
         await service.store.expire_rentals(now)
@@ -1652,7 +1672,8 @@ async def _acquire_media(
             now = datetime.now(timezone.utc)
             rental = await service.store.create_rental(Rental(
                 id=str(uuid.uuid4()), media_id=media_id, backstage_user_id=owner_id,
-                status=availability.state, rental_scope="series" if media.type == "Série" else "movie",
+                status=_rental_status_for(availability.state),
+                rental_scope="series" if media.type == "Série" else "movie",
                 requested_at=now, created_at=now, updated_at=now,
             ))
             response["rental"] = _serialize_rental(rental)
@@ -1671,10 +1692,13 @@ async def list_rentals(
     store: MediaStore = Depends(get_store),
 ):
     if current.user.get("role") == "admin":
-        return {"rentals": []}
+        return {"rentals": [], "max_active_rentals": MAX_ACTIVE_RENTALS}
     await store.expire_rentals(datetime.now(timezone.utc))
     rentals = await store.list_user_rentals(current.user["id"])
-    return {"rentals": [_serialize_rental(rental) for rental in rentals]}
+    return {
+        "rentals": [_serialize_rental(rental) for rental in rentals],
+        "max_active_rentals": MAX_ACTIVE_RENTALS,
+    }
 
 
 @router.post("/rentals/{rental_id}/keep")
@@ -1728,6 +1752,13 @@ async def cleanup_preview(
     }
 
 
+async def _extension_message(store: MediaStore, rental: Rental) -> str:
+    media = await store.fetch_one(rental.media_id)
+    title = f"La location de « {media.title} »" if media else "Votre location"
+    ends = f", jusqu'au {rental.expires_at.astimezone().strftime('%d/%m/%Y')}" if rental.expires_at else ""
+    return f"{title} a été prolongée de 7 jours{ends}."
+
+
 async def _apply_rental_decision(
     rental_id: str,
     decision: str,
@@ -1741,11 +1772,14 @@ async def _apply_rental_decision(
         raise HTTPException(status_code=409, detail=str(error)) from error
     if not rental:
         raise HTTPException(status_code=404, detail="Location non trouvée")
-    messages = {
-        "accepted": ("retention_accepted", "Votre contenu a été conservé définitivement."),
-        "refused": ("retention_refused", "La demande de conservation de votre contenu a été refusée."),
-    }
-    kind, message = messages[decision]
+    media = await store.fetch_one(rental.media_id)
+    title = f"« {media.title} »" if media else "Votre film"
+    if decision == "accepted":
+        kind, message = "retention_accepted", f"{title} est conservé définitivement : il reste dans la bibliothèque commune."
+    else:
+        ends = f" Ta location se termine le {rental.expires_at.astimezone().strftime('%d/%m/%Y')}." if rental.expires_at else ""
+        kind, message = "retention_refused", f"{title} ne sera pas conservé.{ends}"
+
     await store.create_notification(Notification(
         id=str(uuid.uuid4()), backstage_user_id=rental.backstage_user_id,
         kind=kind, message=message, created_at=now,
@@ -1786,7 +1820,7 @@ async def extend_rental(
         raise HTTPException(status_code=404, detail="Location non trouvée")
     await store.create_notification(Notification(
         id=str(uuid.uuid4()), backstage_user_id=rental.backstage_user_id,
-        kind="retention_extended", message="Votre location a été prolongée de 7 jours.", created_at=now,
+        kind="retention_extended", message=await _extension_message(store, rental), created_at=now,
     ))
     return {"rental": _serialize_rental(rental)}
 
@@ -1901,6 +1935,19 @@ async def admin_delete_storage_candidate(
         raise HTTPException(status_code=404, detail=str(error)) from error
     except PermissionError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    except MediaServerError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@router.post("/admin/storage/expired/delete")
+async def admin_delete_expired_rentals(
+    current: AuthContext = Depends(require_admin),
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    try:
+        return await service.delete_expired_rentals(current.user["id"])
     except MediaServerError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
     except RuntimeError as error:

@@ -6,10 +6,12 @@ import RecommendationFlow from './components/RecommendationFlow';
 import FilmDetailView from './components/FilmDetailView';
 import DashboardHome from './components/DashboardHome';
 import TMDBMoviePreview from './components/TMDBMoviePreview';
+import NotificationBell from './components/NotificationBell';
 import { useAuth } from './auth-context';
-import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncMediaServer, syncPlayback, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest } from './api';
+import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncMediaServer, syncPlayback, fetchAvailableMediaIds, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
+import { DEFAULT_MAX_ACTIVE_RENTALS, countActiveRentals, indexRentalsByMedia, rentalExpiryLabel, rentalStatusLabel } from './rentals';
 
 const ALL_GENRES = [
     'Action', 'Aventure', 'Animation', 'Biopic', 'Comédie', 'Crime',
@@ -47,7 +49,7 @@ const StarIcon = ({ fillRatio = 0, size = 20, isDarkMode = false }) => {
 // Fallback initial data if API is offline
 const INITIAL_MOVIES = [];
 
-const getMediaAction = (mediaType, availability) => {
+const getMediaAction = (mediaType, availability, isAdmin = true) => {
     if (availability?.jellyfin_id) {
         return { label: 'Lire', canPlay: true, disabled: false };
     }
@@ -62,9 +64,11 @@ const getMediaAction = (mediaType, availability) => {
         return { label: 'Demande en cours', canPlay: false, disabled: true };
     }
     return {
-        label: mediaType === 'Série' ? 'Demander cette série' : 'Demander ce film',
+        label: mediaType === 'Série'
+            ? (isAdmin ? 'Demander cette série' : 'Série à demander à l’admin')
+            : (isAdmin ? 'Demander ce film' : 'Louer ce film'),
         canPlay: false,
-        disabled: false,
+        disabled: !isAdmin && mediaType === 'Série',
     };
 };
 
@@ -128,6 +132,7 @@ const mapMediaToMovie = (media, index = 0) => {
 
 export default function BackstagePrototype() {
     const {user} = useAuth();
+    const isAdmin = user?.role === 'admin';
     const [movies, setMovies] = useState(INITIAL_MOVIES);
     const [activeView, setActiveView] = useState('dashboard');
     const [dashboardData, setDashboardData] = useState(null);
@@ -164,7 +169,12 @@ export default function BackstagePrototype() {
     const [mediaServerOptions, setMediaServerOptions] = useState(null);
     const [showAcquisitionModal, setShowAcquisitionModal] = useState(false);
     const [availabilityByMedia, setAvailabilityByMedia] = useState({});
+    const [availableMediaIds, setAvailableMediaIds] = useState(() => new Set());
+    const [onlyAvailable, setOnlyAvailable] = useState(false);
     const [rentalsByMedia, setRentalsByMedia] = useState({});
+    const [rentals, setRentals] = useState([]);
+    const [maxActiveRentals, setMaxActiveRentals] = useState(DEFAULT_MAX_ACTIVE_RENTALS);
+    const [acquisitionBusy, setAcquisitionBusy] = useState(false);
     const [actorQuery, setActorQuery] = useState('');
     const [actorSuggestions, setActorSuggestions] = useState([]);
     const [actorSearchLoading, setActorSearchLoading] = useState(false);
@@ -222,7 +232,7 @@ export default function BackstagePrototype() {
 
     const selectedMedia = selectedMovie || selectedSeries;
     const selectedMovieId = selectedMovie?.id;
-    const mediaAction = getMediaAction(selectedMedia?.type, mediaAvailability?.availability);
+    const mediaAction = getMediaAction(selectedMedia?.type, mediaAvailability?.availability, isAdmin);
     const selectedRental = selectedMedia?.id ? rentalsByMedia[selectedMedia.id] : null;
 
     const openMovie = (movie) => {
@@ -261,7 +271,10 @@ export default function BackstagePrototype() {
     }, [selectedMovieId]);
 
     const loadRentals = () => fetchRentals().then((result) => {
-        setRentalsByMedia(Object.fromEntries((result.rentals || []).map((rental) => [rental.media_id, rental])));
+        const nextRentals = result.rentals || [];
+        setRentals(nextRentals);
+        setRentalsByMedia(indexRentalsByMedia(nextRentals));
+        if (result.max_active_rentals) setMaxActiveRentals(result.max_active_rentals);
     }).catch(() => {});
 
     const closePlayer = () => {
@@ -400,6 +413,11 @@ export default function BackstagePrototype() {
     };
 
     const openAcquisition = async () => {
+        if (!isAdmin) {
+            setMediaServerError(null);
+            setShowAcquisitionModal(true);
+            return;
+        }
         try {
             setMediaServerError(null);
             let options;
@@ -425,30 +443,38 @@ export default function BackstagePrototype() {
     };
 
     const submitAcquisition = async () => {
+        setAcquisitionBusy(true);
         try {
-            const result = await requestAcquisition(selectedMedia.id, {
+            const result = await requestAcquisition(selectedMedia.id, isAdmin ? {
                 ...acquisitionForm,
                 quality_profile_id: acquisitionForm.quality_profile_id ? Number(acquisitionForm.quality_profile_id) : null,
                 root_folder: acquisitionForm.root_folder || null,
                 language_profile_id: acquisitionForm.language_profile_id ? Number(acquisitionForm.language_profile_id) : null,
-            });
+            } : {});
             setMediaAvailability({ availability: result.availability, playback_url: null });
             if (result.rental) setRentalsByMedia((current) => ({...current, [selectedMedia.id]: result.rental}));
             setShowAcquisitionModal(false);
-            showToast(`"${selectedMedia?.title}" a bien été ajouté au serveur !`, 'success');
-            await refreshLibraryState({sync: user?.role === 'admin'});
+            if (isAdmin) showToast(`"${selectedMedia?.title}" a bien été ajouté au serveur !`, 'success');
+            else if (!result.rental) showToast(`« ${selectedMedia?.title} » est déjà dans la bibliothèque commune : bonne séance !`, 'success');
+            else showToast(result.rental.status === 'available'
+                ? `« ${selectedMedia?.title} » est loué et déjà disponible.`
+                : `« ${selectedMedia?.title} » est loué : tu seras prévenu dès qu’il sera disponible.`, 'success');
+            await Promise.all([refreshLibraryState({sync: isAdmin}), isAdmin ? null : loadRentals()]);
         } catch (error) {
-            const errorMsg = error.message || 'Erreur lors de l\'ajout au serveur.';
+            const errorMsg = error.message || (isAdmin ? 'Erreur lors de l\'ajout au serveur.' : 'Location impossible.');
             setMediaServerError(errorMsg);
-            showToast(`Échec de l'ajout au serveur : ${errorMsg}`, 'error');
+            showToast(isAdmin ? `Échec de l'ajout au serveur : ${errorMsg}` : errorMsg, 'error');
+        } finally {
+            setAcquisitionBusy(false);
         }
     };
 
-    const keepRental = async () => {
-        if (!selectedRental?.id) return;
+    const keepRental = async (rental = selectedRental) => {
+        if (!rental?.id) return;
         try {
-            const result = await requestRentalKeep(selectedRental.id);
-            setRentalsByMedia((current) => ({...current, [selectedMedia.id]: result.rental}));
+            const result = await requestRentalKeep(rental.id);
+            setRentalsByMedia((current) => ({...current, [rental.media_id]: result.rental}));
+            setRentals((current) => current.map((item) => item.id === rental.id ? result.rental : item));
             showToast('Demande de conservation envoyée.', 'success');
         } catch (error) {
             showToast(error.message || 'Demande impossible.', 'error');
@@ -516,9 +542,13 @@ export default function BackstagePrototype() {
         }
     };
 
+    const refreshAvailableMediaIds = () => fetchAvailableMediaIds()
+        .then((ids) => setAvailableMediaIds(new Set(ids)))
+        .catch(() => {});
+
     const refreshLibraryState = async ({sync = false} = {}) => {
         await loadRealMedias();
-        await refreshAvailabilityByMedia();
+        await Promise.all([refreshAvailabilityByMedia(), refreshAvailableMediaIds()]);
         if (sync && user?.role === 'admin') {
             syncMediaServer()
                 .then(async () => {
@@ -599,11 +629,11 @@ export default function BackstagePrototype() {
         try {
             setSeerrRequestBusy(true);
             await createSeerrRequest(recommendation.tmdb_id, 'movie');
-            await loadDashboard();
+            await Promise.all([loadDashboard(), isAdmin ? null : loadRentals(), isAdmin ? null : loadRealMedias()]);
             setTMDBPreview((current) => ({...current, open: false}));
-            showToast(user?.role === 'admin'
+            showToast(isAdmin
                 ? `« ${recommendation.title} » a été demandé à Seerr.`
-                : `« ${recommendation.title} » est loué : retrouve-le dans tes locations.`);
+                : `« ${recommendation.title} » est loué : retrouve-le dans « Mes locations » sur l’accueil.`);
         } catch (error) {
             showToast(error.message || 'Demande Seerr impossible.', 'error');
         } finally {
@@ -633,7 +663,8 @@ export default function BackstagePrototype() {
     const filteredMovies = filterAndSortMovies(collectionMedias, { ...filters, query: searchQuery }, sort)
         .filter(movie => activeFilter === 'all' || activeFilter === 'watched' ? activeFilter === 'all' || ['Terminé', 'Terminée'].includes(movie.status)
             : activeFilter === 'unwatched' ? !['Terminé', 'Terminée'].includes(movie.status)
-                : activeFilter === 'watchlist' ? movie.isWatchlist : movie.isFavorite);
+                : activeFilter === 'watchlist' ? movie.isWatchlist : movie.isFavorite)
+        .filter((movie) => !onlyAvailable || availableMediaIds.has(movie.id));
 
     // Toggle Favorite
     const toggleFavorite = async (id, e) => {
@@ -853,7 +884,7 @@ export default function BackstagePrototype() {
         if (!addQuery.trim()) return;
         setAddLoading(true);
         try {
-            setAddResults(collection === 'Séries'
+            setAddResults(isAdmin && collection === 'Séries'
                 ? await searchTMDBTV(addQuery)
                 : await searchTMDB(addQuery));
         } finally { setAddLoading(false); }
@@ -1064,12 +1095,13 @@ export default function BackstagePrototype() {
                             />
                         </div>
 
-                        <button onClick={() => setShowAddDialog(true)} className="whitespace-nowrap bg-[#635bff] px-3 py-2 text-xs font-semibold text-white shadow-md transition-all hover:bg-[#5048e5]">
-                            {collection === 'Séries' ? 'Ajouter une série' : 'Ajouter un film'}
-                        </button>
+                        {(isAdmin || collection !== 'Séries') && <button onClick={() => setShowAddDialog(true)} className="whitespace-nowrap bg-[#635bff] px-3 py-2 text-xs font-semibold text-white shadow-md transition-all hover:bg-[#5048e5]">
+                            {isAdmin ? (collection === 'Séries' ? 'Ajouter une série' : 'Ajouter un film') : 'Louer un film'}
+                        </button>}
                         {user?.role === 'admin' && <button onClick={() => setShowAdminCenter(true)} className="rounded-lg border border-[#635bff]/40 px-3 py-2 text-xs font-semibold text-[#635bff]" title="Ouvrir l’administration">
                             Administration
                         </button>}
+                        <NotificationBell isDarkMode={isDarkMode} />
                         <button onClick={() => setShowAccountPanel(true)} className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs font-semibold" title="Ouvrir le compte">
                             <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#635bff] text-[11px] font-bold text-white" aria-hidden="true">{(user?.display_name || 'Compte').charAt(0).toUpperCase()}</span>
                             <span className="hidden lg:inline">{user?.display_name || 'Compte'}</span>
@@ -1232,7 +1264,12 @@ export default function BackstagePrototype() {
                         onOpenTMDBDetails={openTMDBPreview}
                         onCancelRequest={cancelDashboardRequest}
                         cancellingRequest={cancellingRequest}
-                        isAdmin={user?.role === 'admin'}
+                        isAdmin={isAdmin}
+                        rentals={rentals}
+                        maxActiveRentals={maxActiveRentals}
+                        medias={movies}
+                        onKeepRental={keepRental}
+                        onRentFilm={() => { setActiveView('library'); changeCollection('Films'); setShowAddDialog(true); }}
                         onOpenLibrary={() => setActiveView('library')}
                         onOpenRecommendations={() => setShowRecommendationFlow(true)}
                     /> : <>
@@ -1265,7 +1302,8 @@ export default function BackstagePrototype() {
                         <select value={sort.key} onChange={e => setSort(prev => ({ ...prev, key: e.target.value }))} className="text-xs rounded border px-2 py-1.5"><option value="createdAt">Date d'ajout</option><option value="title">Titre</option><option value="year">Année</option><option value="rating">Note</option></select>
                         <button onClick={() => setSort(prev => ({ ...prev, direction: prev.direction === 'asc' ? 'desc' : 'asc' }))} className="text-xs rounded border px-2 py-1.5">{sort.direction === 'asc' ? '↑ Croissant' : '↓ Décroissant'}</button>
                         {[['genre', 'Genre', filterOptions(collectionMedias, 'genre')], ['director', 'Réalisateur', filterOptions(collectionMedias, 'director')], ['status', 'Statut', ['À regarder', 'En cours', 'Terminé', 'Terminée']], ['support', 'Support', filterOptions(collectionMedias, 'supports')]].map(([key, label, options]) => <select key={key} value={filters[key]} onChange={e => setFilters(prev => ({ ...prev, [key]: e.target.value }))} className="text-xs rounded border px-2 py-1.5"><option value="">{label}</option>{options.map(option => <option key={option} value={option}>{option}</option>)}</select>)}
-                        <button onClick={() => setFilters({ genre: '', director: '', status: '', support: '' })} className="text-xs text-[#635bff] px-2">Réinitialiser</button>
+                        <button type="button" onClick={() => setOnlyAvailable((value) => !value)} aria-pressed={onlyAvailable} className={`rounded border px-2 py-1.5 text-xs font-semibold transition ${onlyAvailable ? 'border-emerald-500 bg-emerald-500 text-white' : 'border-emerald-500/40 text-emerald-600 hover:bg-emerald-500/10'}`} title="Films prêts à être lus sur le serveur">▶ Disponible maintenant</button>
+                        <button onClick={() => { setFilters({ genre: '', director: '', status: '', support: '' }); setOnlyAvailable(false); }} className="text-xs text-[#635bff] px-2">Réinitialiser</button>
                     </div>
 
                     <div className="category-rail mb-7" aria-label="Explorer par catégorie">
@@ -1406,7 +1444,7 @@ export default function BackstagePrototype() {
                             <div className={`mb-5 flex items-center justify-between gap-4 rounded-xl border p-4 shadow-sm ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
                                 <div>
                                     <p className="text-sm font-semibold">{mediaAction.canPlay ? 'Cette série est disponible' : 'Cette série n’est pas encore disponible'}</p>
-                                    <p className="mt-1 text-xs opacity-60">{mediaAction.canPlay ? 'Lecture depuis le serveur' : 'Lancer une demande de téléchargement via Seerr'}</p>
+                                    <p className="mt-1 text-xs opacity-60">{mediaAction.canPlay ? 'Lecture depuis le serveur' : (isAdmin ? 'Lancer une demande de téléchargement via Seerr' : selectedMedia?.type === 'Série' ? 'Demande-la à l’admin' : 'Location de 21 jours, lisible dès la fin du téléchargement')}</p>
                                 </div>
                                 <button onClick={mediaAction.disabled ? undefined : mediaAction.canPlay ? openPlayer : openAcquisition} disabled={mediaAction.disabled} className="rounded-lg bg-[#635bff] px-4 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60">{mediaAction.label}</button>
                             </div>
@@ -1417,10 +1455,10 @@ export default function BackstagePrototype() {
                             {seriesTab === 'details' && <div className="space-y-5 animate-fade-in-smooth">
                                 {selectedSeries.originalTitle && selectedSeries.originalTitle !== selectedSeries.title && <div className={`rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
                                     <p className="text-[10px] font-mono uppercase tracking-widest opacity-60">Titre original</p>
-                                    <div className="mt-2 flex items-center justify-between gap-3"><strong>{selectedSeries.originalTitle}</strong><button onClick={useOriginalSeriesTitle} className="rounded-lg border border-[#635bff]/40 px-3 py-1.5 text-xs font-semibold text-[#635bff]">Utiliser comme titre principal</button></div>
+                                    <div className="mt-2 flex items-center justify-between gap-3"><strong>{selectedSeries.originalTitle}</strong>{isAdmin && <button onClick={useOriginalSeriesTitle} className="rounded-lg border border-[#635bff]/40 px-3 py-1.5 text-xs font-semibold text-[#635bff]">Utiliser comme titre principal</button>}</div>
                                 </div>}
                                 <div className={`rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
-                                    <div className="flex items-center justify-between gap-3"><p className="text-[10px] font-mono uppercase tracking-widest opacity-60">Synopsis</p><button onClick={refreshSelectedSeries} disabled={seriesRefreshing} className="rounded-lg bg-[#635bff] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{seriesRefreshing ? 'Actualisation…' : 'Actualiser TMDB'}</button></div>
+                                    <div className="flex items-center justify-between gap-3"><p className="text-[10px] font-mono uppercase tracking-widest opacity-60">Synopsis</p>{isAdmin && <button onClick={refreshSelectedSeries} disabled={seriesRefreshing} className="rounded-lg bg-[#635bff] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{seriesRefreshing ? 'Actualisation…' : 'Actualiser TMDB'}</button>}</div>
                                     <p className="mt-3 text-sm leading-6 opacity-80">{selectedSeries.synopsis || 'Aucun synopsis disponible.'}</p>
                                     <button
                                         onClick={mediaAction.disabled ? undefined : mediaAction.canPlay ? openPlayer : openAcquisition}
@@ -1431,9 +1469,9 @@ export default function BackstagePrototype() {
                                     </button>
                                     {selectedRental && (
                                         <div className="mt-3 rounded-lg border border-[#635bff]/30 bg-[#635bff]/5 p-3 text-xs">
-                                            <div>Location : <strong>{selectedRental.status === 'keep_requested' ? 'conservation demandée' : selectedRental.status === 'kept' ? 'Conservé définitivement' : selectedRental.status}</strong></div>
-                                            {selectedRental.expires_at && <div className="mt-1 opacity-70">Expire le {new Date(selectedRental.expires_at).toLocaleDateString('fr-FR')}</div>}
-                                            {selectedRental.status === 'available' && <button onClick={keepRental} className="mt-2 rounded border border-[#635bff] px-2 py-1 font-semibold text-[#635bff]">Demander à conserver</button>}
+                                            <div>Location : <strong>{rentalStatusLabel(selectedRental.status)}</strong></div>
+                                            {rentalExpiryLabel(selectedRental) && <div className="mt-1 opacity-70">Location : {rentalExpiryLabel(selectedRental)} (le {new Date(selectedRental.expires_at).toLocaleDateString('fr-FR')})</div>}
+                                            {selectedRental.status === 'available' && <button onClick={() => keepRental()} className="mt-2 rounded border border-[#635bff] px-2 py-1 font-semibold text-[#635bff]">Demander à conserver</button>}
                                         </div>
                                     )}
                                 </div>
@@ -1627,8 +1665,8 @@ export default function BackstagePrototype() {
                                     </div>
                                 </div>
 
-                                {/* Support Selector */}
-                                <div className="border-t pt-3 border-white/5">
+                                {/* Support Selector (admin catalogue) */}
+                                {isAdmin && <div className="border-t pt-3 border-white/5">
                                     <label className={`block text-[11px] font-semibold mb-1.5 ${isDarkMode ? 'text-white/70' : 'text-[#0a2540]'}`}>
                                         Support / Emplacement :
                                     </label>
@@ -1659,11 +1697,11 @@ export default function BackstagePrototype() {
                                             );
                                         })}
                                     </div>
-                                </div>
+                                </div>}
                             </div>
 
                             {/* Cinema & Viewing Experience Box (Emplacement juste en dessous du support quand Cinéma est sélectionné) */}
-                            {((Array.isArray(selectedMovie.supports) ? selectedMovie.supports.includes('Cinéma') : selectedMovie.support === 'Cinéma') || selectedMovie.watchedInCinema) && (
+                            {isAdmin && ((Array.isArray(selectedMovie.supports) ? selectedMovie.supports.includes('Cinéma') : selectedMovie.support === 'Cinéma') || selectedMovie.watchedInCinema) && (
                                 <div className={`p-4 rounded-xl border shadow-sm space-y-3 transition-all duration-300 border-amber-500/30 ${isDarkMode ? 'bg-[#0a0a0a]' : 'bg-white'
                                     }`}>
                                     <div className="flex items-center justify-between">
@@ -1717,7 +1755,7 @@ export default function BackstagePrototype() {
                             <div className={`flex items-center justify-between gap-4 rounded-xl border p-4 shadow-sm ${isDarkMode ? 'border-white/10 bg-[#0a0a0a]' : 'border-[#e3e8ee] bg-white'}`}>
                                 <div className="flex min-w-0 items-center gap-3">
                                     <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${mediaAction.canPlay ? 'bg-emerald-500 text-white' : 'bg-[#635bff] text-white'}`} aria-hidden="true">{mediaAction.canPlay ? '✓' : '+'}</div>
-                                    <div className="min-w-0"><p className="text-sm font-semibold">{mediaAction.canPlay ? 'Disponible dans votre bibliothèque' : mediaAction.disabled ? mediaAction.label : 'Ce film n’est pas encore disponible'}</p><p className="mt-0.5 truncate text-[11px] opacity-55">{mediaAction.canPlay ? 'Lecture immédiate depuis votre serveur média' : 'Lancer une demande de téléchargement via Seerr'}</p></div>
+                                    <div className="min-w-0"><p className="text-sm font-semibold">{mediaAction.canPlay ? 'Disponible dans votre bibliothèque' : mediaAction.disabled ? mediaAction.label : 'Ce film n’est pas encore disponible'}</p><p className="mt-0.5 truncate text-[11px] opacity-55">{mediaAction.canPlay ? 'Lecture immédiate depuis votre serveur média' : (isAdmin ? 'Lancer une demande de téléchargement via Seerr' : selectedMedia?.type === 'Série' ? 'Demande-la à l’admin' : 'Location de 21 jours, lisible dès la fin du téléchargement')}</p></div>
                                 </div>
                                 <div className="flex shrink-0 items-center gap-2">
                                 <button type="button" onClick={(event) => toggleFavorite(selectedMovie.id, event)} className={`rounded-lg border px-3 py-2.5 text-xs font-semibold transition ${selectedMovie.isFavorite ? 'border-red-500/40 bg-red-500/10 text-red-500' : isDarkMode ? 'border-white/15 text-white/70 hover:bg-white/10' : 'border-[#e3e8ee] text-[#425466] hover:bg-[#f6f9fc]'}`} aria-label={selectedMovie.isFavorite ? 'Retirer des favoris' : 'Ajouter aux favoris'}>{selectedMovie.isFavorite ? '♥' : '♡'}</button>
@@ -1736,9 +1774,9 @@ export default function BackstagePrototype() {
 
                             {selectedRental && (
                                 <div className={`mt-4 rounded-xl border p-4 text-xs ${isDarkMode ? 'border-[#635bff]/30 bg-[#635bff]/10' : 'border-[#635bff]/30 bg-[#635bff]/5'}`}>
-                                    <div>Location : <strong>{selectedRental.status === 'keep_requested' ? 'conservation demandée' : selectedRental.status === 'kept' ? 'Conservé définitivement' : selectedRental.status}</strong></div>
-                                    {selectedRental.expires_at && <div className="mt-1 opacity-70">Expire le {new Date(selectedRental.expires_at).toLocaleDateString('fr-FR')}</div>}
-                                    {selectedRental.status === 'available' && <button onClick={keepRental} className="mt-2 rounded border border-[#635bff] px-2 py-1 font-semibold text-[#635bff]">Demander à conserver</button>}
+                                    <div>Location : <strong>{rentalStatusLabel(selectedRental.status)}</strong></div>
+                                    {rentalExpiryLabel(selectedRental) && <div className="mt-1 opacity-70">Location : {rentalExpiryLabel(selectedRental)} (le {new Date(selectedRental.expires_at).toLocaleDateString('fr-FR')})</div>}
+                                    {selectedRental.status === 'available' && <button onClick={() => keepRental()} className="mt-2 rounded border border-[#635bff] px-2 py-1 font-semibold text-[#635bff]">Demander à conserver</button>}
                                 </div>
                             )}
 
@@ -1836,17 +1874,17 @@ export default function BackstagePrototype() {
                                                 <span className="truncate flex items-center gap-1.5">
                                                     <span className="text-[#635bff] font-bold">•</span> {actor}
                                                 </span>
-                                                <button
+                                                {isAdmin && <button
                                                     onClick={() => handleRemoveCastActor(selectedMovie.id, idx)}
                                                     className="opacity-0 group-hover:opacity-100 text-[10px] text-red-400 hover:text-red-600 px-1 transition-opacity cursor-pointer"
                                                     title="Retirer l'acteur"
                                                 >
                                                     ✕
-                                                </button>
+                                                </button>}
                                             </li>
                                         ))}
                                     </ul>
-                                    <div className="relative">
+                                    {isAdmin && <div className="relative">
                                         <input
                                             name="actorInput"
                                             type="text"
@@ -1871,7 +1909,7 @@ export default function BackstagePrototype() {
                                                 <span><strong className="block">{person.name}</strong><span className="opacity-60">{person.known_for_department || 'Acteur'}</span></span>
                                             </button>)}
                                         </div>}
-                                    </div>
+                                    </div>}
                                 </div>
 
                                 {/* Genres avec sélection complète */}
@@ -1891,7 +1929,7 @@ export default function BackstagePrototype() {
                                                     }`}
                                             >
                                                 #{g}
-                                                {selectedMovie.genre.length > 1 && (
+                                                {isAdmin && selectedMovie.genre.length > 1 && (
                                                     <button
                                                         onClick={() => handleRemoveGenre(selectedMovie.id, g)}
                                                         className="text-[9px] hover:text-red-500 font-bold ml-0.5 cursor-pointer"
@@ -1904,7 +1942,7 @@ export default function BackstagePrototype() {
                                         ))}
                                     </div>
                                     {/* Dropdown de sélection des genres */}
-                                    <select
+                                    {isAdmin && <select
                                         onChange={(e) => {
                                             if (e.target.value) {
                                                 handleAddGenre(selectedMovie.id, e.target.value);
@@ -1921,7 +1959,7 @@ export default function BackstagePrototype() {
                                         {ALL_GENRES.filter(g => !selectedMovie.genre.includes(g)).map((g) => (
                                             <option key={g} value={g}>{g}</option>
                                         ))}
-                                    </select>
+                                    </select>}
                                 </div>
                             </div>
 
@@ -1967,7 +2005,7 @@ export default function BackstagePrototype() {
                         <div className={`p-4 border-t flex justify-between items-center transition-colors duration-300 ${isDarkMode ? 'border-white/10 bg-[#0a0a0a]' : 'border-[#e3e8ee] bg-white'
                             }`}>
                             <div className="flex items-center gap-2">
-                                <button
+                                {isAdmin && <button
                                     onClick={() => {
                                         setTmdbSearchQuery(selectedMovie.title);
                                         setTmdbResults([]);
@@ -1981,7 +2019,7 @@ export default function BackstagePrototype() {
                                     title="Changer d'association TMDB si le film est incorrect"
                                 >
                                     <span>🔄 Réassocier TMDB</span>
-                                </button>
+                                </button>}
                             </div>
 
                             <button
@@ -2002,14 +2040,36 @@ export default function BackstagePrototype() {
             {showAddDialog && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
                     <div className="w-full max-w-xl rounded-xl bg-white p-5 text-[#0a2540]">
-                        <div className="flex justify-between items-center mb-3"><h2 className="font-serif text-lg font-bold">{collection === 'Séries' ? 'Ajouter une série' : 'Ajouter un film'}</h2><button onClick={() => setShowAddDialog(false)}>✕</button></div>
+                        <div className="flex justify-between items-center mb-3"><h2 className="font-serif text-lg font-bold">{isAdmin ? (collection === 'Séries' ? 'Ajouter une série' : 'Ajouter un film') : 'Louer un film'}</h2><button onClick={() => setShowAddDialog(false)}>✕</button></div>
                         <div className="flex gap-2"><input value={addQuery} onChange={e => setAddQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && searchToAdd()} placeholder={collection === 'Séries' ? 'Titre de la série' : 'Titre du film'} className="flex-1 rounded border px-3 py-2"/><button onClick={searchToAdd} className="rounded bg-[#635bff] px-3 py-2 text-white">Rechercher</button></div>
-                        <div className="mt-4 space-y-2">{addLoading ? 'Chargement…' : addResults.map(result => <button key={result.tmdb_id} onClick={() => addFromTMDB(result.tmdb_id)} className="block w-full rounded border p-3 text-left hover:border-[#635bff]"><strong>{result.title}</strong> {result.release_date?.slice(0, 4)}</button>)}</div>
+                        <div className="mt-4 space-y-2">{addLoading ? 'Chargement…' : addResults.map(result => <button key={result.tmdb_id} onClick={() => isAdmin ? addFromTMDB(result.tmdb_id) : (setShowAddDialog(false), openTMDBPreview({tmdb_id: result.tmdb_id, title: result.title}))} className="block w-full rounded border p-3 text-left hover:border-[#635bff]"><strong>{result.title}</strong> {result.release_date?.slice(0, 4)}</button>)}</div>
                     </div>
                 </div>
             )}
 
-            {showAcquisitionModal && selectedMedia && (
+            {showAcquisitionModal && selectedMedia && !isAdmin && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4" onClick={() => setShowAcquisitionModal(false)} role="presentation">
+                    <div className={`w-full max-w-md rounded-2xl border p-6 shadow-2xl ${isDarkMode ? 'border-white/10 bg-[#0e0e11] text-white' : 'border-[#e3e8ee] bg-white text-[#0a2540]'}`} onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={`Louer ${selectedMedia.title}`}>
+                        <p className="text-[10px] font-mono font-bold uppercase tracking-[0.2em] text-[#635bff]">Location</p>
+                        <h2 className="mt-1 font-serif text-xl font-bold">Louer « {selectedMedia.title} »</h2>
+                        <ul className="mt-4 space-y-2 text-sm opacity-80">
+                            <li>• Téléchargé sur le serveur, tu es prévenu quand il est prêt.</li>
+                            <li>• Disponible <strong>21 jours</strong>, puis 7 jours après ta première lecture.</li>
+                            <li>• Tu pourras demander à le garder définitivement.</li>
+                        </ul>
+                        <p className={`mt-4 rounded-lg px-3 py-2 text-xs font-semibold ${countActiveRentals(rentals) >= maxActiveRentals ? 'bg-rose-500/10 text-rose-500' : 'bg-[#635bff]/10 text-[#635bff]'}`}>
+                            {countActiveRentals(rentals)}/{maxActiveRentals} locations en cours{countActiveRentals(rentals) >= maxActiveRentals ? ' : limite atteinte, attends qu’une location se termine.' : ''}
+                        </p>
+                        {mediaServerError && <p className="mt-3 text-xs text-rose-500">{mediaServerError}</p>}
+                        <div className="mt-6 flex justify-end gap-2">
+                            <button type="button" onClick={() => setShowAcquisitionModal(false)} className="rounded-lg border border-current/15 px-4 py-2 text-xs font-semibold">Annuler</button>
+                            <button type="button" onClick={submitAcquisition} disabled={acquisitionBusy || countActiveRentals(rentals) >= maxActiveRentals} className="rounded-lg bg-[#635bff] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{acquisitionBusy ? 'Location…' : 'Louer ce film'}</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showAcquisitionModal && selectedMedia && isAdmin && (
                 <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
                     <div className="w-full max-w-md rounded-xl bg-white p-5 text-[#0a2540]">
                         <h2 className="font-serif text-lg font-bold">Ajouter {selectedMedia.title} au serveur</h2>

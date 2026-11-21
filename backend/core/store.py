@@ -664,6 +664,9 @@ class MediaStore:
                 "WHERE status IN ('requested', 'downloading', 'available', 'keep_requested', 'kept') "
                 "OR storage_policy = 'permanent'"
             ).fetchall()
+            expired_rows = conn.execute(
+                "SELECT DISTINCT media_id FROM media_rentals WHERE status = 'expired'"
+            ).fetchall()
             playback_rows = conn.execute(
                 "SELECT media_id, MAX(last_played_at) FROM playback_progress "
                 "WHERE media_id IS NOT NULL AND last_played_at IS NOT NULL "
@@ -683,6 +686,7 @@ class MediaStore:
             "favorite_media_ids": {row[0] for row in favorite_rows},
             "protected_media_ids": {row[0] for row in protection_rows if row[1]},
             "rental_media_ids": {row[0] for row in rental_rows},
+            "expired_rental_media_ids": {row[0] for row in expired_rows} - {row[0] for row in rental_rows},
             "last_playback": last_playback,
             "recent_playback": recent_playback,
         }

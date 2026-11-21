@@ -47,6 +47,7 @@ class StorageCandidate(BaseModel):
     last_played_at: Optional[datetime] = None
     is_favorite: bool = False
     has_active_rental: bool = False
+    rental_expired: bool = False
     protected: bool = False
     protection_reasons: list[str] = Field(default_factory=list)
 
@@ -480,6 +481,7 @@ class MediaServerService:
                 last_played_at=last_played_at,
                 is_favorite=media.id in context["favorite_media_ids"],
                 has_active_rental=has_active_rental,
+                rental_expired=media.id in context.get("expired_rental_media_ids", set()),
                 protected=bool(HARD_STORAGE_PROTECTION_REASONS.intersection(reasons)),
                 protection_reasons=reasons,
             ))
@@ -487,6 +489,23 @@ class MediaServerService:
 
     async def set_storage_protection(self, media_id: str, protected: bool) -> bool:
         return await self.store.set_storage_protection(media_id, protected)
+
+    async def delete_expired_rentals(self, admin_user_id: str) -> dict[str, Any]:
+        """Delete every unprotected film whose only rentals have expired."""
+        targets = [
+            item for item in await self.storage_candidates()
+            if item.rental_expired and not item.protected
+        ]
+        deleted, failed, freed_bytes = [], [], 0
+        for candidate in targets:
+            try:
+                result = await self.delete_storage_candidate(candidate.media_id, admin_user_id)
+            except (LookupError, PermissionError, RuntimeError) as error:
+                failed.append({"media_id": candidate.media_id, "title": candidate.title, "error": str(error)})
+                continue
+            deleted.append({"media_id": candidate.media_id, "title": candidate.title})
+            freed_bytes += int(result.get("freed_bytes") or candidate.size_bytes)
+        return {"deleted": deleted, "failed": failed, "freed_bytes": freed_bytes}
 
     async def delete_storage_candidate(self, media_id: str, admin_user_id: str) -> dict[str, Any]:
         candidates = await self.storage_candidates()
