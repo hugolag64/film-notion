@@ -344,12 +344,14 @@ class JellyfinClient:
         self, item_id: str, *, base_url: Optional[str] = None, autoplay: bool = False,
     ) -> str:
         web_base_url = (base_url or self.base_url).rstrip("/")
-        url = f"{web_base_url}/web/index.html#/details?id={quote(item_id, safe='')}"
+        url = f"{web_base_url}/web/index.html"
+        if autoplay:
+            # Keep the launch marker outside Jellyfin's hash-router query. Jellyfin
+            # may normalize that query while opening the details route.
+            url += "?backstagePlay=1"
+        url += f"#/details?id={quote(item_id, safe='')}"
         if self.server_id:
             url += f"&serverId={quote(self.server_id, safe='')}"
-        if autoplay:
-            # The optional Backstage script in Jellyfin Web consumes this marker.
-            url += "&backstagePlay=1"
         return url
 
     def playback_manifest_url(self, item_id: str) -> str:
