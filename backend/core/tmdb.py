@@ -13,6 +13,28 @@ def _search_title_key(value: str) -> str:
     return "".join(character for character in normalized if character.isalnum())
 
 
+def _rank_search_results(results: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
+    """Exact titles first, then titles starting with the query, then by popularity.
+
+    TMDB's own order favours obscure exact-word matches ("Interstellar Wars")
+    over the film everybody is looking for.
+    """
+    query_key = _search_title_key(query.strip())
+
+    def rank(result: Dict[str, Any]):
+        keys = {_search_title_key(result.get(field) or "") for field in ("title", "original_title")}
+        keys.discard("")
+        if query_key in keys:
+            tier = 0
+        elif any(key.startswith(query_key) for key in keys):
+            tier = 1
+        else:
+            tier = 2
+        return tier, -float(result.get("popularity") or 0)
+
+    return sorted(results, key=rank)
+
+
 class TMDBClient:
     BASE_URL = "https://api.themoviedb.org/3"
 
@@ -34,11 +56,7 @@ class TMDBClient:
             response = await http.request_with_retry("GET", url, params=params)
             response.raise_for_status()
             results = response.json().get("results", [])
-            query_key = _search_title_key(query.strip())
-            results.sort(key=lambda result: 0 if _search_title_key(
-                result.get("title") or result.get("original_title") or ""
-            ) == query_key else 1)
-            return results[:20]
+            return _rank_search_results(results, query)[:20]
         except Exception as e:
             logger.error("Erreur recherche film '%s': %s", query, e)
             return []

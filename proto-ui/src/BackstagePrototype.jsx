@@ -163,6 +163,8 @@ export default function BackstagePrototype() {
     const [showAddDialog, setShowAddDialog] = useState(false);
     const [addQuery, setAddQuery] = useState('');
     const [addResults, setAddResults] = useState([]);
+    const [addSearching, setAddSearching] = useState(false);
+    const addSearchId = useRef(0);
     const [addLoading, setAddLoading] = useState(false);
     const [mediaAvailability, setMediaAvailability] = useState(null);
     const [mediaServerError, setMediaServerError] = useState(null);
@@ -896,15 +898,42 @@ export default function BackstagePrototype() {
         } finally { setAddLoading(false); }
     };
 
-    const searchToAdd = async () => {
-        if (!addQuery.trim()) return;
-        setAddLoading(true);
+    const searchToAdd = async (query = addQuery) => {
+        const trimmed = query.trim();
+        const requestId = ++addSearchId.current;
+        if (trimmed.length < 2) {
+            setAddResults([]);
+            setAddSearching(false);
+            return;
+        }
+        setAddSearching(true);
         try {
-            setAddResults(isAdmin && collection === 'Séries'
-                ? await searchTMDBTV(addQuery)
-                : await searchTMDB(addQuery));
-        } finally { setAddLoading(false); }
+            const results = isAdmin && collection === 'Séries'
+                ? await searchTMDBTV(trimmed)
+                : await searchTMDB(trimmed);
+            // Ignore answers to an older query: the user kept typing.
+            if (requestId === addSearchId.current) setAddResults(results);
+        } catch {
+            if (requestId === addSearchId.current) setAddResults([]);
+        } finally {
+            if (requestId === addSearchId.current) setAddSearching(false);
+        }
     };
+
+    // Live search: results refresh while typing, debounced to spare TMDB.
+    useEffect(() => {
+        if (!showAddDialog) return undefined;
+        const timer = window.setTimeout(() => searchToAdd(addQuery), 350);
+        return () => window.clearTimeout(timer);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [addQuery, showAddDialog, collection]);
+
+    useEffect(() => {
+        if (!showAddDialog) return undefined;
+        const onKeyDown = (event) => { if (event.key === 'Escape') setShowAddDialog(false); };
+        document.addEventListener('keydown', onKeyDown);
+        return () => document.removeEventListener('keydown', onKeyDown);
+    }, [showAddDialog]);
 
     const changeCollection = (nextCollection) => {
         if (nextCollection === collection) return;
@@ -1330,7 +1359,7 @@ export default function BackstagePrototype() {
                     </div>
 
                     {/* 2/3 Poster Grid */}
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-6">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-5">
                         {filteredMovies.map((movie) => (
                             <div
                                 key={movie.id}
@@ -2056,11 +2085,21 @@ export default function BackstagePrototype() {
 
             {/* TMDB Search & Relink Modal */}
             {showAddDialog && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-                    <div className="w-full max-w-xl rounded-xl bg-white p-5 text-[#0a2540]">
-                        <div className="flex justify-between items-center mb-3"><h2 className="font-serif text-lg font-bold">{isAdmin ? (collection === 'Séries' ? 'Ajouter une série' : 'Ajouter un film') : 'Louer un film'}</h2><button onClick={() => setShowAddDialog(false)}>✕</button></div>
-                        <div className="flex gap-2"><input value={addQuery} onChange={e => setAddQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && searchToAdd()} placeholder={collection === 'Séries' ? 'Titre de la série' : 'Titre du film'} className="flex-1 rounded border px-3 py-2"/><button onClick={searchToAdd} className="rounded bg-[#635bff] px-3 py-2 text-white">Rechercher</button></div>
-                        <div className="mt-4 space-y-2">{addLoading ? 'Chargement…' : addResults.map(result => <button key={result.tmdb_id} onClick={() => isAdmin ? addFromTMDB(result.tmdb_id) : (setShowAddDialog(false), openTMDBPreview({tmdb_id: result.tmdb_id, title: result.title}))} className="block w-full rounded border p-3 text-left hover:border-[#635bff]"><strong>{result.title}</strong> {result.release_date?.slice(0, 4)}</button>)}</div>
+                <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 p-4 pt-[8vh]" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowAddDialog(false); }}>
+                    <div className={`flex max-h-[84vh] w-full max-w-xl flex-col overflow-hidden rounded-xl shadow-2xl ${isDarkMode ? 'bg-[#0e0e11] text-white' : 'bg-white text-[#0a2540]'}`} role="dialog" aria-modal="true">
+                        <div className="border-b border-current/10 p-5 pb-4">
+                            <div className="mb-3 flex items-center justify-between"><h2 className="font-serif text-lg font-bold">{isAdmin ? (collection === 'Séries' ? 'Ajouter une série' : 'Ajouter un film') : 'Louer un film'}</h2><button type="button" onClick={() => setShowAddDialog(false)} className="rounded px-2 py-1 text-sm opacity-60 hover:opacity-100" aria-label="Fermer (Échap)" title="Fermer (Échap)">✕</button></div>
+                            <div className="relative"><input autoFocus value={addQuery} onChange={e => setAddQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && searchToAdd()} placeholder={collection === 'Séries' ? 'Titre de la série' : 'Titre du film'} className={`w-full rounded-lg border px-3 py-2.5 pr-24 outline-none focus:border-[#635bff] ${isDarkMode ? 'border-white/15 bg-white/5' : 'border-[#e3e8ee]'}`}/><span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11px] opacity-50">{addSearching ? 'Recherche…' : addQuery.trim().length >= 2 ? `${addResults.length} résultat${addResults.length > 1 ? 's' : ''}` : ''}</span></div>
+                        </div>
+                        <div className={`flex-1 space-y-2 overflow-y-auto p-5 pt-4 ${addSearching ? 'opacity-60' : ''}`}>
+                            {addLoading && <p className="text-sm opacity-70">Ajout en cours…</p>}
+                            {!addLoading && addQuery.trim().length < 2 && <p className="py-6 text-center text-sm opacity-50">Tape au moins 2 lettres : les résultats s’affichent au fur et à mesure.</p>}
+                            {!addLoading && !addSearching && addQuery.trim().length >= 2 && addResults.length === 0 && <p className="py-6 text-center text-sm opacity-50">Aucun résultat sur TMDB.</p>}
+                            {!addLoading && addResults.map(result => <button type="button" key={result.tmdb_id} onClick={() => isAdmin ? addFromTMDB(result.tmdb_id) : (setShowAddDialog(false), openTMDBPreview({tmdb_id: result.tmdb_id, title: result.title}))} className={`flex w-full items-center gap-3 rounded-lg border p-2 text-left transition hover:border-[#635bff] ${isDarkMode ? 'border-white/10 hover:bg-white/5' : 'border-[#e3e8ee] hover:bg-[#f6f9fc]'}`}>
+                                {result.poster_url ? <img src={result.poster_url} alt="" loading="lazy" className="h-16 w-11 shrink-0 rounded object-cover" /> : <span className="flex h-16 w-11 shrink-0 items-center justify-center rounded bg-current/10 text-lg opacity-40">🎬</span>}
+                                <span className="min-w-0"><strong className="block truncate">{result.title}</strong><span className="text-xs opacity-60">{result.release_date?.slice(0, 4) || 'Date inconnue'}</span>{result.overview && <span className="mt-0.5 line-clamp-1 block text-[11px] opacity-50">{result.overview}</span>}</span>
+                            </button>)}
+                        </div>
                     </div>
                 </div>
             )}

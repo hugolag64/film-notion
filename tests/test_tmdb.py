@@ -53,3 +53,18 @@ def test_search_movie_keeps_tmdb_relevance_for_punctuation_variant(monkeypatch):
     results = asyncio.run(TMDBClient().search_movie("71"))
 
     assert results[0]["id"] == 252178
+
+
+def test_search_ranking_puts_the_popular_exact_title_before_obscure_matches():
+    from backend.core.tmdb import _rank_search_results
+
+    results = [
+        {"id": 1, "title": "Interstellar Wars", "popularity": 1.2},
+        {"id": 2, "title": "Lolita from Interstellar Space", "popularity": 0.8},
+        {"id": 3, "title": "The Science of Interstellar", "popularity": 3.0},
+        {"id": 4, "title": "Interstellar", "popularity": 140.0},
+    ]
+
+    assert [r["id"] for r in _rank_search_results(results, "interstellar")] == [4, 1, 3, 2]
+    # While typing, prefix matches come first, most popular on top.
+    assert [r["id"] for r in _rank_search_results(results, "interstel")][:2] == [4, 1]
