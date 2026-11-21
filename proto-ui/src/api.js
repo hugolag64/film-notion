@@ -151,8 +151,8 @@ export async function deleteUser(userId) {
     await authRequest(`/users/${encodeURIComponent(userId)}`, {method: 'DELETE'});
 }
 
-export function startRecommendationSession() {
-    return recommendationRequest('/recommendations/sessions', {method: 'POST'});
+export function startRecommendationSession({ guided = false } = {}) {
+    return recommendationRequest(`/recommendations/sessions${guided ? '?guided=true' : ''}`, {method: 'POST'});
 }
 
 export function answerRecommendation(sessionId, payload) {

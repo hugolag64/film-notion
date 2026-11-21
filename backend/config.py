@@ -7,7 +7,7 @@ class Config:
     TMDB_API_KEY = os.getenv("TMDB_API_KEY")
     DB_PATH = os.getenv("DB_PATH", "backstage.db")
     PORT = int(os.getenv("PORT", "8090"))
-    RECOMMENDATION_DAILY_LIMIT = int(os.getenv("RECOMMENDATION_DAILY_LIMIT", "2") or "2")
+    RECOMMENDATION_DAILY_LIMIT = int(os.getenv("RECOMMENDATION_DAILY_LIMIT", "5") or "5")
     RECOMMENDATION_TIMEZONE = os.getenv("RECOMMENDATION_TIMEZONE", "Europe/Paris")
     RECOMMENDATION_RECENT_DAYS = int(os.getenv("RECOMMENDATION_RECENT_DAYS", "30") or "30")
     AUTH_RATE_LIMIT_WINDOW_SEC = int(os.getenv("AUTH_RATE_LIMIT_WINDOW_SEC", "300") or "300")

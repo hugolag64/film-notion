@@ -21,13 +21,14 @@ def current_user(user_id="hugo", role="user"):
     return AuthContext(user={"id": user_id, "role": role}, session_id="auth", token="token")
 
 
-def test_normal_user_is_rejected_after_two_daily_sessions(tmp_path, monkeypatch):
+def test_normal_user_is_rejected_after_five_daily_sessions(tmp_path, monkeypatch):
     store = make_store(tmp_path)
+    monkeypatch.setattr(api.Config, "RECOMMENDATION_DAILY_LIMIT", 5)
     candidates = [RecommendationCandidate(tmdb_id=1, title="A", score=1), RecommendationCandidate(tmdb_id=2, title="B", score=.9)]
     monkeypatch.setattr(api, "_recommendation_pool", lambda *args: asyncio.sleep(0, result=candidates))
     current = current_user()
-    asyncio.run(api.start_recommendation_session(current, store))
-    asyncio.run(api.start_recommendation_session(current, store))
+    for _ in range(5):
+        asyncio.run(api.start_recommendation_session(current, store))
     with pytest.raises(HTTPException) as error:
         asyncio.run(api.start_recommendation_session(current, store))
     assert error.value.status_code == 429

@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from backend.core.models import Media, RecommendationEvent, UserMediaState
 from backend.core.playback import PlaybackProgress
+from backend.core.guided_recommendations import MOOD_GENRES
 from backend.core.recommendation_explanations import build_recommendation_explanation
 
 
@@ -307,6 +308,11 @@ def score_recommendation_candidate(
     if session_preferences.get("mood") == "intense" and any(genre in genres for genre in ("Thriller", "Action", "Horreur")):
         session += 0.5
     session = min(1, session)
+    guided = session_preferences.get("mode") == "guided"
+    if guided:
+        session = 0.6 * bool(set(genres).intersection(session_preferences.get("genres", ())))
+        session += 0.25 * bool(set(genres).intersection(MOOD_GENRES.get(session_preferences.get("mood"), ())))
+        session += 0.15 * (session_preferences.get("refinement") in genres)
     quality = min(1, max(0, float(_candidate_field(candidate, "vote_average", 0) or 0) / 10))
     intent = 1 if tmdb_id in set(exclusions.get("watchlisted_tmdb_ids", set())) else 0
     novelty = _novelty_score(len(genres), len(known_affinities), profile.confidence)
@@ -317,6 +323,12 @@ def score_recommendation_candidate(
         + SCORE_WEIGHTS["tmdb_quality"] * quality + _INTENT_WEIGHT * intent
         + SCORE_WEIGHTS["novelty"] * novelty + exploration * novelty - temporary_penalty
     )
+    if guided:
+        discovery = session_preferences.get("discovery")
+        if discovery == "surprise":
+            score += 0.25 * novelty - 0.22 * taste
+        elif discovery == "familiar":
+            score += 0.15 * taste - 0.12 * novelty
     reasons = ["not_seen"]
     # Calibrated to the centered affinity scale (roughly ±0.5 in practice, not
     # ±1): 0.25 already means "meaningfully above this user's own neutral point".

@@ -35,6 +35,7 @@ from backend.core.recommendations import (
     score_recommendation_candidate,
 )
 from backend.core.gemini_recommendations import GeminiRecommendationGateway, SUPPORTED_QUESTION_AXES
+from backend.core.guided_recommendations import apply_guided_answer, guided_question
 from backend.auth_api import AuthContext, get_auth_store, get_current_user, get_jellyfin_client, require_admin
 from backend.core.auth import AuthStore
 from urllib.parse import quote, parse_qsl, urlencode, urlsplit, urlunsplit
@@ -98,7 +99,7 @@ def _recommendation_quota(
     if current.user.get("role") == "admin":
         return {"limit": None, "used": 0, "remaining": None, "unlimited": True}
     day_start = _recommendation_day_start(now)
-    limit = max(0, int(getattr(Config, "RECOMMENDATION_DAILY_LIMIT", 2)))
+    limit = max(0, Config.RECOMMENDATION_DAILY_LIMIT)
     used = store.count_recommendation_sessions_sync(current.user["id"], day_start)
     return {
         "limit": limit,
@@ -287,6 +288,8 @@ class RecommendationAnswerRequest(BaseModel):
     answer: str
     value: Optional[str] = None
     media_id: Optional[str] = None
+    question_index: Optional[int] = None
+    choices: Optional[list[str]] = None
 
 
 class RecommendationConfirmRequest(BaseModel):
@@ -783,9 +786,12 @@ def _steer_pool_params(
     searches for comedies instead of only re-ranking whatever page 1 held."""
     params: dict[str, Any] = {}
     answered_genre = session_preferences.get("genre")
-    if answered_genre and answered_genre in GENRE_IDS:
+    selected_genres = session_preferences.get("genres", [])
+    if selected_genres:
+        params["with_genres"] = [GENRE_IDS[name] for name in selected_genres if name in GENRE_IDS]
+    elif answered_genre and answered_genre in GENRE_IDS:
         params["with_genres"] = [GENRE_IDS[answered_genre]]
-    else:
+    elif session_preferences.get("discovery") != "surprise":
         liked_genres = sorted(
             (item for item in profile.genre_affinity.items() if item[1] > 0 and item[0] in GENRE_IDS),
             key=lambda item: -item[1],
@@ -797,6 +803,10 @@ def _steer_pool_params(
         params["release_date_gte"] = f"{now.year - _RECENT_ERA_YEARS}-01-01"
     elif era == "classic":
         params["release_date_lte"] = f"{_CLASSIC_ERA_CUTOFF_YEAR}-12-31"
+    if session_preferences.get("runtime_max"):
+        params["runtime_max"] = session_preferences["runtime_max"]
+    if session_preferences.get("mode") == "guided":
+        params.setdefault("release_date_lte", now.date().isoformat())
     return params
 
 
@@ -860,11 +870,16 @@ async def _recommendation_pool(
     profile = apply_session_genre_delta(profile, session_preferences, now)
     seed = _pool_seed(session_preferences)
     steer = _steer_pool_params(session_preferences, profile, now)
+    guided = session_preferences.get("mode") == "guided"
     try:
         tmdb = TMDBClient()
-        candidates = await tmdb.discover_movies(
-            page=seed["page"], sort_by=seed["sort_by"], min_vote_count=25, **steer,
-        )
+        pages = [seed["page"]]
+        if guided:
+            pages.append(2 if seed["page"] == 1 else 1)
+        batches = await asyncio.gather(*(tmdb.discover_movies(
+            page=page, sort_by=seed["sort_by"], min_vote_count=25, **steer,
+        ) for page in pages))
+        candidates = list({candidate["tmdb_id"]: candidate for batch in batches for candidate in batch}.values())
     except (ValueError, httpx.HTTPError):
         return []
     state_by_media = {state.media_id: state for state in states}
@@ -928,12 +943,42 @@ async def _recommendation_pool(
     # A watchlisted title only TMDB discover doesn't happen to surface would
     # otherwise never be a candidate at all — bonus scoring alone can't fix
     # that if the title never enters the pool in the first place.
+    local_tmdb_ids = set(watchlisted_tmdb_ids)
+    if guided:
+        ready_ids = {item.media_id for item in await store.list_availabilities() if item.jellyfin_id}
+        local_tmdb_ids.update(media.tmdb_id for media in medias if media.id in ready_ids)
     already_fetched_ids = {candidate["tmdb_id"] for candidate in candidates}
-    candidates = candidates + [
-        _watchlist_candidate(media)
-        for media in medias
-        if media.tmdb_id and media.tmdb_id in watchlisted_tmdb_ids and media.tmdb_id not in already_fetched_ids
-    ]
+    genre_filter = set(steer.get("with_genres", [])) if session_preferences.get("genres") else set()
+    local_candidates = {}
+    for media in medias:
+        if not media.tmdb_id or media.tmdb_id not in local_tmdb_ids or media.tmdb_id in already_fetched_ids:
+            continue
+        if guided and (media.type != "Film" or media.tmdb_id in hard_seen_tmdb_ids | hard_reject_tmdb_ids):
+            continue
+        candidate = _watchlist_candidate(media)
+        if guided:
+            # Locally catalogued films do not store the TMDB community score.
+            candidate["vote_average"] = 0
+        if not genre_filter or genre_filter.intersection(candidate["genre_ids"]):
+            local_candidates.setdefault(media.tmdb_id, candidate)
+    if runtime_max := steer.get("runtime_max"):
+        # TMDB Discover already checked the runtime of its results. Verify it
+        # separately for titles injected from the local catalog.
+        local_items = list(local_candidates.values())[:12]
+        semaphore = asyncio.Semaphore(4)
+
+        async def fits_runtime(candidate: dict[str, Any]) -> bool:
+            async with semaphore:
+                details = await tmdb.get_movie_details(candidate["tmdb_id"])
+            runtime = (details or {}).get("runtime")
+            if details:
+                candidate["vote_average"] = details.get("vote_average") or 0
+            return isinstance(runtime, int) and 0 < runtime <= runtime_max
+
+        fits = await asyncio.gather(*(fits_runtime(item) for item in local_items))
+        candidates.extend(item for item, valid in zip(local_items, fits) if valid)
+    else:
+        candidates.extend(local_candidates.values())
 
     def score_pool(excluded_ids: set[int]) -> list[RecommendationCandidate]:
         return [
@@ -947,7 +992,7 @@ async def _recommendation_pool(
         ]
 
     scored = score_pool(seen_tmdb_ids)
-    if recent_shown_tmdb_ids and sum(item.score >= 0 for item in scored) < 2:
+    if recent_shown_tmdb_ids and sum(item.score >= 0 for item in scored) < (6 if guided else 2):
         # A cooldown is a soft memory, never a reason to show an empty screen.
         scored = score_pool(hard_seen_tmdb_ids)
     return scored
@@ -961,6 +1006,120 @@ def _serialize_recommendation(candidate: RecommendationCandidate | None) -> dict
     if explanation:
         payload["explanation"] = explanation
     return payload
+
+
+async def _guided_results(
+    current: AuthContext, store: MediaStore, session: RecommendationSession, preferences: dict,
+) -> list[dict]:
+    ranked = sorted(
+        (item for item in await _recommendation_pool(current, store, preferences) if item.score >= 0),
+        key=lambda item: item.score, reverse=True,
+    )
+    if not ranked:
+        return []
+    medias, availabilities = await asyncio.gather(store.fetch_all(), store.list_availabilities())
+    local = {media.tmdb_id: media.id for media in medias if media.type == "Film" and media.tmdb_id}
+    availability_by_id = {row.media_id: row for row in availabilities}
+    ready, other = [], []
+    for item in ranked:
+        media_id = local.get(item.tmdb_id)
+        availability = availability_by_id.get(media_id)
+        action = "request"
+        if availability and availability.jellyfin_id:
+            if len(ready) >= 15:
+                continue
+            try:
+                await _ensure_playback_access(current, media_id, store)
+            except HTTPException as error:
+                if error.status_code not in {403, 404}:
+                    raise
+                action = "rent" if error.status_code == 403 else "request"
+            else:
+                action = "play"
+        elif availability and availability.state in IN_PROGRESS_STATES:
+            action = "pending"
+        result = {**_serialize_recommendation(item), "media_id": media_id, "action": action}
+        if action == "play":
+            ready.append(result)
+        elif len(other) < 15:
+            other.append(result)
+        if len(ready) >= 15 and len(other) >= 15:
+            break
+    # Keep both immediately playable titles and fresh discoveries in the
+    # selection, even when the library already has many matches.
+    pool = ready[:8] + other[:max(7, 15 - len(ready))] + ready[8:]
+    pool = pool[:15]
+    reasons: dict[int, str] = {}
+    gateway = _gemini_gateway()
+    if gateway.enabled and len(pool) > 1:
+        try:
+            reasons, usage = await asyncio.to_thread(gateway.rank_guided_films, preferences["answers"], pool)
+            await _record_gemini_usage(store, current, session.id, usage)
+        except Exception as error:
+            await _record_gemini_failure(store, current, session.id, error)
+    model_positions = {tmdb_id: index for index, tmdb_id in enumerate(reasons)}
+    for item in pool:
+        if reason := reasons.get(item["tmdb_id"]):
+            item["explanation"] = reason
+    pool.sort(key=lambda item: (
+        item["action"] != "play", model_positions.get(item["tmdb_id"], len(model_positions)),
+    ))
+    # At most two immediate picks at the top. Offer some contrasting options
+    # before listing the rest of a large local library.
+    ready = [item for item in pool if item["action"] == "play"]
+    other = [item for item in pool if item["action"] != "play"]
+    return ready[:2] + other[:4] + ready[2:] + other[4:]
+
+
+def _guided_response(session_id: str, *, question: dict | None = None, results: list[dict] | None = None) -> dict:
+    return {
+        "session_id": session_id, "state": "question" if question else "result" if results else "empty",
+        "question": question, "result": results[0] if results else None, "results": results or [],
+    }
+
+
+async def _answer_guided_recommendation(
+    session: RecommendationSession, payload: RecommendationAnswerRequest, current: AuthContext, store: MediaStore,
+) -> dict:
+    preferences = session.session_preferences
+    if session.status == "completed" and "results" in preferences:
+        return _guided_response(session.id, results=preferences["results"])
+    if session.status != "active":
+        raise HTTPException(status_code=409, detail="Cette session est déjà terminée")
+    index = session.question_count
+    question = guided_question(preferences, index)
+    if not question:
+        raise HTTPException(status_code=409, detail="La sélection est en cours. Réessaie dans un instant.")
+    if payload.question_index is not None and payload.question_index < index:
+        return _guided_response(session.id, question=question)
+    if payload.question_index != index or payload.choices is None:
+        raise HTTPException(status_code=422, detail="Cette réponse ne correspond pas à la question")
+    try:
+        preferences = apply_guided_answer(preferences, question, payload.choices)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None
+    next_question = guided_question(preferences, index + 1)
+    if not await store.advance_recommendation_session(session.id, index, preferences):
+        raise HTTPException(status_code=409, detail="Cette réponse a déjà été traitée")
+    if next_question:
+        return _guided_response(session.id, question=next_question)
+
+    try:
+        results = await _guided_results(current, store, session, preferences)
+    except Exception:
+        logger.exception("Sélection de films indisponible pour la session %s", session.id)
+        await store.update_recommendation_session(session.id, {"status": "cancelled"})
+        raise HTTPException(status_code=503, detail="La sélection n’a pas abouti. Lance une nouvelle sélection.") from None
+    now = datetime.now(timezone.utc)
+    await store.update_recommendation_session(session.id, {
+        "status": "completed", "completed_at": now, "session_preferences": {**preferences, "results": results},
+    })
+    for item in results[:6]:
+        await store.record_recommendation_event(RecommendationEvent(
+            id=str(uuid.uuid4()), backstage_user_id=current.user["id"], session_id=session.id,
+            event_type="shown", value=str(item["tmdb_id"]), created_at=now,
+        ))
+    return _guided_response(session.id, results=results)
 
 
 def _question_from_candidates(candidates: list[RecommendationCandidate]) -> dict[str, Any] | None:
@@ -1030,18 +1189,28 @@ async def record_recommendation_event(
 async def start_recommendation_session(
     current: AuthContext = Depends(get_current_user),
     store: MediaStore = Depends(get_store),
+    *,
+    guided: bool = False,
 ):
     quota = _recommendation_quota(current, store, datetime.now(timezone.utc))
     if not quota["unlimited"] and quota["remaining"] <= 0:
         raise HTTPException(
             status_code=429,
-            detail="Limite quotidienne atteinte : 2 sessions de sélection par jour.",
+            detail=f"Limite quotidienne atteinte : {quota['limit']} sélections par jour.",
         )
     session = RecommendationSession(
         id=str(uuid.uuid4()),
         backstage_user_id=current.user["id"],
         created_at=datetime.now(timezone.utc),
     )
+    if guided:
+        session.session_preferences.update({"mode": "guided", "answers": []})
+        await _reserve_recommendation_session(session, store, quota)
+        return {
+            **_guided_response(session.id, question=guided_question(session.session_preferences, 0)),
+            "session": session.model_dump(mode="json"),
+            "quota": quota,
+        }
     profile, events = await _recommendation_profile(current, store)
     recent_axes = _recent_question_axes(events)
     recent_plans = _recent_question_plans(events)
@@ -1069,19 +1238,7 @@ async def start_recommendation_session(
     question = _planned_question(session, candidates, profile, 0)
     if question is None:
         return {"session": session.model_dump(mode="json"), "state": "empty", "question": None, "result": None, "quota": quota}
-    if quota["unlimited"]:
-        await store.create_recommendation_session(session)
-    else:
-        reserved = await store.create_recommendation_session_if_available(
-            session, quota["limit"], _recommendation_day_start(datetime.now(timezone.utc)),
-        )
-        if reserved is None:
-            raise HTTPException(
-                status_code=429,
-                detail="Limite quotidienne atteinte : 2 sessions de sélection par jour.",
-            )
-        quota["used"] += 1
-        quota["remaining"] = max(0, quota["limit"] - quota["used"])
+    await _reserve_recommendation_session(session, store, quota)
     for index, axis in enumerate(question_plan):
         await store.record_recommendation_event(RecommendationEvent(
             id=str(uuid.uuid4()), backstage_user_id=current.user["id"],
@@ -1090,6 +1247,24 @@ async def start_recommendation_session(
         ))
     await _remember_question_options(session, question, store)
     return {"session": session.model_dump(mode="json"), "state": "question", "question": question, "result": None, "quota": quota}
+
+
+async def _reserve_recommendation_session(
+    session: RecommendationSession, store: MediaStore, quota: dict[str, Any],
+) -> None:
+    if quota["unlimited"]:
+        await store.create_recommendation_session(session)
+        return
+    reserved = await store.create_recommendation_session_if_available(
+        session, quota["limit"], _recommendation_day_start(datetime.now(timezone.utc)),
+    )
+    if reserved is None:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Limite quotidienne atteinte : {quota['limit']} sélections par jour.",
+        )
+    quota["used"] += 1
+    quota["remaining"] = max(0, quota["limit"] - quota["used"])
 
 
 @router.post("/recommendations/sessions/{session_id}/answers")
@@ -1102,6 +1277,8 @@ async def answer_recommendation(
     session = await store.get_recommendation_session(session_id)
     if not session or session.backstage_user_id != current.user["id"]:
         raise HTTPException(status_code=404, detail="Session de recommandation introuvable")
+    if session.session_preferences.get("mode") == "guided":
+        return await _answer_guided_recommendation(session, payload, current, store)
     if session.status != "active":
         raise HTTPException(status_code=409, detail="Cette session est déjà terminée")
     if session.question_count >= 5:
@@ -1227,6 +1404,33 @@ async def confirm_recommendation(
     session = await store.get_recommendation_session(session_id)
     if not session or session.backstage_user_id != current.user["id"]:
         raise HTTPException(status_code=404, detail="Session de recommandation introuvable")
+    if session.session_preferences.get("mode") == "guided":
+        candidate = next((
+            item for item in session.session_preferences.get("results", [])
+            if item["tmdb_id"] == payload.tmdb_id
+        ), None)
+        if session.status != "completed" or not candidate or candidate["action"] not in {"request", "rent"}:
+            raise HTTPException(status_code=403, detail="Ce film ne peut pas être demandé depuis cette sélection")
+        if not payload.download:
+            raise HTTPException(status_code=422, detail="La demande de film doit être confirmée")
+        if candidate["action"] == "rent":
+            media = await _find_or_create_movie(store, payload.tmdb_id)
+            acquired = await _acquire_media(media, AcquisitionRequest(), current, service)
+        else:
+            acquired = await create_seerr_request(
+                SeerrRequestCreate(tmdb_id=payload.tmdb_id, media_type="movie"), current, service,
+            )
+        available = acquired.get("availability")
+        await store.record_recommendation_event(RecommendationEvent(
+            id=str(uuid.uuid4()), backstage_user_id=current.user["id"], session_id=session_id,
+            media_id=available.media_id if available else None, event_type="confirmed",
+            value=str(payload.tmdb_id), created_at=datetime.now(timezone.utc),
+        ))
+        # Reuse the playback access check when a rental has just opened.
+        if available and available.jellyfin_id:
+            await _ensure_playback_access(current, available.media_id, store)
+            return {**acquired, "action": "play", "media_id": available.media_id}
+        return {**acquired, "action": "pending"}
     events = await store.list_recommendation_events(current.user["id"])
     selected = any(
         event.session_id == session_id
@@ -1679,7 +1883,7 @@ async def get_jellyfin_player_url(
         netloc = f"[{hostname}]:8096" if ":" in hostname else f"{hostname}:8096"
         public_url = urlunsplit((origin.scheme, netloc, "", "", ""))
     return RedirectResponse(
-        service.jellyfin.playback_url(playback["item_id"], base_url=public_url),
+        service.jellyfin.playback_url(playback["item_id"], base_url=public_url, autoplay=True),
         status_code=307,
     )
 
