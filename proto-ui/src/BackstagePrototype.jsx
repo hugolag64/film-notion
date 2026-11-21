@@ -1576,7 +1576,9 @@ export default function BackstagePrototype() {
                                                     <input type="checkbox" checked={episode.watched} onClick={(event) => event.stopPropagation()} onChange={() => toggleEpisode(episode)} className="h-4 w-4 accent-[#635bff]" />
                                                     <span className="font-mono text-xs text-[#635bff]">E{String(episode.episode_number).padStart(2, '0')}</span>
                                                     <span className={episode.watched ? 'line-through opacity-50' : ''}>{episode.title}</span>
-                                                    {mediaAction.canPlay && <button type="button" onClick={(event) => { event.stopPropagation(); openEpisodePlayer(episode); }} className="ml-auto rounded-md bg-[#635bff] px-3 py-1 text-xs font-semibold text-white">Lire</button>}
+                                                    {episode.available
+                                                        ? <button type="button" onClick={(event) => { event.stopPropagation(); openEpisodePlayer(episode); }} className="ml-auto rounded-md bg-[#635bff] px-3 py-1 text-xs font-semibold text-white">Lire</button>
+                                                        : <span className="ml-auto text-xs opacity-50">Non téléchargé</span>}
                                                     </div>
                                                     {openEpisodes[episode.id] && <p className="ml-7 mt-2 text-xs leading-relaxed opacity-70">{episode.synopsis || 'Aucun synopsis disponible pour cet épisode.'}</p>}
                                                 </div>

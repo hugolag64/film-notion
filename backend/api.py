@@ -35,7 +35,7 @@ from backend.core.recommendations import (
     score_recommendation_candidate,
 )
 from backend.core.gemini_recommendations import GeminiRecommendationGateway, SUPPORTED_QUESTION_AXES
-from backend.auth_api import AuthContext, get_auth_store, get_current_user, require_admin
+from backend.auth_api import AuthContext, get_auth_store, get_current_user, get_jellyfin_client, require_admin
 from backend.core.auth import AuthStore
 from urllib.parse import quote, parse_qsl, urlencode, urlsplit
 
@@ -1271,6 +1271,7 @@ async def get_series_episodes(
     media_id: str,
     store: MediaStore = Depends(get_store),
     current: AuthContext = Depends(get_current_user),
+    jellyfin: Optional[JellyfinClient] = Depends(get_jellyfin_client),
 ):
     media = await store.fetch_one(media_id)
     if not media:
@@ -1282,6 +1283,25 @@ async def get_series_episodes(
     else:
         episodes = await store.list_episodes(media_id)
         progress = await store.series_progress(media_id)
+    availability = await store.get_availability(media_id)
+    playable_episodes: set[tuple[int, int]] = set()
+    list_series_episodes = getattr(jellyfin, "list_series_episodes", None)
+    if availability and availability.jellyfin_id and callable(list_series_episodes):
+        try:
+            remote_episodes = await list_series_episodes(availability.jellyfin_id)
+            playable_episodes = {
+                (item["ParentIndexNumber"], item["IndexNumber"])
+                for item in remote_episodes
+            }
+        except (httpx.HTTPError, ValueError):
+            logger.exception("[jellyfin-episodes] Impossible de vérifier les épisodes de %s", media_id)
+    episodes = [
+        {
+            **episode,
+            "available": (episode["season_number"], episode["episode_number"]) in playable_episodes,
+        }
+        for episode in episodes
+    ]
     return {"episodes": episodes, "progress": progress}
 
 
@@ -1570,9 +1590,7 @@ async def get_playback_manifest(
     try:
         response = await service.jellyfin.fetch_playback_resource(
             playback["item_id"], "master.m3u8",
-            {"VideoCodec": "h264", "AudioCodec": "aac", "Container": "ts",
-             "TranscodingContainer": "ts", "TranscodingProtocol": "hls",
-             "MaxWidth": "1920", "MaxHeight": "1080", "MediaSourceId": playback["item_id"]},
+            service.jellyfin.playback_manifest_params(playback["item_id"]),
         )
     except (httpx.HTTPError, ValueError):
         raise HTTPException(status_code=502, detail="Flux Jellyfin indisponible") from None

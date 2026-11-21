@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from backend.api import UpdateEpisodeRequest, get_series_episodes, update_episode
 from backend.auth_api import AuthContext
 from backend.core.store import MediaStore
+from backend.core.media_server import Availability
 
 
 def _store(tmp_path) -> MediaStore:
@@ -128,7 +129,7 @@ def test_episode_api_reads_progress_and_updates_episode(tmp_path):
     initial = asyncio.run(get_series_episodes(series.id, store))
     updated = asyncio.run(update_episode(episode["id"], UpdateEpisodeRequest(watched=True), store))
 
-    assert initial["episodes"] == [episode]
+    assert initial["episodes"] == [{**episode, "available": False}]
     assert initial["progress"]["status"] == "À regarder"
     assert updated["episode"]["watched"] is True
     assert updated["episode"]["synopsis"] == "Episode synopsis"
@@ -154,6 +155,27 @@ def test_episode_progress_is_scoped_per_user(tmp_path):
     assert other_user["episodes"][0]["watched"] is False
     assert other_user["progress"]["percentage"] == 0
     assert asyncio.run(store.list_episodes(series.id))[0]["watched"] is False
+
+
+def test_episode_api_marks_only_jellyfin_present_episodes_as_playable(tmp_path):
+    store = _store(tmp_path)
+    series = asyncio.run(store.create({"id": "simpsons", "title": "The Simpsons", "type": "Série"}))
+    episodes = asyncio.run(store.create_episodes(series.id, [
+        {"season_number": 1, "episode_number": 1, "title": "Noël mortel"},
+        {"season_number": 1, "episode_number": 2, "title": "Bart le génie"},
+    ]))
+    asyncio.run(store.upsert_availability(Availability(
+        media_id=series.id, provider="sonarr", jellyfin_id="jelly-simpsons", state="available",
+    )))
+
+    class FakeJellyfin:
+        async def list_series_episodes(self, series_id):
+            assert series_id == "jelly-simpsons"
+            return [{"ParentIndexNumber": 1, "IndexNumber": 2, "Id": "jf-episode-2"}]
+
+    result = asyncio.run(get_series_episodes(series.id, store, jellyfin=FakeJellyfin()))
+
+    assert [episode["available"] for episode in result["episodes"]] == [False, True]
 
 
 def test_episode_operations_reject_films_without_changing_their_status(tmp_path):

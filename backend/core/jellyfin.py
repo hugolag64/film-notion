@@ -1,5 +1,6 @@
 """Server-side Jellyfin lookup; no API key reaches the browser."""
 import re
+import time
 from typing import Any, Optional
 from pathlib import PurePosixPath
 from urllib.parse import quote, urlencode
@@ -12,6 +13,8 @@ CLIENT_NAME = "Backstage"
 DEVICE_NAME = "Backstage"
 DEVICE_ID = "backstage"
 CLIENT_VERSION = "1.0.0"
+_EPISODE_CACHE_TTL_SEC = 900
+_episode_cache: dict[tuple[str, str, int, int], tuple[float, dict[str, Any]]] = {}
 
 
 def _quote_auth_value(value: str) -> str:
@@ -196,6 +199,10 @@ class JellyfinClient:
         self, series_id: str, season_number: int, episode_number: int,
     ) -> Optional[dict[str, Any]]:
         """Find a Jellyfin episode by its season and episode numbers."""
+        cache_key = (self.base_url, series_id, season_number, episode_number)
+        cached = _episode_cache.get(cache_key)
+        if cached and cached[0] > time.monotonic():
+            return cached[1]
         client = self.client or http.get_client()
         response = await client.get(
             f"{self.base_url}/Shows/{quote(series_id, safe='')}/Episodes",
@@ -208,13 +215,54 @@ class JellyfinClient:
         items = payload.get("Items", []) if isinstance(payload, dict) else []
         if not isinstance(items, list):
             raise ValueError("invalid Jellyfin episodes response")
-        return next((
+        episode = next((
             item for item in items
             if isinstance(item, dict)
             and item.get("ParentIndexNumber") == season_number
             and item.get("IndexNumber") == episode_number
             and item.get("Id")
         ), None)
+        if episode:
+            _episode_cache[cache_key] = (time.monotonic() + _EPISODE_CACHE_TTL_SEC, episode)
+        return episode
+
+    async def list_series_episodes(self, series_id: str) -> list[dict[str, Any]]:
+        """Return the episodes Jellyfin actually has for a series."""
+        client = self.client or http.get_client()
+        limit = 1000
+        start_index = 0
+        episodes: list[dict[str, Any]] = []
+        while True:
+            response = await client.get(
+                f"{self.base_url}/Shows/{quote(series_id, safe='')}/Episodes",
+                headers=self._auth_headers(),
+                params={"Fields": "ProviderIds", "Limit": limit, "StartIndex": start_index},
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            items = payload.get("Items", []) if isinstance(payload, dict) else []
+            if not isinstance(items, list):
+                raise ValueError("invalid Jellyfin episodes response")
+            valid_items = [
+                item for item in items
+                if isinstance(item, dict)
+                and item.get("Id")
+                and isinstance(item.get("ParentIndexNumber"), int)
+                and isinstance(item.get("IndexNumber"), int)
+            ]
+            episodes.extend(valid_items)
+            expires_at = time.monotonic() + _EPISODE_CACHE_TTL_SEC
+            for item in valid_items:
+                key = (
+                    self.base_url, series_id,
+                    item["ParentIndexNumber"], item["IndexNumber"],
+                )
+                _episode_cache[key] = (expires_at, item)
+            if len(items) < limit:
+                break
+            start_index += len(items)
+        return episodes
 
     async def find_by_tmdb(self, tmdb_id: int, media_type: str) -> Optional[dict[str, Any]]:
         item_type = "Series" if media_type == "Série" else "Movie"
@@ -257,16 +305,24 @@ class JellyfinClient:
         return url
 
     def playback_manifest_url(self, item_id: str) -> str:
-        params = urlencode({
+        params = urlencode(self.playback_manifest_params(item_id))
+        return f"{self.base_url}/Videos/{quote(item_id, safe='')}/master.m3u8?{params}"
+
+    @staticmethod
+    def playback_manifest_params(item_id: str) -> dict[str, Any]:
+        return {
             "VideoCodec": "h264",
             "AudioCodec": "aac",
             "Container": "ts",
             "TranscodingContainer": "ts",
             "TranscodingProtocol": "hls",
-            "MaxWidth": "1920",
-            "MaxHeight": "1080",
-        })
-        return f"{self.base_url}/Videos/{quote(item_id, safe='')}/master.m3u8?{params}&MediaSourceId={quote(item_id, safe='')}"
+            "MaxWidth": "3840",
+            "MaxHeight": "2160",
+            "VideoBitrate": "40000000",
+            "MaxStreamingBitrate": "45000000",
+            "EnableAdaptiveBitrateStreaming": "true",
+            "MediaSourceId": item_id,
+        }
 
     async def fetch_playback_resource(
         self, item_id: str, resource_path: str, query: Optional[dict[str, str]] = None,

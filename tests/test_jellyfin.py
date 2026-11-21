@@ -36,6 +36,9 @@ def test_playback_manifest_url_requests_browser_compatible_hls_without_api_key()
     assert "VideoCodec=h264" in url
     assert "AudioCodec=aac" in url
     assert "TranscodingProtocol=hls" in url
+    assert "MaxWidth=3840" in url
+    assert "MaxHeight=2160" in url
+    assert "VideoBitrate=40000000" in url
     assert "secret" not in url
 
 
