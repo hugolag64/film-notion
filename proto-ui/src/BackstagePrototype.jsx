@@ -7,7 +7,7 @@ import DashboardHome from './components/DashboardHome';
 import TMDBMoviePreview from './components/TMDBMoviePreview';
 import NotificationBell from './components/NotificationBell';
 import { useAuth } from './auth-context';
-import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getJellyfinPlayerPath, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, cancelRental, fetchMediaServerActivity, syncMediaServer, syncPlayback, fetchAvailableMediaIds, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest } from './api';
+import { fetchMedias, updateMedia, deleteMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, fetchJellyfinPlaybackTarget, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, cancelRental, fetchMediaServerActivity, syncMediaServer, syncPlayback, fetchAvailableMediaIds, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
 import { DEFAULT_MAX_ACTIVE_RENTALS, DEFAULT_MAX_QUEUED_RENTALS, countQueuedRentals, countRentalsInUse, indexRentalsByMedia, isQueuedRental, rentalExpiryLabel, rentalStatusLabel } from './rentals';
@@ -157,6 +157,10 @@ export default function BackstagePrototype() {
     const episodeIntents = useRef(new Map());
     const episodeClickTimers = useRef(new Map());
     const [searchQuery, setSearchQuery] = useState('');
+    const [headerSearchResults, setHeaderSearchResults] = useState([]);
+    const [headerSearchLoading, setHeaderSearchLoading] = useState(false);
+    const [headerSearchOpen, setHeaderSearchOpen] = useState(false);
+    const headerSearchRequest = useRef(0);
     const [filters, setFilters] = useState({ genre: '', director: '', status: '', support: '' });
     const [sort, setSort] = useState({ key: 'createdAt', direction: 'desc' });
     const [showAddDialog, setShowAddDialog] = useState(false);
@@ -278,11 +282,63 @@ export default function BackstagePrototype() {
 
     const openJellyfinPlayer = (mediaId, seasonNumber, episodeNumber) => {
         if (!mediaId) return;
-        const link = document.createElement('a');
-        link.href = getJellyfinPlayerPath(mediaId, seasonNumber, episodeNumber);
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-        link.click();
+        // Open synchronously inside the user's click so the browser does not
+        // block the tab while the authenticated Backstage API resolves Jellyfin.
+        const playerWindow = window.open('about:blank', '_blank');
+        if (!playerWindow) {
+            showToast('Autorise les fenêtres surgissantes pour ouvrir le lecteur Jellyfin.', 'error');
+            return;
+        }
+
+        const requestId = globalThis.crypto?.randomUUID?.()
+            || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        let sendInterval;
+        let timeout;
+        let expectedOrigin;
+        const cleanup = () => {
+            window.clearInterval(sendInterval);
+            window.clearTimeout(timeout);
+            window.removeEventListener('message', onPlaybackAck);
+        };
+        const onPlaybackAck = (event) => {
+            if (event.source !== playerWindow || event.origin !== expectedOrigin
+                || event.data?.type !== 'backstage:play-ack'
+                || event.data?.requestId !== requestId) return;
+            cleanup();
+            if (!event.data.started) {
+                showToast(event.data.reason || 'Jellyfin n’a pas démarré la lecture.', 'error');
+            }
+        };
+        window.addEventListener('message', onPlaybackAck);
+
+        fetchJellyfinPlaybackTarget(mediaId, seasonNumber, episodeNumber).then((target) => {
+            if (playerWindow.closed) {
+                cleanup();
+                return;
+            }
+            expectedOrigin = new URL(target.url).origin;
+            playerWindow.location.replace(target.url);
+            const message = {
+                type: 'backstage:play-request',
+                requestId,
+                itemId: target.item_id,
+            };
+            sendInterval = window.setInterval(() => {
+                if (playerWindow.closed) {
+                    cleanup();
+                    return;
+                }
+                playerWindow.postMessage(message, expectedOrigin);
+            }, 400);
+            timeout = window.setTimeout(() => {
+                cleanup();
+                showToast('Jellyfin a ouvert la fiche, mais son script de lecture ne répond pas. Mets à jour le script JavaScript Injector.', 'error');
+            }, 25000);
+        }).catch((error) => {
+            cleanup();
+            if (!playerWindow.closed) playerWindow.close();
+            showToast(error.message || 'Ouverture de Jellyfin impossible.', 'error');
+        });
     };
 
     const openPlayer = () => openJellyfinPlayer(selectedMedia?.id);
@@ -504,6 +560,29 @@ export default function BackstagePrototype() {
         }
     };
 
+    const handleDeleteMovie = async (movie) => {
+        if (!movie?.id) return;
+        if (!window.confirm(`Supprimer « ${movie.title} » de la bibliothèque ?\n\nLa fiche, les notes et l’historique de visionnage associés seront effacés.`)) return;
+        const availability = availabilityByMedia[movie.id];
+        const hasServerFiles = availability?.provider === 'radarr' && availability?.arr_id;
+        const deleteFiles = Boolean(hasServerFiles) && window.confirm(`Supprimer aussi les fichiers de « ${movie.title} » sur le serveur (Radarr) ?\n\nOK : supprimer les fichiers (irréversible)\nAnnuler : garder les fichiers sur le disque`);
+        try {
+            setLoading(true);
+            await deleteMedia(movie.id, { deleteFiles });
+            setMovies((current) => current.filter((item) => item.id !== movie.id));
+            setAvailabilityByMedia((current) => {
+                const { [movie.id]: _removed, ...rest } = current;
+                return rest;
+            });
+            closeMovie();
+            showToast(`« ${movie.title} » a été supprimé${deleteFiles ? ', fichiers compris' : ''}.`, 'success');
+        } catch (err) {
+            showToast(err.message || 'Suppression impossible.', 'error');
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const replaceCanonicalMedia = (rawMedia) => {
         const mapped = mapMediaToMovie(rawMedia);
         if (!mapped) return null;
@@ -628,6 +707,18 @@ export default function BackstagePrototype() {
         }
     };
 
+    const openHeaderSearchResult = (result) => {
+        setHeaderSearchOpen(false);
+        setSearchQuery('');
+        if (result.source === 'library') {
+            setCollection(result.media.type === 'Série' ? 'Séries' : 'Films');
+            setActiveView('library');
+            openMovie(result.media);
+            return;
+        }
+        openTMDBPreview({tmdb_id: result.tmdb_id, title: result.title});
+    };
+
     const requestRecommendationOnSeerr = async (recommendation) => {
         if (!recommendation?.tmdb_id) return;
         try {
@@ -671,6 +762,37 @@ export default function BackstagePrototype() {
             : activeFilter === 'unwatched' ? !['Terminé', 'Terminée'].includes(movie.status)
                 : activeFilter === 'watchlist' ? movie.isWatchlist : movie.isFavorite)
         .filter((movie) => !onlyAvailable || availableMediaIds.has(movie.id));
+
+    useEffect(() => {
+        const query = searchQuery.trim();
+        const requestId = ++headerSearchRequest.current;
+        if (query.length < 2) {
+            setHeaderSearchResults([]);
+            setHeaderSearchLoading(false);
+            return undefined;
+        }
+        const timer = window.setTimeout(async () => {
+            setHeaderSearchLoading(true);
+            try {
+                const results = collection === 'Séries' ? [] : await searchTMDB(query);
+                if (requestId === headerSearchRequest.current) {
+                    const libraryMatches = filterAndSortMovies(movies, {query, genre: '', director: '', status: '', support: ''}, sort)
+                        .slice(0, 5)
+                        .map((media) => ({source: 'library', media, title: media.title, year: media.year, poster: media.poster}));
+                    const libraryIds = new Set(libraryMatches.map((item) => String(item.media.tmdbId || item.media.title).toLocaleLowerCase()));
+                    const tmdbMatches = (results || []).filter((item) => !libraryIds.has(String(item.tmdb_id || item.title).toLocaleLowerCase()))
+                        .slice(0, 5)
+                        .map((item) => ({source: 'tmdb', ...item}));
+                    setHeaderSearchResults([...libraryMatches, ...tmdbMatches]);
+                }
+            } catch {
+                if (requestId === headerSearchRequest.current) setHeaderSearchResults([]);
+            } finally {
+                if (requestId === headerSearchRequest.current) setHeaderSearchLoading(false);
+            }
+        }, 300);
+        return () => window.clearTimeout(timer);
+    }, [searchQuery, movies, sort, collection]);
 
     // Toggle Favorite
     const toggleFavorite = async (id, e) => {
@@ -1092,7 +1214,7 @@ export default function BackstagePrototype() {
             {/* Top Header */}
             <header className={`border-b sticky top-0 z-40 backdrop-blur-xl transition-colors duration-300 ${isDarkMode ? 'border-white/10 bg-black/90' : 'border-[#e3e8ee] bg-white/90 shadow-sm'
                 }`}>
-                <div className="max-w-[1536px] mx-auto flex h-16 items-center gap-6 px-6">
+                <div className="mx-auto grid h-16 w-full max-w-[1536px] grid-cols-[1fr_auto_1fr] items-center gap-4 px-6">
                     <div className="flex shrink-0 items-center gap-4">
                         <img src="/static/Logo.png" alt="Backstage" className="h-10 w-auto object-contain" />
                         <div>
@@ -1103,7 +1225,8 @@ export default function BackstagePrototype() {
                         </div>
                     </div>
 
-                    <nav className="flex flex-1 justify-center" aria-label="Navigation principale">
+                    <div className="flex min-w-0 items-center justify-self-center gap-5">
+                    <nav className="shrink-0" aria-label="Navigation principale">
                         <div className={`flex items-center gap-6 whitespace-nowrap text-sm font-semibold ${isDarkMode ? 'text-white/60' : 'text-[#425466]'}`}>
                             {[['dashboard', 'Accueil'], ['library', 'Films'], ['library', 'Séries']].map(([view, label]) => {
                                 const selected = view === 'dashboard' ? activeView === 'dashboard' : activeView === 'library' && collection === label;
@@ -1113,23 +1236,36 @@ export default function BackstagePrototype() {
                             })}
                         </div>
                     </nav>
-
-                    <div className="flex min-w-0 items-center gap-2">
-
-                        {/* Search Input */}
-                        <div className="relative w-56 min-w-[7rem] shrink">
+                    <div className="relative w-56 min-w-[10rem] shrink" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setHeaderSearchOpen(false); }}>
                             <input
                                 type="text"
-                                placeholder={collection === 'Séries' ? 'Rechercher une série, créateur...' : 'Rechercher un film, réalisateur...'}
+                                placeholder={collection === 'Séries' ? 'Série, créateur…' : 'Film, réalisateur…'}
                                 value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
+                                onFocus={() => setHeaderSearchOpen(true)}
+                                onChange={(e) => { setSearchQuery(e.target.value); setHeaderSearchOpen(true); }}
+                                onKeyDown={(event) => {
+                                    if (event.key === 'Escape') setHeaderSearchOpen(false);
+                                    if (event.key === 'Enter' && headerSearchResults[0]) openHeaderSearchResult(headerSearchResults[0]);
+                                }}
                                 className={`w-full rounded-lg border px-3 py-2 text-xs outline-none transition-all ${isDarkMode
                                     ? 'bg-white/5 border-white/15 focus:border-[#635bff] text-white placeholder-white/40'
                                     : 'bg-[#f6f9fc] border-[#e3e8ee] focus:border-[#635bff] text-[#0a2540] placeholder-[#425466]/50'
                                     }`}
                             />
+                            {headerSearchOpen && searchQuery.trim().length >= 2 && <div className={`absolute left-0 right-0 top-[calc(100%+8px)] z-50 max-h-[65vh] min-w-[320px] overflow-y-auto rounded-xl border p-2 shadow-2xl ${isDarkMode ? 'border-white/10 bg-[#111318] text-white' : 'border-[#e3e8ee] bg-white text-[#0a2540]'}`}>
+                                <p className="px-2 pb-1 pt-1 text-[10px] font-mono font-bold uppercase tracking-widest opacity-50">Bibliothèque et TMDB</p>
+                                {headerSearchLoading && <p className="px-2 py-3 text-xs opacity-60">Recherche en cours…</p>}
+                                {!headerSearchLoading && headerSearchResults.length === 0 && <p className="px-2 py-3 text-xs opacity-60">Aucun titre trouvé. Essaie un autre nom.</p>}
+                                {!headerSearchLoading && headerSearchResults.map((result) => <button key={`${result.source}-${result.tmdb_id || result.media?.id}`} type="button" onClick={() => openHeaderSearchResult(result)} className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition hover:bg-[#635bff]/10">
+                                    <span className="h-12 w-8 shrink-0 overflow-hidden rounded bg-current/10">{(result.poster || result.poster_url) && <img src={result.poster || result.poster_url} alt="" className="h-full w-full object-cover" />}</span>
+                                    <span className="min-w-0 flex-1"><span className="block truncate text-xs font-semibold">{result.title}</span><span className="mt-0.5 block text-[10px] opacity-55">{result.year || result.release_date?.slice(0, 4) || 'Année inconnue'} · {result.source === 'library' ? 'Dans ma bibliothèque' : 'Disponible sur TMDB'}</span></span>
+                                </button>)}
+                                {!headerSearchLoading && headerSearchResults.some((result) => result.source === 'tmdb') && <p className="px-2 pb-1 pt-2 text-[10px] opacity-50">Choisis un résultat TMDB pour voir sa fiche et le demander.</p>}
+                            </div>}
                         </div>
+                    </div>
 
+                    <div className="flex min-w-0 items-center justify-self-end gap-2">
                         {(isAdmin || collection !== 'Séries') && <button onClick={() => setShowAddDialog(true)} className="whitespace-nowrap bg-[#635bff] px-3 py-2 text-xs font-semibold text-white shadow-md transition-all hover:bg-[#5048e5]">
                             {isAdmin ? (collection === 'Séries' ? 'Ajouter une série' : 'Ajouter un film') : 'Louer un film'}
                         </button>}
@@ -1162,7 +1298,7 @@ export default function BackstagePrototype() {
 
             {showAccountPanel && <AccountPanel isDarkMode={isDarkMode} onClose={() => setShowAccountPanel(false)} />}
             {showAdminCenter && user?.role === 'admin' && <AdminCenter isDarkMode={isDarkMode} onClose={() => setShowAdminCenter(false)} onMediaChanged={loadRealMedias} />}
-            {showRecommendationFlow && <RecommendationFlow isDarkMode={isDarkMode} onClose={() => setShowRecommendationFlow(false)} />}
+            {showRecommendationFlow && <RecommendationFlow isDarkMode={isDarkMode} onClose={() => setShowRecommendationFlow(false)} onPlay={openJellyfinPlayer} />}
             {tmdbPreview.open && <TMDBMoviePreview
                 movie={tmdbPreview.movie}
                 recommendation={tmdbPreview.recommendation}
@@ -1575,7 +1711,7 @@ export default function BackstagePrototype() {
             {selectedMovie && (
                 <FilmDetailView media={selectedMovie} isDarkMode={isDarkMode} onClose={closeMovie}>
                     <div
-                        className={`flex h-[min(94vh,980px)] w-full max-w-5xl flex-col overflow-y-auto rounded-2xl border shadow-2xl animate-fade-in-smooth cursor-default ${isDarkMode
+                        className={`film-detail-enter flex h-[min(94vh,980px)] w-full max-w-5xl flex-col overflow-y-auto rounded-2xl border shadow-2xl cursor-default ${isDarkMode
                             ? 'bg-[#0a0a0a] text-white border-white/10'
                             : 'bg-[#f6f9fc] text-[#0a2540] border-[#e3e8ee]'
                             }`}

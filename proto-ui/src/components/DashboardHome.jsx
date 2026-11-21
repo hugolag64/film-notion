@@ -226,7 +226,12 @@ export default function DashboardHome({
         </section>}
 
         <section>
-            <SectionHeading eyebrow="SÉLECTION PERSONNELLE" title="Pour vous" action="Choisir un film" onAction={onOpenRecommendations} isDarkMode={isDarkMode} />
+            <button type="button" onClick={onOpenRecommendations} className="group relative mb-7 flex w-full items-center justify-between gap-5 overflow-hidden rounded-2xl border border-[#635bff]/20 bg-gradient-to-r from-[#635bff] via-[#6558e9] to-[#8b5cf6] p-6 text-left text-white shadow-lg shadow-[#635bff]/15 transition hover:-translate-y-0.5 hover:shadow-xl sm:p-8" aria-label="Lancer le choix personnalisé d’un film">
+                <span className="absolute -right-6 -top-10 h-44 w-44 rounded-full bg-white/15 blur-2xl transition-transform duration-500 group-hover:scale-125" />
+                <span className="relative min-w-0"><span className="block text-[10px] font-mono font-bold uppercase tracking-[0.24em] text-white/70">Tu ne sais pas quoi regarder ?</span><span className="mt-2 block text-2xl font-serif font-bold sm:text-3xl">Trouvons ton prochain film.</span><span className="mt-2 block max-w-2xl text-xs leading-5 text-white/80 sm:text-sm">Réponds à quelques questions et découvre une sélection qui te correspond.</span></span>
+                <span className="relative flex shrink-0 items-center gap-2 rounded-xl bg-white px-4 py-3 text-xs font-bold text-[#5148d8] shadow-sm transition group-hover:gap-3">Choisir un film <span aria-hidden="true">→</span></span>
+            </button>
+            <SectionHeading eyebrow="SÉLECTION PERSONNELLE" title="Pour vous" isDarkMode={isDarkMode} />
             {recommendations.length ? <div className="dashboard-scroll flex gap-4 overflow-x-auto pb-3" aria-label="Recommandations personnalisées">{recommendations.map((item) => <RecommendationCard key={item.tmdb_id} item={item} isDarkMode={isDarkMode} onOpenDetails={onOpenTMDBDetails} onAddWatchlist={onAddWatchlist} onWhyRecommendation={onWhyRecommendation} />)}</div> : <div className={`rounded-2xl border p-8 ${panelClass(isDarkMode)}`}><p className="text-sm font-semibold">Les recommandations seront disponibles dès que TMDB sera connecté.</p><p className="mt-1 text-xs opacity-60">Tu peux déjà parcourir ta bibliothèque ou lancer une sélection personnalisée.</p></div>}
         </section>
 

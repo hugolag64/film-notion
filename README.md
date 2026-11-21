@@ -58,13 +58,13 @@ Les quotas de recommandation et de rate limiting sont configurables avec :
 
 ### Lecture directe dans Jellyfin Web
 
-Une fois cette version de Backstage déployée, activez le script côté Jellyfin pour lancer son lecteur officiel en un clic.
+Une fois cette version de Backstage déployée, activez le script côté Jellyfin pour lancer son lecteur officiel depuis Backstage.
 
 1. Installez le plugin communautaire [JavaScript Injector](https://github.com/n00bcodr/Jellyfin-JavaScript-Injector#-installation) et redémarrez Jellyfin.
 2. Dans **Tableau de bord → Plugins → JavaScript Injector**, ajoutez un script. Collez le contenu de [backstage-autoplay.js](integrations/jellyfin/backstage-autoplay.js) dans le champ JavaScript, activez-le et enregistrez.
 3. Connectez-vous à Jellyfin Web, puis ouvrez un film ou un épisode avec **Lire** depuis Backstage.
 
-Le script utilise les boutons de la fiche de Jellyfin Web dans son interface classique, en privilégiant **Reprendre** quand le bouton est disponible. Sans le script, le lien ouvre la fiche comme d’habitude. Si le navigateur bloque la lecture automatique, utilisez le bouton de lecture de Jellyfin. Une mise à jour de son interface peut nécessiter d’ajuster le script.
+Backstage ouvre Jellyfin dans un nouvel onglet puis lui transmet une demande de lecture contrôlée par l'identifiant du média. Le script attend que la fiche Jellyfin soit prête et choisit **Reprendre** quand c'est disponible, sinon **Lire**. Il confirme le démarrage uniquement quand Jellyfin ouvre son lecteur vidéo ; si le script n'est pas actif ou si le lecteur ne démarre pas, Backstage affiche une erreur au lieu de prétendre que la lecture a réussi. Une mise à jour de Jellyfin Web peut nécessiter d'ajuster le script.
 
 ## Deploiement securise
 

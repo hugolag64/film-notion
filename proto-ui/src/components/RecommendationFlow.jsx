@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { answerRecommendation, confirmRecommendation, getJellyfinPlayerPath, recordRecommendationEvent, startRecommendationSession } from '../api';
+import { answerRecommendation, confirmRecommendation, recordRecommendationEvent, startRecommendationSession } from '../api';
 
 const primaryButton = 'rounded-lg bg-[#635bff] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50';
 const secondaryButton = 'rounded-lg border border-current/20 px-4 py-2 text-sm font-semibold disabled:opacity-50';
 
-function FilmCard({ film, isDarkMode, onRequest, confirming, busy, requested, error, onPick }) {
+function FilmCard({ film, isDarkMode, onRequest, confirming, busy, requested, error, onPick, onPlay }) {
     const [ask, setAsk] = useState(false);
     const image = film.poster_path && `https://image.tmdb.org/t/p/w342${film.poster_path}`;
 
@@ -24,7 +24,7 @@ function FilmCard({ film, isDarkMode, onRequest, confirming, busy, requested, er
             </div>
             <div className="px-3 pb-3">
                 {film.action === 'play' && (
-                    <a href={getJellyfinPlayerPath(film.media_id)} target="_blank" rel="noopener noreferrer" onClick={() => onPick(film)} className={`inline-block ${primaryButton}`}>Lire dans Jellyfin</a>
+                    <button type="button" onClick={() => { onPick(film); onPlay(film.media_id); }} className={primaryButton}>Lire dans Jellyfin</button>
                 )}
                 {film.action === 'pending' && <p className="text-sm opacity-75">{requested ? 'Demande envoyée' : 'Demande en cours'}</p>}
                 {(film.action === 'request' || film.action === 'rent') && (ask ? (
@@ -47,7 +47,7 @@ function FilmCard({ film, isDarkMode, onRequest, confirming, busy, requested, er
     );
 }
 
-export default function RecommendationFlow({ isDarkMode, onClose }) {
+export default function RecommendationFlow({ isDarkMode, onClose, onPlay }) {
     const [sessionId, setSessionId] = useState(null);
     const [state, setState] = useState('loading');
     const [question, setQuestion] = useState(null);
@@ -142,7 +142,7 @@ export default function RecommendationFlow({ isDarkMode, onClose }) {
     const renderFilm = (film) => (
         <FilmCard key={film.tmdb_id} film={film} isDarkMode={isDarkMode} onRequest={request}
             busy={pendingRequest !== null} confirming={pendingRequest === film.tmdb_id}
-            requested={requested[film.tmdb_id]} onPick={item => rememberFilm(item, 'confirmed')}
+            requested={requested[film.tmdb_id]} onPick={item => rememberFilm(item, 'confirmed')} onPlay={onPlay}
             error={requestError?.id === film.tmdb_id ? requestError.message : null} />
     );
     const text = isDarkMode ? 'text-white' : 'text-[#0a2540]';

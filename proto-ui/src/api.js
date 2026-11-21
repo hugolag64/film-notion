@@ -271,14 +271,20 @@ export async function fetchPlaybackOptions(mediaId, seasonNumber, episodeNumber)
     return response.json();
 }
 
-export function getJellyfinPlayerPath(mediaId, seasonNumber, episodeNumber) {
-    const path = `${API_BASE_URL}/medias/${encodeURIComponent(mediaId)}/playback/jellyfin-url`;
+export async function fetchJellyfinPlaybackTarget(mediaId, seasonNumber, episodeNumber) {
+    const path = `${API_BASE_URL}/medias/${encodeURIComponent(mediaId)}/playback/jellyfin-target`;
     const params = new URLSearchParams();
     if (seasonNumber !== undefined && episodeNumber !== undefined) {
         params.set('season_number', seasonNumber);
         params.set('episode_number', episodeNumber);
     }
-    return params.size ? `${path}?${params}` : path;
+    const response = await fetch(params.size ? `${path}?${params}` : path, {
+        credentials: 'same-origin',
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(body?.detail || 'Ouverture de Jellyfin impossible');
+    if (!body?.url || !body?.item_id) throw new Error('La cible de lecture Jellyfin est invalide');
+    return body;
 }
 
 export async function fetchMediaServerOptions(mediaType) {
@@ -367,6 +373,14 @@ export async function fetchAvailableMediaIds() {
     const response = await fetch(`${API_BASE_URL}/library/available`);
     if (!response.ok) throw new Error('Disponibilités indisponibles');
     return (await response.json()).media_ids || [];
+}
+
+export async function deleteMedia(mediaId, { deleteFiles = false } = {}) {
+    const query = deleteFiles ? '?delete_files=true' : '';
+    const response = await fetch(`${API_BASE_URL}/medias/${encodeURIComponent(mediaId)}${query}`, {method: 'DELETE'});
+    const body = await readResponseBody(response);
+    if (!response.ok) throw new Error(body?.detail || 'Suppression impossible');
+    return body;
 }
 
 export async function deleteStorageCandidate(mediaId) {

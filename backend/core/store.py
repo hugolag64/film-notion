@@ -840,8 +840,20 @@ class MediaStore:
 
 
     def _delete_sync(self, media_id: str) -> bool:
+        # Foreign keys are not enforced on these connections, so the ON DELETE
+        # CASCADE clauses never fire: clean the dependent rows explicitly.
+        # Rental history, recommendation events and the cleanup log are kept.
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("DELETE FROM episode WHERE media_id = ?", (media_id,))
+            conn.execute(
+                "DELETE FROM user_episode_state WHERE episode_id IN "
+                "(SELECT id FROM episode WHERE media_id = ?)",
+                (media_id,),
+            )
+            for table in (
+                "episode", "media_availability", "user_media_state",
+                "media_recommendation_preferences", "media_storage_protection",
+            ):
+                conn.execute(f"DELETE FROM {table} WHERE media_id = ?", (media_id,))
             cursor = conn.execute("DELETE FROM media WHERE id = ?", (media_id,))
             return cursor.rowcount > 0
 

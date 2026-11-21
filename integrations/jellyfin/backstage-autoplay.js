@@ -1,108 +1,156 @@
 (() => {
     'use strict';
 
-    const launchHash = window.location.hash;
-    const detailsRoute = '#/details?';
-    if (!launchHash.startsWith(detailsRoute)) return;
+    const requestType = 'backstage:play-request';
+    const ackType = 'backstage:play-ack';
+    const activeRequests = new Set();
 
-    const params = new URLSearchParams(launchHash.slice(detailsRoute.length));
-    const pageParams = new URLSearchParams(window.location.search);
-    const markerInSearch = pageParams.get('backstagePlay') === '1';
-    const markerInHash = params.get('backstagePlay') === '1';
-    if ((!markerInSearch && !markerInHash) || !params.get('id')) return;
+    function currentItemId() {
+        const hash = window.location.hash;
+        if (!hash.startsWith('#/details?')) return null;
+        return new URLSearchParams(hash.slice('#/details?'.length)).get('id');
+    }
 
-    const buttonArea = '#itemDetailPage';
-    const deadline = performance.now() + 15000;
+    function findPlayButton() {
+        const area = document.querySelector('#itemDetailPage .mainDetailButtons')
+            || document.querySelector('#itemDetailPage');
+        if (!area) return null;
 
-    function consumeMarker() {
-        window.clearInterval(timer);
-        document.removeEventListener('click', onManualPlay, true);
+        return [...area.querySelectorAll('.btnResume, .btnPlay')].find(button => (
+            !button.disabled
+            && !button.classList.contains('hide')
+            && button.getClientRects().length > 0
+            && window.getComputedStyle(button).visibility === 'visible'
+        )) || null;
+    }
 
-        // Consume the marker so Back and Refresh do not restart playback.
-        if (window.location.hash === launchHash) {
-            params.delete('backstagePlay');
-            const url = new URL(window.location.href);
-            url.hash = `${detailsRoute}${params}`;
-            if (markerInSearch) {
-                const currentPageParams = new URLSearchParams(url.search);
-                currentPageParams.delete('backstagePlay');
-                url.search = currentPageParams.toString();
+    function playbackStarted() {
+        if (window.location.hash.startsWith('#/video')) return true;
+        const video = document.querySelector('.videoPlayerContainer video');
+        return Boolean(video && !video.paused && video.readyState >= 2);
+    }
+
+    function autoplayBlocked() {
+        const video = document.querySelector('.videoPlayerContainer video');
+        return Boolean(video && video.paused && video.readyState >= 2);
+    }
+
+    function playerVideo() {
+        return document.querySelector('.videoPlayerContainer video');
+    }
+
+    // Chrome refuses audible autoplay in a tab the user never clicked
+    // (NotAllowedError). Muted playback is always allowed, so start muted and
+    // give the sound back on the user's first click or key press in the tab.
+    function restoreSoundOnFirstInteraction() {
+        const banner = document.createElement('div');
+        banner.textContent = '🔇 Son coupé par le navigateur — clique ou appuie sur une touche pour l’activer';
+        banner.style.cssText = 'position:fixed;top:16px;left:50%;transform:translateX(-50%);'
+            + 'z-index:100000;padding:10px 18px;border-radius:999px;background:rgba(0,0,0,.8);'
+            + 'color:#fff;font:600 15px sans-serif;cursor:pointer;pointer-events:none;';
+        document.body.appendChild(banner);
+
+        const unmute = event => {
+            // Swallow this first interaction: Jellyfin would otherwise treat the
+            // click or the space bar as play/pause.
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            const video = playerVideo();
+            if (video) video.muted = false;
+            banner.remove();
+            window.removeEventListener('pointerdown', unmute, true);
+            window.removeEventListener('click', swallowClick, true);
+            window.removeEventListener('keydown', unmute, true);
+        };
+        let swallowed = false;
+        const swallowClick = event => {
+            if (swallowed) return;
+            swallowed = true;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+        };
+        window.addEventListener('pointerdown', unmute, true);
+        window.addEventListener('click', swallowClick, true);
+        window.addEventListener('keydown', unmute, true);
+    }
+
+    function startMuted(video) {
+        video.muted = true;
+        return Promise.resolve(video.play()).then(() => {
+            restoreSoundOnFirstInteraction();
+            return true;
+        }, () => false);
+    }
+
+    function startPlayback(itemId, requestId = null, origin = '*') {
+        itemId = String(itemId);
+        if (currentItemId() !== itemId || activeRequests.has(itemId)) return;
+
+        activeRequests.add(itemId);
+        const startedAt = performance.now();
+        let clicked = false;
+        let clickAt = null;
+        let mutedTried = false;
+        let done = false;
+        let timer;
+
+        const finish = (started, reason = null) => {
+            if (done) return;
+            done = true;
+            window.clearInterval(timer);
+            activeRequests.delete(itemId);
+            if (requestId && window.opener) {
+                window.opener.postMessage({type: ackType, requestId, started, reason}, origin);
             }
-            window.history.replaceState(window.history.state, '', url);
-        }
+        };
+
+        timer = window.setInterval(() => {
+            if (playbackStarted()) {
+                finish(true);
+                return;
+            }
+
+            if (clicked && !mutedTried && performance.now() - clickAt >= 1500 && autoplayBlocked()) {
+                mutedTried = true;
+                startMuted(playerVideo()).then(started => {
+                    if (!started) {
+                        finish(false, 'Le navigateur a bloqué la lecture automatique. Clique sur Lire dans Jellyfin.');
+                    }
+                });
+                return;
+            }
+
+            if (performance.now() - startedAt >= 20000) {
+                finish(false, 'Jellyfin n’a pas démarré la vidéo. Le navigateur peut bloquer la lecture automatique.');
+                return;
+            }
+
+            if (clicked || currentItemId() !== itemId) return;
+            const button = findPlayButton();
+            if (!button) return;
+
+            // A synthetic click can open Jellyfin's player, but Chrome may still
+            // block audible autoplay. Never click again: that can pause or stop it.
+            clicked = true;
+            clickAt = performance.now();
+            button.click();
+        }, 250);
     }
 
-    function stopWatching() {
-        window.clearInterval(timer);
+    function handlePlayRequest(event) {
+        const request = event.data;
+        if (event.source !== window.opener || !request || request.type !== requestType
+            || !request.requestId || !request.itemId) return;
+        startPlayback(request.itemId, request.requestId, event.origin);
     }
 
-    function isPlaybackButton(element) {
-        if (!(element instanceof Element)) return false;
-        const name = [
-            element.getAttribute('aria-label'),
-            element.getAttribute('title'),
-            element.textContent,
-            element.className,
-            element.getAttribute('data-action'),
-        ].filter(Boolean).join(' ').toLowerCase();
-        return /btnplay|btnresume|\b(play|resume|lire|lecture|reprendre|continuer)\b/.test(name);
+    function handleLegacyLaunch() {
+        if (new URLSearchParams(window.location.search).get('backstagePlay') !== '1') return;
+        const itemId = currentItemId();
+        if (!itemId) return;
+        startPlayback(itemId);
     }
 
-    function onManualPlay(event) {
-        if (!(event.target instanceof Element)) return;
-        const button = event.target.closest('button, [role="button"], .button-flat');
-        if (button?.closest(buttonArea) && isPlaybackButton(button)) consumeMarker();
-    }
-
-    function findVisibleButton(area, kind) {
-        const candidates = Array.from(area.querySelectorAll('button, [role="button"], .button-flat'));
-        const preferred = candidates.filter(button => {
-            const classes = typeof button.className === 'string' ? button.className : '';
-            const action = (button.getAttribute('data-action') || '').toLowerCase();
-            return kind === 'resume'
-                ? /btnResume/i.test(classes) || action === 'resume'
-                : /btnPlay/i.test(classes) && action !== 'resume';
-        });
-        const labelled = candidates.filter(button => {
-            if (!isPlaybackButton(button)) return false;
-            const label = [button.getAttribute('aria-label'), button.getAttribute('title'), button.textContent]
-                .filter(Boolean).join(' ').toLowerCase();
-            return kind === 'resume'
-                ? /resume|reprendre|continuer/.test(label)
-                : /play|lire|lecture/.test(label) && !/resume|reprendre|continuer/.test(label);
-        });
-        return [...preferred, ...labelled].find(button =>
-            !button.disabled &&
-            !button.closest('[hidden], .hide, [aria-hidden="true"]') &&
-            button.getClientRects().length > 0 &&
-            window.getComputedStyle(button).visibility === 'visible'
-        );
-    }
-
-    function tryPlayback() {
-        if (window.location.hash !== launchHash) {
-            stopWatching();
-            return;
-        }
-        if (performance.now() >= deadline) {
-            // Keep the launch marker if Jellyfin has not rendered a play control
-            // yet. This lets the user start manually and avoids silently losing
-            // the request when Jellyfin changes its details-page markup.
-            stopWatching();
-            return;
-        }
-
-        if (document.visibilityState !== 'visible') return;
-        const area = document.querySelector(`${buttonArea} .mainDetailButtons`) || document.querySelector(buttonArea);
-        if (!area) return;
-
-        const button = findVisibleButton(area, 'resume') || findVisibleButton(area, 'play');
-        if (!button) return;
-
-        consumeMarker();
-        button.click();
-    }
-
-    document.addEventListener('click', onManualPlay, true);
-    const timer = window.setInterval(tryPlayback, 150);
+    window.addEventListener('message', handlePlayRequest);
+    handleLegacyLaunch();
 })();

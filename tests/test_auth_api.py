@@ -337,6 +337,40 @@ def test_playback_routes_use_the_current_users_jellyfin_mapping(tmp_path, monkey
     }
 
 
+def test_jellyfin_target_returns_url_and_item_id_for_selected_episode(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    media = asyncio.run(MediaStore(Config.DB_PATH).create({
+        "id": "simpsons", "title": "The Simpsons", "type": "Série", "tmdb_id": 456,
+    }))
+    monkeypatch.setattr(Config, "JELLYFIN_PUBLIC_URL", "http://jellyfin.example.test")
+
+    class FakeJellyfin:
+        def playback_url(self, item_id, *, base_url=None):
+            return f"{base_url}/web/index.html#/details?id={item_id}&serverId=jf-server"
+
+    class FakePlaybackService:
+        store = MediaStore(Config.DB_PATH)
+        jellyfin = FakeJellyfin()
+
+        async def playback_manifest(self, media_id, season_number=None, episode_number=None):
+            assert media_id == media.id
+            assert season_number == 2
+            assert episode_number == 4
+            return {"item_id": "jellyfin-episode-2-4"}
+
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: FakePlaybackService()
+    response = client.get(
+        f"/api/medias/{media.id}/playback/jellyfin-target?season_number=2&episode_number=4"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "url": "http://jellyfin.example.test/web/index.html#/details?id=jellyfin-episode-2-4&serverId=jf-server",
+        "item_id": "jellyfin-episode-2-4",
+    }
+
+
 def test_regular_user_can_submit_an_acquisition_request(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     _setup(client)

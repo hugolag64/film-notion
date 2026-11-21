@@ -44,6 +44,26 @@
     animation: fadeInSmooth 0.25s ease-out forwards;
 }
 
+@keyframes detail-enter {
+    from { opacity: 0; transform: translateY(14px) scale(0.985); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.film-detail-enter {
+    transform-origin: center;
+    animation: detail-enter 280ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+}
+
+.search-skeleton {
+    background: linear-gradient(90deg, rgb(148 163 184 / 0.12) 25%, rgb(148 163 184 / 0.24) 50%, rgb(148 163 184 / 0.12) 75%);
+    background-size: 200% 100%;
+    animation: search-skeleton 1.4s ease-in-out infinite;
+}
+
+@keyframes search-skeleton {
+    to { background-position: -200% 0; }
+}
+
 .series-portal {
     animation: portal 350ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
@@ -84,6 +104,8 @@
     .season-content,
     .series-portal,
     .animate-fade-in-smooth,
+    .film-detail-enter,
+    .search-skeleton,
     .season-content-open label {
         animation: none !important;
         transition: none !important;

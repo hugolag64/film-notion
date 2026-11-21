@@ -1740,6 +1740,36 @@ async def update_media(
     return media
 
 
+@router.delete("/medias/{media_id}", dependencies=[Depends(require_admin)])
+async def delete_media(
+    media_id: str,
+    delete_files: bool = False,
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    """Remove a fiche from the catalogue, optionally with its Radarr files."""
+    store = service.store
+    media = await store.fetch_one(media_id)
+    if not media:
+        raise HTTPException(status_code=404, detail="Média non trouvé")
+
+    files_deleted = False
+    if delete_files:
+        availability = await store.get_availability(media_id)
+        if availability and availability.provider == "radarr" and availability.arr_id:
+            if service.radarr is None:
+                raise HTTPException(status_code=503, detail="Radarr n'est pas configuré")
+            try:
+                await service.radarr.delete_movie(availability.arr_id, delete_files=True)
+            except (MediaServerError, RuntimeError) as error:
+                raise HTTPException(
+                    status_code=502, detail=f"Radarr n'a pas pu supprimer les fichiers : {error}",
+                ) from error
+            files_deleted = True
+
+    await store.delete(media_id)
+    return {"deleted": True, "media_id": media_id, "title": media.title, "files_deleted": files_deleted}
+
+
 
 @router.get("/media-server/status")
 async def media_server_status():
@@ -1856,15 +1886,14 @@ async def get_playback_options(
     return options
 
 
-@router.get("/medias/{media_id}/playback/jellyfin-url")
-async def get_jellyfin_player_url(
+async def _get_jellyfin_playback_target(
     media_id: str,
     request: Request,
-    season_number: Optional[int] = None,
-    episode_number: Optional[int] = None,
-    current: AuthContext = Depends(get_current_user),
-    service: MediaServerService = Depends(get_media_server_service),
-):
+    season_number: Optional[int],
+    episode_number: Optional[int],
+    current: AuthContext,
+    service: MediaServerService,
+) -> dict[str, str]:
     if (season_number is None) != (episode_number is None):
         raise HTTPException(status_code=422, detail="Saison et épisode requis")
     await _ensure_playback_access(current, media_id, service.store)
@@ -1882,9 +1911,38 @@ async def get_jellyfin_player_url(
         hostname = origin.hostname or "localhost"
         netloc = f"[{hostname}]:8096" if ":" in hostname else f"{hostname}:8096"
         public_url = urlunsplit((origin.scheme, netloc, "", "", ""))
-    return RedirectResponse(
-        service.jellyfin.playback_url(playback["item_id"], base_url=public_url, autoplay=True),
-        status_code=307,
+    return {
+        "url": service.jellyfin.playback_url(playback["item_id"], base_url=public_url),
+        "item_id": playback["item_id"],
+    }
+
+
+@router.get("/medias/{media_id}/playback/jellyfin-url")
+async def get_jellyfin_player_url(
+    media_id: str,
+    request: Request,
+    season_number: Optional[int] = None,
+    episode_number: Optional[int] = None,
+    current: AuthContext = Depends(get_current_user),
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    target = await _get_jellyfin_playback_target(
+        media_id, request, season_number, episode_number, current, service,
+    )
+    return RedirectResponse(target["url"], status_code=307)
+
+
+@router.get("/medias/{media_id}/playback/jellyfin-target")
+async def get_jellyfin_playback_target(
+    media_id: str,
+    request: Request,
+    season_number: Optional[int] = None,
+    episode_number: Optional[int] = None,
+    current: AuthContext = Depends(get_current_user),
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    return await _get_jellyfin_playback_target(
+        media_id, request, season_number, episode_number, current, service,
     )
 
 

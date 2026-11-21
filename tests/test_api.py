@@ -104,6 +104,7 @@ def test_hls_playback_routes_are_registered():
     paths = {route.path for route in api.router.routes}
 
     assert "/api/medias/{media_id}/playback/manifest" in paths
+    assert "/api/medias/{media_id}/playback/jellyfin-target" in paths
     assert "/api/medias/{media_id}/playback/resource/{resource_path:path}" in paths
 
 

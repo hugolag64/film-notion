@@ -15,24 +15,27 @@ export default function TMDBMoviePreview({
         aria-label={movie?.title ? `Fiche TMDB de ${movie.title}` : 'Fiche TMDB'}
     >
         <section
-            className={`flex max-h-[92vh] w-full max-w-4xl flex-col overflow-y-auto rounded-2xl border shadow-2xl ${panelClass(isDarkMode)}`}
+            className={`film-detail-enter flex max-h-[92vh] w-full max-w-4xl flex-col overflow-y-auto rounded-2xl border shadow-2xl ${panelClass(isDarkMode)}`}
             onClick={(event) => event.stopPropagation()}
         >
-            <div className="relative min-h-56 shrink-0 overflow-hidden bg-slate-950 sm:min-h-72">
+            <div className="relative min-h-56 shrink-0 overflow-hidden bg-gradient-to-br from-[#25224d] via-[#111827] to-slate-950 sm:min-h-72">
                 {movie?.backdrop_url && <img src={movie.backdrop_url} alt="" className="absolute inset-0 h-full w-full object-cover opacity-50" />}
                 <div className="absolute inset-0 bg-gradient-to-t from-black via-black/45 to-transparent" />
                 <button type="button" onClick={onClose} className="absolute right-4 top-4 z-10 rounded-full bg-black/60 px-3 py-2 text-xs text-white">✕</button>
                 <div className="absolute bottom-5 left-5 right-5 flex items-end gap-4 text-white sm:left-8 sm:right-8">
-                    {movie?.poster_url && <img src={movie.poster_url} alt={`Affiche de ${movie.title}`} className="hidden h-32 w-22 rounded-lg object-cover shadow-xl sm:block" />}
+                    {loading ? <div className="search-skeleton hidden h-32 w-[88px] shrink-0 rounded-lg sm:block" /> : movie?.poster_url && <img src={movie.poster_url} alt={`Affiche de ${movie.title}`} className="hidden h-32 w-[88px] shrink-0 rounded-lg object-cover shadow-xl sm:block" />}
                     <div className="min-w-0">
-                        <span className="rounded bg-[#01b4e4] px-2 py-1 text-[10px] font-mono font-bold">TMDB</span>
-                        <h2 className="mt-2 text-2xl font-serif font-bold sm:text-4xl">{loading ? 'Chargement…' : movie?.title || 'Fiche indisponible'}</h2>
+                        <span className="rounded bg-[#01b4e4] px-2 py-1 text-[10px] font-mono font-bold">{loading ? 'FICHE FILM' : 'TMDB'}</span>
+                        <h2 className="mt-2 text-2xl font-serif font-bold sm:text-4xl">{loading ? recommendation?.title || 'Préparation de la fiche' : movie?.title || 'Fiche indisponible'}</h2>
                         {movie && <p className="mt-1 text-xs text-white/75">{movie.release_date?.slice(0, 4) || '—'} · {movie.runtime ? `${movie.runtime} min` : 'Durée inconnue'}</p>}
                     </div>
                 </div>
             </div>
 
-            {loading && <p className="p-8 text-center text-sm opacity-60">Récupération des détails TMDB…</p>}
+            {loading && <div className="space-y-5 p-5 sm:p-8" role="status" aria-live="polite">
+                <div className="flex items-center gap-3 rounded-xl border border-[#635bff]/20 bg-[#635bff]/[0.06] p-4"><span className="h-5 w-5 animate-spin rounded-full border-2 border-[#635bff]/25 border-t-[#635bff]" /><div><p className="text-sm font-semibold">On prépare la fiche du film</p><p className="mt-1 text-xs opacity-60">Récupération du synopsis, de l’affiche et des informations.</p></div></div>
+                <div className="grid gap-5 md:grid-cols-[1fr_220px]"><div className="space-y-3"><div className="search-skeleton h-3 w-28 rounded" /><div className="search-skeleton h-3 w-full rounded" /><div className="search-skeleton h-3 w-5/6 rounded" /><div className="search-skeleton h-3 w-2/3 rounded" /><div className="mt-6 grid grid-cols-2 gap-3"><div className="search-skeleton h-12 rounded-lg" /><div className="search-skeleton h-12 rounded-lg" /></div></div><div className="search-skeleton h-28 rounded-xl" /></div>
+            </div>}
             {error && <div className="p-8 text-center"><p className="text-sm text-rose-500">{error}</p><button type="button" onClick={onClose} className="mt-4 rounded-lg border px-3 py-2 text-xs font-semibold">Fermer</button></div>}
             {!loading && !error && movie && <div className="space-y-5 p-5 sm:p-8">
                 <div className="flex flex-wrap items-center gap-3">
