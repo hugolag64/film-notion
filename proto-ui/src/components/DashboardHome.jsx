@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { countActiveRentals, isActiveRental, rentalExpiryLabel, rentalStatusLabel } from '../rentals';
+import { countQueuedRentals, countRentalsInUse, isActiveRental, isQueuedRental, rentalDisplayStatus, rentalExpiryLabel, rentalStatusLabel } from '../rentals';
 
 const posterUrl = (path, size = 'w500') => path
     ? (path.startsWith('http') ? path : `https://image.tmdb.org/t/p/${size}${path}`)
@@ -139,6 +139,7 @@ function RequestsManagerModal({ requests, isDarkMode, onClose, onDeleteRequest, 
 }
 
 const rentalTone = {
+    queued: 'bg-slate-500/15 text-slate-500',
     requested: 'bg-amber-500/15 text-amber-600',
     downloading: 'bg-sky-500/15 text-sky-600',
     available: 'bg-emerald-500/15 text-emerald-600',
@@ -146,7 +147,7 @@ const rentalTone = {
     kept: 'bg-emerald-500/15 text-emerald-600',
 };
 
-function RentalCard({ rental, media, isDarkMode, onOpenMedia, onKeepRental }) {
+function RentalCard({ rental, media, isDarkMode, onOpenMedia, onKeepRental, onCancelRental }) {
     const title = media?.title || 'Film loué';
     const image = media?.poster;
     const expiry = rentalExpiryLabel(rental);
@@ -158,12 +159,15 @@ function RentalCard({ rental, media, isDarkMode, onOpenMedia, onKeepRental }) {
         <div className="flex min-w-0 flex-1 flex-col justify-between p-3">
             <div>
                 <button type="button" onClick={open} className="block max-w-full truncate text-left text-sm font-semibold hover:text-[#635bff]">{title}</button>
-                <span className={`mt-2 inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${rentalTone[rental.status] || 'bg-current/10'}`}>{rentalStatusLabel(rental.status)}</span>
+                <span className={`mt-2 inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${rentalTone[rentalDisplayStatus(rental)] || 'bg-current/10'}`}>{rentalStatusLabel(rental)}</span>
                 {expiry && <p className={`mt-2 text-[11px] ${expiry.includes('aujourd') || /dans [12] j/.test(expiry) ? 'font-semibold text-rose-500' : 'opacity-60'}`}>{expiry}</p>}
-                {['requested', 'downloading'].includes(rental.status) && <p className="mt-2 text-[11px] opacity-60">Tu seras prévenu quand il sera prêt.</p>}
+                {isQueuedRental(rental)
+                    ? <p className="mt-2 text-[11px] opacity-60">Demandé le {dateLabel(rental.requested_at)} · se télécharge dès qu’une source apparaît.</p>
+                    : ['requested', 'downloading'].includes(rental.status) && <p className="mt-2 text-[11px] opacity-60">Tu seras prévenu quand il sera prêt.</p>}
             </div>
             <div className="mt-3 flex flex-wrap gap-1.5">
                 {['available', 'keep_requested', 'kept'].includes(rental.status) && <button type="button" onClick={open} className="rounded-md bg-[#635bff] px-2 py-1.5 text-[10px] font-semibold text-white hover:bg-[#5048e5]">▶ Regarder</button>}
+                {isQueuedRental(rental) && <button type="button" onClick={() => onCancelRental(rental)} className="rounded-md border border-rose-500/40 px-2 py-1.5 text-[10px] font-semibold text-rose-500 hover:bg-rose-500/10">Annuler</button>}
                 {rental.status === 'available' && <button type="button" onClick={() => onKeepRental(rental)} className="rounded-md border border-[#635bff]/40 px-2 py-1.5 text-[10px] font-semibold text-[#635bff] hover:bg-[#635bff]/10">Demander à garder</button>}
             </div>
         </div>
@@ -184,7 +188,7 @@ export default function DashboardHome({
     data, isDarkMode, loading, error, onRetry, onOpenMedia, onResume,
     onAddWatchlist, onWhyRecommendation, onOpenLibrary, onOpenRecommendations, onOpenTMDBDetails,
     onCancelRequest, cancellingRequest, isAdmin = false,
-    rentals = [], maxActiveRentals = 5, medias = [], onKeepRental, onRentFilm,
+    rentals = [], maxActiveRentals = 5, maxQueuedRentals = 10, medias = [], onKeepRental, onCancelRental, onRentFilm,
 }) {
     const [selectedRequest, setSelectedRequest] = useState(null);
     const [showRequestsManager, setShowRequestsManager] = useState(false);
@@ -199,7 +203,8 @@ export default function DashboardHome({
     const availability = dashboard.availability || [];
     const mediaById = Object.fromEntries(medias.map((media) => [media.id, media]));
     const visibleRentals = rentals.filter((rental) => isActiveRental(rental) || rental.status === 'kept');
-    const activeRentalCount = countActiveRentals(rentals);
+    const activeRentalCount = countRentalsInUse(rentals);
+    const queuedRentalCount = countQueuedRentals(rentals);
     return <div className="series-portal space-y-12">
         <section>
             <SectionHeading eyebrow="REPRENDRE" title="Continuer à regarder" action="Voir ma bibliothèque" onAction={onOpenLibrary} isDarkMode={isDarkMode} />
@@ -207,10 +212,10 @@ export default function DashboardHome({
         </section>
 
         {!isAdmin && <section>
-            <SectionHeading eyebrow={`LOCATIONS · ${activeRentalCount}/${maxActiveRentals}`} title="Mes locations" action="Louer un film" onAction={onRentFilm} isDarkMode={isDarkMode} />
-            {visibleRentals.length ? <div className="flex gap-3 overflow-x-auto pb-3" aria-label="Mes locations">{visibleRentals.map((rental) => <RentalCard key={rental.id} rental={rental} media={mediaById[rental.media_id]} isDarkMode={isDarkMode} onOpenMedia={onOpenMedia} onKeepRental={onKeepRental} />)}</div> : <div className={`rounded-2xl border p-6 ${panelClass(isDarkMode)}`}>
+            <SectionHeading eyebrow={`LOCATIONS · ${activeRentalCount}/${maxActiveRentals}${queuedRentalCount ? ` · ${queuedRentalCount}/${maxQueuedRentals} EN ATTENTE` : ''}`} title="Mes locations" action="Louer un film" onAction={onRentFilm} isDarkMode={isDarkMode} />
+            {visibleRentals.length ? <div className="flex gap-3 overflow-x-auto pb-3" aria-label="Mes locations">{visibleRentals.map((rental) => <RentalCard key={rental.id} rental={rental} media={mediaById[rental.media_id]} isDarkMode={isDarkMode} onOpenMedia={onOpenMedia} onKeepRental={onKeepRental} onCancelRental={onCancelRental} />)}</div> : <div className={`rounded-2xl border p-6 ${panelClass(isDarkMode)}`}>
                 <p className="text-sm font-semibold">Aucune location en cours.</p>
-                <p className="mt-1 text-xs opacity-60">Loue jusqu’à {maxActiveRentals} films à la fois. Chaque location dure 21 jours (7 jours après la première lecture), et tu peux demander à garder un film définitivement.</p>
+                <p className="mt-1 text-xs opacity-60">Loue jusqu’à {maxActiveRentals} films à la fois, et mets-en jusqu’à {maxQueuedRentals} en file d’attente s’ils ne sont pas encore trouvables. Chaque location dure 21 jours (7 jours après la première lecture), et tu peux demander à garder un film définitivement.</p>
                 <button type="button" onClick={onRentFilm} className="mt-4 rounded-lg bg-[#635bff] px-3 py-2 text-xs font-semibold text-white">Louer un film</button>
             </div>}
         </section>}

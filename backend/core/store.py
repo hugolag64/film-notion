@@ -21,6 +21,8 @@ _COLUMNS = [
 
 _LIST_FIELDS = {"categories", "tags", "cast"}
 _ACTIVE_RENTAL_STATES = ("requested", "downloading", "available", "keep_requested")
+# A requested rental is "waiting for a source" while Radarr has nothing to download yet.
+_WAITING_DOWNLOAD_STATES = ("requested", "error")
 
 
 class MediaStore:
@@ -1143,6 +1145,22 @@ class MediaStore:
             ).fetchall()
         return [self._row_to_rental(row) for row in rows]
 
+    def _count_rental_slots_sync(self, user_id: str) -> Dict[str, int]:
+        """Split a user's active rentals into used slots and queued (waiting) requests."""
+        active = ", ".join("?" for _ in _ACTIVE_RENTAL_STATES)
+        waiting = ", ".join("?" for _ in _WAITING_DOWNLOAD_STATES)
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT "
+                f"COALESCE(SUM(CASE WHEN r.status = 'requested' AND (a.state IS NULL OR a.state IN ({waiting})) THEN 1 ELSE 0 END), 0), "
+                "COUNT(*) "
+                "FROM media_rentals r LEFT JOIN media_availability a ON a.media_id = r.media_id "
+                f"WHERE r.backstage_user_id = ? AND r.status IN ({active})",
+                (*_WAITING_DOWNLOAD_STATES, user_id, *_ACTIVE_RENTAL_STATES),
+            ).fetchone()
+        queued, total = int(row[0]), int(row[1])
+        return {"in_use": total - queued, "queued": queued}
+
     def _count_active_rentals_sync(self, user_id: str) -> int:
         placeholders = ", ".join("?" for _ in _ACTIVE_RENTAL_STATES)
         with sqlite3.connect(self.db_path) as conn:
@@ -1669,6 +1687,9 @@ class MediaStore:
 
     async def list_rentals_for_media(self, media_id: str) -> List[Rental]:
         return await asyncio.to_thread(self._list_rentals_for_media_sync, media_id)
+
+    async def count_rental_slots(self, user_id: str) -> Dict[str, int]:
+        return await asyncio.to_thread(self._count_rental_slots_sync, user_id)
 
     async def count_active_rentals(self, user_id: str) -> int:
         return await asyncio.to_thread(self._count_active_rentals_sync, user_id)

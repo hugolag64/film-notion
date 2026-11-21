@@ -26,7 +26,7 @@ from backend.core.tmdb_relink import build_relink_updates
 from backend.core.arr import RadarrClient, SonarrClient, MediaServerError
 from backend.core.seerr import SeerrClient
 from backend.core.jellyfin import JellyfinClient
-from backend.core.media_server import MediaServerService
+from backend.core.media_server import Availability, MediaServerService
 from backend.core.dashboard import build_dashboard_payload
 from backend.core.backup import create_backup, get_backup_health, get_backup_status, verify_backup
 from backend.core.recommendations import (
@@ -320,6 +320,7 @@ class StorageProtectionRequest(BaseModel):
 
 
 MAX_ACTIVE_RENTALS = 5
+MAX_QUEUED_RENTALS = 10
 
 
 def _rental_status_for(availability_state: str) -> str:
@@ -1627,8 +1628,18 @@ async def _acquire_media(
             ):
                 # Already in the shared library: nothing to download, nothing to rent.
                 return {"availability": availability}
-        if await service.store.count_active_rentals(owner_id) >= MAX_ACTIVE_RENTALS:
-            raise HTTPException(status_code=409, detail="Limite de 5 locations actives atteinte")
+        slots = await service.store.count_rental_slots(owner_id)
+        if availability and availability.state == "available":
+            if slots["in_use"] >= MAX_ACTIVE_RENTALS:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Limite de {MAX_ACTIVE_RENTALS} locations en cours atteinte",
+                )
+        elif slots["queued"] >= MAX_QUEUED_RENTALS:
+            raise HTTPException(
+                status_code=409,
+                detail=f"File d'attente pleine : {MAX_QUEUED_RENTALS} films attendent déjà une source",
+            )
         if availability and availability.state == "available":
             # The file is already on disk for another flatmate's rental: share it.
             rental = await service.store.create_rental(Rental(
@@ -1691,14 +1702,58 @@ async def list_rentals(
     current: AuthContext = Depends(get_current_user),
     store: MediaStore = Depends(get_store),
 ):
+    limits = {"max_active_rentals": MAX_ACTIVE_RENTALS, "max_queued_rentals": MAX_QUEUED_RENTALS}
     if current.user.get("role") == "admin":
-        return {"rentals": [], "max_active_rentals": MAX_ACTIVE_RENTALS}
+        return {"rentals": [], **limits}
     await store.expire_rentals(datetime.now(timezone.utc))
     rentals = await store.list_user_rentals(current.user["id"])
+    states = {item.media_id: item.state for item in await store.list_availabilities()}
     return {
-        "rentals": [_serialize_rental(rental) for rental in rentals],
-        "max_active_rentals": MAX_ACTIVE_RENTALS,
+        "rentals": [
+            {**_serialize_rental(rental), "download_state": states.get(rental.media_id)}
+            for rental in rentals
+        ],
+        **limits,
     }
+
+
+def _is_waiting_for_source(rental: Rental, availability: Optional[Availability]) -> bool:
+    return rental.status == "requested" and (availability is None or availability.state in {"requested", "error"})
+
+
+@router.post("/rentals/{rental_id}/cancel")
+async def cancel_rental(
+    rental_id: str,
+    current: AuthContext = Depends(get_current_user),
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    """Let a flatmate drop a request that is still waiting for a source."""
+    store = service.store
+    rental = await store.get_rental(rental_id)
+    if not rental or rental.backstage_user_id != current.user["id"]:
+        raise HTTPException(status_code=404, detail="Location non trouvée")
+    availability = await store.get_availability(rental.media_id)
+    if not _is_waiting_for_source(rental, availability):
+        raise HTTPException(status_code=409, detail="Le téléchargement a déjà commencé : la location ne peut plus être annulée")
+    rental = await store.update_rental(rental_id, {"status": "cancelled"})
+    still_wanted = any(
+        other.id != rental_id and (
+            other.status in {"requested", "downloading", "available", "keep_requested", "kept"}
+            or other.storage_policy == "permanent"
+        )
+        for other in await store.list_rentals_for_media(rental.media_id)
+    )
+    warning = None
+    if not still_wanted and availability and availability.arr_id and getattr(service, "radarr", None) and availability.provider == "radarr":
+        try:
+            await service.radarr.delete_movie(availability.arr_id, delete_files=True)
+            await store.upsert_availability(availability.model_copy(update={
+                "arr_id": None, "jellyfin_id": None, "state": "error", "progress_percent": None,
+                "last_error": "Demande annulée", "last_synced_at": datetime.now(timezone.utc),
+            }))
+        except RuntimeError as error:
+            warning = f"Location annulée, mais Radarr n'a pas pu être nettoyé : {error}"
+    return {"rental": _serialize_rental(rental), "warning": warning}
 
 
 @router.post("/rentals/{rental_id}/keep")
@@ -1990,9 +2045,12 @@ async def admin_dashboard(
             {
                 "user_id": user["id"],
                 "display_name": user["display_name"],
-                "active_rentals": await store.count_active_rentals(user["id"]),
+                **(lambda slots: {"active_rentals": slots["in_use"], "queued_rentals": slots["queued"]})(
+                    await store.count_rental_slots(user["id"])
+                ),
                 "temporary_bytes": await store.active_temporary_bytes(user["id"]),
                 "max_active_rentals": MAX_ACTIVE_RENTALS,
+                "max_queued_rentals": MAX_QUEUED_RENTALS,
             }
             for user in auth_store.list_users()
             if user["role"] != "admin"

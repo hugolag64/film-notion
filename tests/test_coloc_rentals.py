@@ -301,7 +301,11 @@ def test_rentals_endpoint_exposes_the_active_rental_limit(tmp_path, monkeypatch)
 
     payload = client.get("/api/rentals").json()
 
-    assert payload == {"rentals": [], "max_active_rentals": api_module.MAX_ACTIVE_RENTALS}
+    assert payload == {
+        "rentals": [],
+        "max_active_rentals": api_module.MAX_ACTIVE_RENTALS,
+        "max_queued_rentals": api_module.MAX_QUEUED_RENTALS,
+    }
 
 
 # --- 6. Series, decisions, availability and expired cleanup --------------
@@ -389,3 +393,131 @@ def test_delete_expired_rentals_only_removes_films_nobody_rents_anymore(tmp_path
     assert result["deleted"] == [{"media_id": "gone", "title": "gone"}]
     assert result["failed"] == []
     assert radarr.deleted == [(10, True)]
+
+
+# --- 7. Waiting queue -------------------------------------------------------
+
+def _seed_rentals(store, user_id, count, status, prefix):
+    for index in range(count):
+        asyncio.run(store.create({"id": f"{prefix}-{index}", "title": f"{prefix} {index}", "type": "Film", "tmdb_id": 1000 + index}))
+        asyncio.run(store.create_rental(_rental(
+            f"{prefix}-r{index}", f"{prefix}-{index}", user_id, status=status,
+            expires_at=NOW + timedelta(days=5) if status == "available" else None,
+        )))
+
+
+def test_waiting_requests_do_not_use_the_five_rental_slots(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    user_id = _login_as_new_user(client)
+    store = MediaStore(Config.DB_PATH)
+    _seed_rentals(store, user_id, 5, "requested", "waiting")
+    asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    asyncio.run(store.upsert_availability(Availability(media_id="dune", provider="radarr", state="available")))
+    asyncio.run(store.create_rental(_rental("claire", "dune", "claire-id", status="available", expires_at=NOW + timedelta(days=5))))
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: RecordingService(store)
+
+    response = client.post("/api/medias/dune/acquisition", json={})
+
+    assert response.status_code == 200
+    assert asyncio.run(store.count_rental_slots(user_id)) == {"in_use": 1, "queued": 5}
+
+
+def test_instant_rental_is_refused_when_five_rentals_are_in_use(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    user_id = _login_as_new_user(client)
+    store = MediaStore(Config.DB_PATH)
+    _seed_rentals(store, user_id, 5, "available", "watching")
+    asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    asyncio.run(store.upsert_availability(Availability(media_id="dune", provider="radarr", state="available")))
+    asyncio.run(store.create_rental(_rental("claire", "dune", "claire-id", status="available", expires_at=NOW + timedelta(days=5))))
+    service = RecordingService(store)
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: service
+
+    response = client.post("/api/medias/dune/acquisition", json={})
+
+    assert response.status_code == 409
+    assert "locations en cours" in response.json()["detail"]
+
+
+def test_a_downloading_request_counts_as_in_use(tmp_path):
+    store = MediaStore(str(tmp_path / "b.db"))
+    store.init_schema()
+    _seed_rentals(store, "paul", 2, "requested", "req")
+    asyncio.run(store.upsert_availability(Availability(media_id="req-0", provider="radarr", state="downloading")))
+
+    assert asyncio.run(store.count_rental_slots("paul")) == {"in_use": 1, "queued": 1}
+
+
+class CancelRadarr:
+    def __init__(self):
+        self.deleted = []
+
+    async def delete_movie(self, movie_id, delete_files=False):
+        self.deleted.append(movie_id)
+
+
+class CancelService(RecordingService):
+    def __init__(self, store):
+        super().__init__(store)
+        self.radarr = CancelRadarr()
+
+
+def _waiting_rental(client, store, user_id, *, state="requested"):
+    asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    asyncio.run(store.upsert_availability(Availability(media_id="dune", provider="radarr", arr_id=42, state=state)))
+    asyncio.run(store.create_rental(_rental("mine", "dune", user_id, status="requested")))
+    service = CancelService(store)
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: service
+    return service
+
+
+def test_flatmate_cancels_a_waiting_request_and_radarr_forgets_it(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    user_id = _login_as_new_user(client)
+    store = MediaStore(Config.DB_PATH)
+    service = _waiting_rental(client, store, user_id)
+
+    response = client.post("/api/rentals/mine/cancel")
+
+    assert response.status_code == 200
+    assert response.json()["rental"]["status"] == "cancelled"
+    assert service.radarr.deleted == [42]
+    assert asyncio.run(store.get_availability("dune")).state == "error"
+
+
+def test_cancel_keeps_radarr_when_another_flatmate_waits_for_the_film(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    user_id = _login_as_new_user(client)
+    store = MediaStore(Config.DB_PATH)
+    service = _waiting_rental(client, store, user_id)
+    asyncio.run(store.create_rental(_rental("claire", "dune", "claire-id", status="requested")))
+
+    assert client.post("/api/rentals/mine/cancel").status_code == 200
+    assert service.radarr.deleted == []
+
+
+def test_cancel_is_refused_once_the_download_started(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    user_id = _login_as_new_user(client)
+    store = MediaStore(Config.DB_PATH)
+    service = _waiting_rental(client, store, user_id, state="downloading")
+
+    assert client.post("/api/rentals/mine/cancel").status_code == 409
+    assert service.radarr.deleted == []
+
+
+def test_rentals_expose_the_download_state(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    user_id = _login_as_new_user(client)
+    store = MediaStore(Config.DB_PATH)
+    _waiting_rental(client, store, user_id)
+
+    [rental] = client.get("/api/rentals").json()["rentals"]
+
+    assert rental["download_state"] == "requested"

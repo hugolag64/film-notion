@@ -1,7 +1,12 @@
 export const ACTIVE_RENTAL_STATUSES = ['requested', 'downloading', 'available', 'keep_requested'];
 export const DEFAULT_MAX_ACTIVE_RENTALS = 5;
+export const DEFAULT_MAX_QUEUED_RENTALS = 10;
+
+// Download states meaning "Radarr has nothing to download yet" (no release found on the indexer).
+const WAITING_DOWNLOAD_STATES = ['requested', 'error'];
 
 const STATUS_LABELS = {
+    queued: 'En attente d’une source',
     requested: 'Demandé',
     downloading: 'En téléchargement',
     available: 'Disponible',
@@ -11,9 +16,23 @@ const STATUS_LABELS = {
     cancelled: 'Annulé',
 };
 
-export const rentalStatusLabel = (status) => STATUS_LABELS[status] || 'En cours';
-
 export const isActiveRental = (rental) => ACTIVE_RENTAL_STATUSES.includes(rental?.status);
+
+/** A request still waiting for the indexer: it sits in the queue, not in the 5 rental slots. */
+export const isQueuedRental = (rental) => rental?.status === 'requested'
+    && (!rental.download_state || WAITING_DOWNLOAD_STATES.includes(rental.download_state));
+
+/** Status shown to the flatmate: the stored status, refined with the live download state. */
+export const rentalDisplayStatus = (rental) => {
+    if (isQueuedRental(rental)) return 'queued';
+    if (rental?.status === 'requested' && ['searching', 'downloading', 'imported'].includes(rental.download_state)) return 'downloading';
+    return rental?.status;
+};
+
+export const rentalStatusLabel = (rentalOrStatus) => {
+    const status = typeof rentalOrStatus === 'string' ? rentalOrStatus : rentalDisplayStatus(rentalOrStatus);
+    return STATUS_LABELS[status] || 'En cours';
+};
 
 /** Rentals arrive newest first: keep the most recent rental of each media. */
 export const indexRentalsByMedia = (rentals = []) => {
@@ -24,7 +43,9 @@ export const indexRentalsByMedia = (rentals = []) => {
     return byMedia;
 };
 
-export const countActiveRentals = (rentals = []) => rentals.filter(isActiveRental).length;
+export const countRentalsInUse = (rentals = []) => rentals.filter((rental) => isActiveRental(rental) && !isQueuedRental(rental)).length;
+
+export const countQueuedRentals = (rentals = []) => rentals.filter(isQueuedRental).length;
 
 /** "expire dans 3 j", "expire aujourd'hui", or null when there is no deadline yet. */
 export const rentalExpiryLabel = (rental, now = new Date()) => {

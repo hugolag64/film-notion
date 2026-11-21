@@ -8,10 +8,10 @@ import DashboardHome from './components/DashboardHome';
 import TMDBMoviePreview from './components/TMDBMoviePreview';
 import NotificationBell from './components/NotificationBell';
 import { useAuth } from './auth-context';
-import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, fetchMediaServerActivity, syncMediaServer, syncPlayback, fetchAvailableMediaIds, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest } from './api';
+import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, cancelRental, fetchMediaServerActivity, syncMediaServer, syncPlayback, fetchAvailableMediaIds, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
-import { DEFAULT_MAX_ACTIVE_RENTALS, countActiveRentals, indexRentalsByMedia, rentalExpiryLabel, rentalStatusLabel } from './rentals';
+import { DEFAULT_MAX_ACTIVE_RENTALS, DEFAULT_MAX_QUEUED_RENTALS, countQueuedRentals, countRentalsInUse, indexRentalsByMedia, isQueuedRental, rentalExpiryLabel, rentalStatusLabel } from './rentals';
 
 const ALL_GENRES = [
     'Action', 'Aventure', 'Animation', 'Biopic', 'Comédie', 'Crime',
@@ -174,6 +174,7 @@ export default function BackstagePrototype() {
     const [rentalsByMedia, setRentalsByMedia] = useState({});
     const [rentals, setRentals] = useState([]);
     const [maxActiveRentals, setMaxActiveRentals] = useState(DEFAULT_MAX_ACTIVE_RENTALS);
+    const [maxQueuedRentals, setMaxQueuedRentals] = useState(DEFAULT_MAX_QUEUED_RENTALS);
     const [acquisitionBusy, setAcquisitionBusy] = useState(false);
     const [actorQuery, setActorQuery] = useState('');
     const [actorSuggestions, setActorSuggestions] = useState([]);
@@ -275,6 +276,7 @@ export default function BackstagePrototype() {
         setRentals(nextRentals);
         setRentalsByMedia(indexRentalsByMedia(nextRentals));
         if (result.max_active_rentals) setMaxActiveRentals(result.max_active_rentals);
+        if (result.max_queued_rentals) setMaxQueuedRentals(result.max_queued_rentals);
     }).catch(() => {});
 
     const closePlayer = () => {
@@ -478,6 +480,20 @@ export default function BackstagePrototype() {
             showToast('Demande de conservation envoyée.', 'success');
         } catch (error) {
             showToast(error.message || 'Demande impossible.', 'error');
+        }
+    };
+
+    const cancelQueuedRental = async (rental = selectedRental) => {
+        if (!rental?.id) return;
+        const title = movies.find((movie) => movie.id === rental.media_id)?.title || 'ce film';
+        if (!window.confirm(`Annuler la demande pour « ${title} » ?\n\nLe film n’a pas encore été trouvé : il sera retiré de la file d’attente.`)) return;
+        try {
+            const result = await cancelRental(rental.id);
+            showToast(result.warning || `Demande pour « ${title} » annulée.`, result.warning ? 'error' : 'success');
+            await Promise.all([loadRentals(), refreshLibraryState()]);
+        } catch (error) {
+            showToast(error.message || 'Annulation impossible.', 'error');
+            await loadRentals();
         }
     };
 
@@ -1267,6 +1283,8 @@ export default function BackstagePrototype() {
                         isAdmin={isAdmin}
                         rentals={rentals}
                         maxActiveRentals={maxActiveRentals}
+                        maxQueuedRentals={maxQueuedRentals}
+                        onCancelRental={cancelQueuedRental}
                         medias={movies}
                         onKeepRental={keepRental}
                         onRentFilm={() => { setActiveView('library'); changeCollection('Films'); setShowAddDialog(true); }}
@@ -1469,9 +1487,9 @@ export default function BackstagePrototype() {
                                     </button>
                                     {selectedRental && (
                                         <div className="mt-3 rounded-lg border border-[#635bff]/30 bg-[#635bff]/5 p-3 text-xs">
-                                            <div>Location : <strong>{rentalStatusLabel(selectedRental.status)}</strong></div>
+                                            <div>Location : <strong>{rentalStatusLabel(selectedRental)}</strong></div>
                                             {rentalExpiryLabel(selectedRental) && <div className="mt-1 opacity-70">Location : {rentalExpiryLabel(selectedRental)} (le {new Date(selectedRental.expires_at).toLocaleDateString('fr-FR')})</div>}
-                                            {selectedRental.status === 'available' && <button onClick={() => keepRental()} className="mt-2 rounded border border-[#635bff] px-2 py-1 font-semibold text-[#635bff]">Demander à conserver</button>}
+                                            {isQueuedRental(selectedRental) && <div className="mt-1 opacity-70">Téléchargé automatiquement dès qu’une source apparaît.</div>}{isQueuedRental(selectedRental) && <button onClick={() => cancelQueuedRental()} className="mr-2 mt-2 rounded border border-rose-500/50 px-2 py-1 font-semibold text-rose-500">Annuler la demande</button>}{selectedRental.status === 'available' && <button onClick={() => keepRental()} className="mt-2 rounded border border-[#635bff] px-2 py-1 font-semibold text-[#635bff]">Demander à conserver</button>}
                                         </div>
                                     )}
                                 </div>
@@ -1774,9 +1792,9 @@ export default function BackstagePrototype() {
 
                             {selectedRental && (
                                 <div className={`mt-4 rounded-xl border p-4 text-xs ${isDarkMode ? 'border-[#635bff]/30 bg-[#635bff]/10' : 'border-[#635bff]/30 bg-[#635bff]/5'}`}>
-                                    <div>Location : <strong>{rentalStatusLabel(selectedRental.status)}</strong></div>
+                                    <div>Location : <strong>{rentalStatusLabel(selectedRental)}</strong></div>
                                     {rentalExpiryLabel(selectedRental) && <div className="mt-1 opacity-70">Location : {rentalExpiryLabel(selectedRental)} (le {new Date(selectedRental.expires_at).toLocaleDateString('fr-FR')})</div>}
-                                    {selectedRental.status === 'available' && <button onClick={() => keepRental()} className="mt-2 rounded border border-[#635bff] px-2 py-1 font-semibold text-[#635bff]">Demander à conserver</button>}
+                                    {isQueuedRental(selectedRental) && <div className="mt-1 opacity-70">Téléchargé automatiquement dès qu’une source apparaît.</div>}{isQueuedRental(selectedRental) && <button onClick={() => cancelQueuedRental()} className="mr-2 mt-2 rounded border border-rose-500/50 px-2 py-1 font-semibold text-rose-500">Annuler la demande</button>}{selectedRental.status === 'available' && <button onClick={() => keepRental()} className="mt-2 rounded border border-[#635bff] px-2 py-1 font-semibold text-[#635bff]">Demander à conserver</button>}
                                 </div>
                             )}
 
@@ -2057,13 +2075,14 @@ export default function BackstagePrototype() {
                             <li>• Disponible <strong>21 jours</strong>, puis 7 jours après ta première lecture.</li>
                             <li>• Tu pourras demander à le garder définitivement.</li>
                         </ul>
-                        <p className={`mt-4 rounded-lg px-3 py-2 text-xs font-semibold ${countActiveRentals(rentals) >= maxActiveRentals ? 'bg-rose-500/10 text-rose-500' : 'bg-[#635bff]/10 text-[#635bff]'}`}>
-                            {countActiveRentals(rentals)}/{maxActiveRentals} locations en cours{countActiveRentals(rentals) >= maxActiveRentals ? ' : limite atteinte, attends qu’une location se termine.' : ''}
+                        <p className={`mt-4 rounded-lg px-3 py-2 text-xs font-semibold ${countQueuedRentals(rentals) >= maxQueuedRentals ? 'bg-rose-500/10 text-rose-500' : 'bg-[#635bff]/10 text-[#635bff]'}`}>
+                            {countRentalsInUse(rentals)}/{maxActiveRentals} locations en cours · {countQueuedRentals(rentals)}/{maxQueuedRentals} en attente{countQueuedRentals(rentals) >= maxQueuedRentals ? ' : file pleine, annule une demande en attente pour en ajouter une.' : ''}
                         </p>
+                        <p className="mt-2 text-[11px] opacity-60">Pas encore trouvé sur l’indexeur ? Il reste en file d’attente et se télécharge tout seul dès qu’il sort, sans entamer tes 21 jours.</p>
                         {mediaServerError && <p className="mt-3 text-xs text-rose-500">{mediaServerError}</p>}
                         <div className="mt-6 flex justify-end gap-2">
                             <button type="button" onClick={() => setShowAcquisitionModal(false)} className="rounded-lg border border-current/15 px-4 py-2 text-xs font-semibold">Annuler</button>
-                            <button type="button" onClick={submitAcquisition} disabled={acquisitionBusy || countActiveRentals(rentals) >= maxActiveRentals} className="rounded-lg bg-[#635bff] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{acquisitionBusy ? 'Location…' : 'Louer ce film'}</button>
+                            <button type="button" onClick={submitAcquisition} disabled={acquisitionBusy || countQueuedRentals(rentals) >= maxQueuedRentals} className="rounded-lg bg-[#635bff] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{acquisitionBusy ? 'Location…' : 'Louer ce film'}</button>
                         </div>
                     </div>
                 </div>

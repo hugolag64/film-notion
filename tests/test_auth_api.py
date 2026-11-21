@@ -510,7 +510,7 @@ def test_acquisition_creates_owned_rental_and_keep_is_scoped(tmp_path, monkeypat
     assert client.post(f"/api/rentals/{rental['id']}/keep").status_code == 404
 
 
-def test_acquisition_rejects_sixth_active_rental(tmp_path, monkeypatch):
+def test_acquisition_rejects_an_eleventh_queued_request(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     _setup(client)
     client.post("/api/auth/users", json={
@@ -523,7 +523,7 @@ def test_acquisition_rejects_sixth_active_rental(tmp_path, monkeypatch):
     store = MediaStore(Config.DB_PATH)
     user_id = client.get("/api/auth/me").json()["user"]["id"]
     now = datetime.now(timezone.utc)
-    for index in range(5):
+    for index in range(api_module.MAX_QUEUED_RENTALS):
         media = asyncio.run(store.create({
             "id": f"rented-{index}", "title": f"Film {index}", "type": "Film", "tmdb_id": index + 1,
         }))

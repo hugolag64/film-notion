@@ -256,6 +256,12 @@ export async function requestRentalKeep(rentalId) {
     return response.json();
 }
 
+export async function cancelRental(rentalId) {
+    const response = await fetch(`${API_BASE_URL}/rentals/${rentalId}/cancel`, {method: 'POST'});
+    if (!response.ok) throw new Error((await response.json()).detail || 'Annulation impossible');
+    return response.json();
+}
+
 export async function fetchKeepRequests() {
     const response = await fetch(`${API_BASE_URL}/admin/rentals/keep-requests`);
     if (!response.ok) throw new Error((await response.json()).detail || 'Demandes indisponibles');
