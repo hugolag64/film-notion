@@ -252,20 +252,40 @@ class MediaServerService:
             return self.jellyfin.playback_url(availability.jellyfin_id)
         return None
 
-    async def playback_manifest(self, media_id: str) -> Optional[dict[str, str]]:
+    async def playback_manifest(
+        self, media_id: str, season_number: Optional[int] = None,
+        episode_number: Optional[int] = None,
+    ) -> Optional[dict[str, str]]:
         availability = await self.store.get_availability(media_id)
         if availability and availability.jellyfin_id and self.jellyfin:
+            item_id = availability.jellyfin_id
+            if season_number is not None and episode_number is not None:
+                episode = await self.jellyfin.find_episode(
+                    item_id, season_number, episode_number,
+                )
+                if not episode:
+                    return None
+                item_id = str(episode["Id"])
             return {
-                "item_id": availability.jellyfin_id,
-                "url": self.jellyfin.playback_manifest_url(availability.jellyfin_id),
+                "item_id": item_id,
+                "url": self.jellyfin.playback_manifest_url(item_id),
             }
         return None
 
-    async def playback_resource(self, media_id: str, resource_path: str, query: dict[str, str]):
+    async def playback_resource(
+        self, media_id: str, resource_path: str, query: dict[str, str],
+        season_number: Optional[int] = None, episode_number: Optional[int] = None,
+    ):
         availability = await self.store.get_availability(media_id)
         if not availability or not availability.jellyfin_id or not self.jellyfin:
             return None
-        return await self.jellyfin.fetch_playback_resource(availability.jellyfin_id, resource_path, query)
+        item_id = availability.jellyfin_id
+        if season_number is not None and episode_number is not None:
+            episode = await self.jellyfin.find_episode(item_id, season_number, episode_number)
+            if not episode:
+                return None
+            item_id = str(episode["Id"])
+        return await self.jellyfin.fetch_playback_resource(item_id, resource_path, query)
 
     async def _enrich_media(self, media, media_type: str, tmdb):
         if not tmdb or not media.tmdb_id or (media.cover_url and media.synopsis):

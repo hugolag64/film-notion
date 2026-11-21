@@ -1,6 +1,5 @@
 """Server-side Jellyfin lookup; no API key reaches the browser."""
 import re
-import uuid
 from typing import Any, Optional
 from pathlib import PurePosixPath
 from urllib.parse import quote, urlencode
@@ -10,7 +9,8 @@ import httpx
 from backend.core import http
 
 CLIENT_NAME = "Backstage"
-DEVICE_NAME = "Backstage Server"
+DEVICE_NAME = "Backstage"
+DEVICE_ID = "backstage"
 CLIENT_VERSION = "1.0.0"
 
 
@@ -28,15 +28,13 @@ class JellyfinClient:
         self.api_key = api_key
         self.client = client
         self.server_id = server_id
-        # Stable per Jellyfin server, so Jellyfin lists a single "Backstage" device.
-        self.device_id = uuid.uuid5(uuid.NAMESPACE_URL, f"backstage:{self.base_url}").hex
 
     def _auth_headers(self) -> dict[str, str]:
         """Modern Jellyfin authentication; the API key never leaves the backend."""
         fields = {
             "Client": CLIENT_NAME,
             "Device": DEVICE_NAME,
-            "DeviceId": self.device_id,
+            "DeviceId": DEVICE_ID,
             "Version": CLIENT_VERSION,
             "Token": self.api_key,
         }
@@ -172,8 +170,8 @@ class JellyfinClient:
                     "media_type": "Série" if item.get("Type") == "Series" else "Film",
                     "year": item.get("ProductionYear"),
                     "overview": item.get("Overview") or None,
-                    "poster_tag": (item.get("ImageTags") or {}).get("Primary"),
-                    "backdrop_tag": (item.get("BackdropImageTags") or {}).get("Backdrop"),
+                    "poster_tag": self._image_tag(item.get("ImageTags"), "Primary"),
+                    "backdrop_tag": self._backdrop_tag(item.get("BackdropImageTags")),
                 })
 
             if len(items) < limit:
@@ -181,6 +179,42 @@ class JellyfinClient:
             start_index += len(items)
 
         return normalized
+
+    @staticmethod
+    def _image_tag(value: Any, key: str) -> Optional[str]:
+        return value.get(key) if isinstance(value, dict) else None
+
+    @staticmethod
+    def _backdrop_tag(value: Any) -> Optional[str]:
+        if isinstance(value, dict):
+            return value.get("Backdrop")
+        if isinstance(value, list):
+            return next((tag for tag in value if isinstance(tag, str) and tag), None)
+        return None
+
+    async def find_episode(
+        self, series_id: str, season_number: int, episode_number: int,
+    ) -> Optional[dict[str, Any]]:
+        """Find a Jellyfin episode by its season and episode numbers."""
+        client = self.client or http.get_client()
+        response = await client.get(
+            f"{self.base_url}/Shows/{quote(series_id, safe='')}/Episodes",
+            headers=self._auth_headers(),
+            params={"season": season_number, "Fields": "ProviderIds"},
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        items = payload.get("Items", []) if isinstance(payload, dict) else []
+        if not isinstance(items, list):
+            raise ValueError("invalid Jellyfin episodes response")
+        return next((
+            item for item in items
+            if isinstance(item, dict)
+            and item.get("ParentIndexNumber") == season_number
+            and item.get("IndexNumber") == episode_number
+            and item.get("Id")
+        ), None)
 
     async def find_by_tmdb(self, tmdb_id: int, media_type: str) -> Optional[dict[str, Any]]:
         item_type = "Series" if media_type == "Série" else "Movie"

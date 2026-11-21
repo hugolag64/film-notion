@@ -297,6 +297,18 @@ export default function BackstagePrototype() {
         });
     };
 
+    const openEpisodePlayer = (episode) => {
+        if (!selectedSeries?.id || !mediaAvailability?.availability?.jellyfin_id) return;
+        setPlayerError(null);
+        setPlayerLoading(true);
+        setPlayerMedia({
+            title: `${selectedSeries.title} · S${episode.season_number}E${episode.episode_number} — ${episode.title}`,
+            manifestUrl: getPlaybackManifest(
+                selectedSeries.id, episode.season_number, episode.episode_number,
+            ),
+        });
+    };
+
     useEffect(() => {
         if (!playerMedia || !videoRef.current) return undefined;
         const video = videoRef.current;
@@ -1497,7 +1509,7 @@ export default function BackstagePrototype() {
                                     <p className="text-sm font-semibold">{mediaAction.canPlay ? 'Cette série est disponible' : 'Cette série n’est pas encore disponible'}</p>
                                     <p className="mt-1 text-xs opacity-60">{mediaAction.canPlay ? 'Lecture depuis le serveur' : (isAdmin ? 'Lancer une demande de téléchargement via Seerr' : selectedMedia?.type === 'Série' ? 'Demande-la à l’admin' : 'Location de 21 jours, lisible dès la fin du téléchargement')}</p>
                                 </div>
-                                <button onClick={mediaAction.disabled ? undefined : mediaAction.canPlay ? openPlayer : openAcquisition} disabled={mediaAction.disabled} className="rounded-lg bg-[#635bff] px-4 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60">{mediaAction.label}</button>
+                                <button onClick={mediaAction.disabled ? undefined : mediaAction.canPlay ? (selectedMedia?.type === 'Série' ? () => setSeriesTab('episodes') : openPlayer) : openAcquisition} disabled={mediaAction.disabled} className="rounded-lg bg-[#635bff] px-4 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60">{selectedMedia?.type === 'Série' && mediaAction.canPlay ? 'Choisir un épisode' : mediaAction.label}</button>
                             </div>
                             <div className={`mb-5 flex rounded-xl border p-1 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
                                 {[['details', 'Détails'], ['episodes', 'Épisodes']].map(([tab, label]) => <button key={tab} onClick={() => setSeriesTab(tab)} className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold transition ${seriesTab === tab ? 'bg-[#635bff] text-white shadow-lg' : 'opacity-60 hover:opacity-100'}`}>{label}</button>)}
@@ -1512,11 +1524,11 @@ export default function BackstagePrototype() {
                                     <div className="flex items-center justify-between gap-3"><p className="text-[10px] font-mono uppercase tracking-widest opacity-60">Synopsis</p>{isAdmin && <button onClick={refreshSelectedSeries} disabled={seriesRefreshing} className="rounded-lg bg-[#635bff] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{seriesRefreshing ? 'Actualisation…' : 'Actualiser TMDB'}</button>}</div>
                                     <p className="mt-3 text-sm leading-6 opacity-80">{selectedSeries.synopsis || 'Aucun synopsis disponible.'}</p>
                                     <button
-                                        onClick={mediaAction.disabled ? undefined : mediaAction.canPlay ? openPlayer : openAcquisition}
+                                        onClick={mediaAction.disabled ? undefined : mediaAction.canPlay ? (selectedMedia?.type === 'Série' ? () => setSeriesTab('episodes') : openPlayer) : openAcquisition}
                                         disabled={mediaAction.disabled}
                                         className="mt-3 rounded-lg bg-[#635bff] px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
                                     >
-                                        {mediaAction.label}
+                                        {selectedMedia?.type === 'Série' && mediaAction.canPlay ? 'Choisir un épisode' : mediaAction.label}
                                     </button>
                                     {selectedRental && (
                                         <div className="mt-3 rounded-lg border border-[#635bff]/30 bg-[#635bff]/5 p-3 text-xs">
@@ -1564,6 +1576,7 @@ export default function BackstagePrototype() {
                                                     <input type="checkbox" checked={episode.watched} onClick={(event) => event.stopPropagation()} onChange={() => toggleEpisode(episode)} className="h-4 w-4 accent-[#635bff]" />
                                                     <span className="font-mono text-xs text-[#635bff]">E{String(episode.episode_number).padStart(2, '0')}</span>
                                                     <span className={episode.watched ? 'line-through opacity-50' : ''}>{episode.title}</span>
+                                                    {mediaAction.canPlay && <button type="button" onClick={(event) => { event.stopPropagation(); openEpisodePlayer(episode); }} className="ml-auto rounded-md bg-[#635bff] px-3 py-1 text-xs font-semibold text-white">Lire</button>}
                                                     </div>
                                                     {openEpisodes[episode.id] && <p className="ml-7 mt-2 text-xs leading-relaxed opacity-70">{episode.synopsis || 'Aucun synopsis disponible pour cet épisode.'}</p>}
                                                 </div>

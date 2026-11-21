@@ -198,7 +198,7 @@ def test_list_library_normalizes_movies_and_series():
         {
             "Id": "series-1", "Type": "Series", "Name": "Game of Thrones", "ProductionYear": 2011,
             "Overview": "Westeros.", "ProviderIds": {"Tmdb": "1399"},
-            "ImageTags": {"Primary": "poster-2"}, "BackdropImageTags": {"Backdrop": "backdrop-2"},
+            "ImageTags": {"Primary": "poster-2"}, "BackdropImageTags": ["backdrop-2", "backdrop-3"],
         },
     ]}]))
 
@@ -243,17 +243,37 @@ def test_list_library_skips_items_without_tmdb_id():
     assert items == []
 
 
+def test_find_episode_uses_jellyfin_season_episode_numbers():
+    async def handler(request):
+        assert request.url.path == "/Shows/series-1/Episodes"
+        assert request.url.params["season"] == "2"
+        assert request.headers["Authorization"].startswith("MediaBrowser ")
+        return httpx.Response(200, json={"Items": [
+            {"Id": "episode-1", "ParentIndexNumber": 2, "IndexNumber": 1},
+            {"Id": "episode-2", "ParentIndexNumber": 2, "IndexNumber": 2},
+        ]})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            client = JellyfinClient("http://127.0.0.1:8096", "secret", http_client)
+            return await client.find_episode("series-1", 2, 2)
+
+    assert asyncio.run(run()) == {"Id": "episode-2", "ParentIndexNumber": 2, "IndexNumber": 2}
+
+
 def test_requests_use_the_mediabrowser_authorization_header():
     client = JellyfinClient("http://127.0.0.1:8096/", "secret")
     header = client._auth_headers()["Authorization"]
 
     assert header.startswith("MediaBrowser ")
-    for field in ("Client=\"Backstage\"", "Device=\"Backstage Server\"", "Version=", "Token=\"secret\""):
+    for field in (
+        'Client="Backstage"',
+        'Device="Backstage"',
+        'DeviceId="backstage"',
+        'Version="1.0.0"',
+        'Token="secret"',
+    ):
         assert field in header
-    assert f'DeviceId="{client.device_id}"' in header
-    # The device id is stable per server and never derived from the key.
-    assert JellyfinClient("http://127.0.0.1:8096", "other").device_id == client.device_id
-    assert "secret" not in client.device_id
 
 
 def test_auth_header_values_cannot_break_out_of_their_quotes():

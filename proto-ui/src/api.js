@@ -226,8 +226,13 @@ export async function fetchAvailability(mediaId) {
     return response.json();
 }
 
-export function getPlaybackManifest(mediaId) {
-    return `${API_BASE_URL}/medias/${encodeURIComponent(mediaId)}/playback/manifest`;
+export function getPlaybackManifest(mediaId, seasonNumber, episodeNumber) {
+    const path = `${API_BASE_URL}/medias/${encodeURIComponent(mediaId)}/playback/manifest`;
+    if (seasonNumber !== undefined && episodeNumber !== undefined) {
+        const params = new URLSearchParams({season_number: seasonNumber, episode_number: episodeNumber});
+        return `${path}?${params}`;
+    }
+    return path;
 }
 
 export async function fetchMediaServerOptions(mediaType) {

@@ -90,6 +90,16 @@ hls1/main/0.ts?MediaSourceId=item-1&api_key=secret
     assert "jellyfin.test" not in rewritten
 
 
+def test_hls_manifest_preserves_selected_episode_for_resource_requests():
+    rewritten = api._rewrite_hls_manifest(
+        "#EXTM3U\nsegment.ts?MediaSourceId=episode-2&api_key=secret\n",
+        "the-simpsons", season_number=3, episode_number=2,
+    )
+
+    assert "/api/medias/the-simpsons/playback/resource/segment.ts?MediaSourceId=episode-2&season_number=3&episode_number=2" in rewritten
+    assert "api_key" not in rewritten
+
+
 def test_hls_playback_routes_are_registered():
     paths = {route.path for route in api.router.routes}
 

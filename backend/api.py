@@ -64,7 +64,10 @@ async def backup_health_check():
     return health
 
 
-def _rewrite_hls_manifest(manifest: str, media_id: str) -> str:
+def _rewrite_hls_manifest(
+    manifest: str, media_id: str, season_number: Optional[int] = None,
+    episode_number: Optional[int] = None,
+) -> str:
     rewritten = []
     for line in manifest.splitlines():
         if not line or line.startswith("#"):
@@ -73,8 +76,12 @@ def _rewrite_hls_manifest(manifest: str, media_id: str) -> str:
         parsed = urlsplit(line)
         query = [(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True) if key.lower() != "api_key"]
         resource = f"/api/medias/{quote(media_id, safe='')}/playback/resource/{quote(parsed.path, safe='/')}"
-        if query:
-            resource += f"?{urlencode(query)}"
+        playback_params = {}
+        if season_number is not None and episode_number is not None:
+            playback_params = {"season_number": season_number, "episode_number": episode_number}
+        if query or playback_params:
+            query = urlencode(query + list(playback_params.items()))
+            resource += f"?{query}"
         rewritten.append(resource)
     return "\n".join(rewritten) + ("\n" if manifest.endswith("\n") else "")
 
@@ -1549,11 +1556,15 @@ async def get_availability(
 @router.get("/medias/{media_id}/playback/manifest")
 async def get_playback_manifest(
     media_id: str,
+    season_number: Optional[int] = None,
+    episode_number: Optional[int] = None,
     current: AuthContext = Depends(get_current_user),
     service: MediaServerService = Depends(get_media_server_service),
 ):
+    if (season_number is None) != (episode_number is None):
+        raise HTTPException(status_code=422, detail="Saison et épisode requis")
     await _ensure_playback_access(current, media_id, service.store)
-    playback = await service.playback_manifest(media_id)
+    playback = await service.playback_manifest(media_id, season_number, episode_number)
     if not playback or not service.jellyfin:
         raise HTTPException(status_code=404, detail="Lecture indisponible")
     try:
@@ -1565,7 +1576,7 @@ async def get_playback_manifest(
         )
     except (httpx.HTTPError, ValueError):
         raise HTTPException(status_code=502, detail="Flux Jellyfin indisponible") from None
-    manifest = _rewrite_hls_manifest(response.text, media_id)
+    manifest = _rewrite_hls_manifest(response.text, media_id, season_number, episode_number)
     return Response(content=manifest, media_type="application/vnd.apple.mpegurl")
 
 
@@ -1580,7 +1591,16 @@ async def get_playback_resource(
     await _ensure_playback_access(current, media_id, service.store)
     query = {key: value for key, value in request.query_params.multi_items() if key.lower() != "api_key"}
     try:
-        response = await service.playback_resource(media_id, resource_path, query)
+        season_number = int(query.pop("season_number")) if "season_number" in query else None
+        episode_number = int(query.pop("episode_number")) if "episode_number" in query else None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Saison ou épisode invalide") from None
+    if (season_number is None) != (episode_number is None):
+        raise HTTPException(status_code=422, detail="Saison et épisode requis")
+    try:
+        response = await service.playback_resource(
+            media_id, resource_path, query, season_number, episode_number,
+        )
     except (httpx.HTTPError, ValueError):
         raise HTTPException(status_code=502, detail="Ressource Jellyfin indisponible") from None
     if response is None:

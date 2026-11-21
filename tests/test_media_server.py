@@ -64,6 +64,9 @@ class FakeJellyfin:
     def playback_manifest_url(self, item_id):
         return f"https://jellyfin.test/Videos/{item_id}/master.m3u8"
 
+    async def find_episode(self, series_id, season_number, episode_number):
+        return {"Id": f"episode-{season_number}-{episode_number}"}
+
 
 class FakeJellyfinLibrary:
     def __init__(self, items=None, error=None):
@@ -697,6 +700,23 @@ def test_playback_manifest_returns_none_without_availability(tmp_path):
     service = MediaServerService(store, jellyfin=FakeJellyfin())
 
     assert asyncio.run(service.playback_manifest(media.id)) is None
+
+
+def test_playback_manifest_resolves_selected_series_episode(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    media = asyncio.run(store.create({"id": "simpsons", "title": "The Simpsons", "type": "Série"}))
+    asyncio.run(store.upsert_availability(Availability(
+        media_id=media.id, provider="sonarr", jellyfin_id="jelly-simpsons", state="available",
+    )))
+    service = MediaServerService(store, jellyfin=FakeJellyfin())
+
+    result = asyncio.run(service.playback_manifest(media.id, season_number=3, episode_number=2))
+
+    assert result == {
+        "item_id": "episode-3-2",
+        "url": "https://jellyfin.test/Videos/episode-3-2/master.m3u8",
+    }
 
 
 def test_playback_sync_is_isolated_by_backstage_user(tmp_path):
