@@ -340,11 +340,12 @@ class JellyfinClient:
             return None
         return None
 
-    def playback_url(self, item_id: str) -> str:
+    def playback_url(self, item_id: str, *, base_url: Optional[str] = None) -> str:
         # Jellyfin's web client only initializes its player from the item details
         # page; opening the /video route directly has no active player and falls
         # back to the home page.
-        url = f"{self.base_url}/web/index.html#/details?id={quote(item_id, safe='')}"
+        web_base_url = (base_url or self.base_url).rstrip("/")
+        url = f"{web_base_url}/web/index.html#/details?id={quote(item_id, safe='')}"
         if self.server_id:
             url += f"&serverId={quote(self.server_id, safe='')}"
         return url

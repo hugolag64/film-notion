@@ -1,5 +1,4 @@
 import React, { useCallback, useState, useEffect, useRef } from 'react';
-import Hls from 'hls.js';
 import AccountPanel from './AccountPanel';
 import AdminCenter from './components/AdminCenter';
 import RecommendationFlow from './components/RecommendationFlow';
@@ -8,7 +7,7 @@ import DashboardHome from './components/DashboardHome';
 import TMDBMoviePreview from './components/TMDBMoviePreview';
 import NotificationBell from './components/NotificationBell';
 import { useAuth } from './auth-context';
-import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchPlaybackOptions, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, cancelRental, fetchMediaServerActivity, syncMediaServer, syncPlayback, fetchAvailableMediaIds, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest } from './api';
+import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getJellyfinPlayerPath, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, cancelRental, fetchMediaServerActivity, syncMediaServer, syncPlayback, fetchAvailableMediaIds, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
 import { DEFAULT_MAX_ACTIVE_RENTALS, DEFAULT_MAX_QUEUED_RENTALS, countQueuedRentals, countRentalsInUse, indexRentalsByMedia, isQueuedRental, rentalExpiryLabel, rentalStatusLabel } from './rentals';
@@ -178,15 +177,11 @@ export default function BackstagePrototype() {
     const [maxActiveRentals, setMaxActiveRentals] = useState(DEFAULT_MAX_ACTIVE_RENTALS);
     const [maxQueuedRentals, setMaxQueuedRentals] = useState(DEFAULT_MAX_QUEUED_RENTALS);
     const [acquisitionBusy, setAcquisitionBusy] = useState(false);
+    const [pendingSeerrFilm, setPendingSeerrFilm] = useState(null);
     const [actorQuery, setActorQuery] = useState('');
     const [actorSuggestions, setActorSuggestions] = useState([]);
     const [actorSearchLoading, setActorSearchLoading] = useState(false);
     const [acquisitionForm, setAcquisitionForm] = useState({ quality_profile_id: '', language_profile_id: '', root_folder: '', monitor: 'all' });
-    const [playerMedia, setPlayerMedia] = useState(null);
-    const [playerLoading, setPlayerLoading] = useState(false);
-    const [playerError, setPlayerError] = useState(null);
-    const videoRef = useRef(null);
-    const hlsRef = useRef(null);
     const [isDarkMode, setIsDarkMode] = useState(false); // Theme toggle state
     const [showAccountPanel, setShowAccountPanel] = useState(false);
     const [showAdminCenter, setShowAdminCenter] = useState(false);
@@ -281,141 +276,19 @@ export default function BackstagePrototype() {
         if (result.max_queued_rentals) setMaxQueuedRentals(result.max_queued_rentals);
     }).catch(() => {});
 
-    const closePlayer = () => {
-        setPlayerMedia(null);
-        setPlayerError(null);
-        setPlayerLoading(false);
+    const openJellyfinPlayer = (mediaId, seasonNumber, episodeNumber) => {
+        if (!mediaId) return;
+        const link = document.createElement('a');
+        link.href = getJellyfinPlayerPath(mediaId, seasonNumber, episodeNumber);
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.click();
     };
 
-    const openPlayer = async () => {
-        if (!selectedMedia?.id || !mediaAvailability?.availability?.jellyfin_id) return;
-        setPlayerError(null);
-        setPlayerLoading(true);
-        let playbackOptions = null;
-        try {
-            playbackOptions = await fetchPlaybackOptions(selectedMedia.id);
-        } catch (error) {
-            console.error('Impossible de charger les pistes Jellyfin:', error);
-        }
-        const audioStreamIndex = playbackOptions?.default_audio_index
-            ?? playbackOptions?.audio_tracks?.find((track) => track.is_default)?.index
-            ?? playbackOptions?.audio_tracks?.[0]?.index;
-        const subtitleStreamIndex = playbackOptions?.default_subtitle_index
-            ?? playbackOptions?.subtitle_tracks?.find((track) => track.is_default)?.index
-            ?? -1;
-        setPlayerMedia({
-            title: selectedMedia.title,
-            mediaId: selectedMedia.id,
-            playbackOptions,
-            audioStreamIndex,
-            subtitleStreamIndex,
-            startSeconds: 0,
-        });
-    };
-
-    const openEpisodePlayer = async (episode) => {
-        if (!selectedSeries?.id || !mediaAvailability?.availability?.jellyfin_id) return;
-        setPlayerError(null);
-        setPlayerLoading(true);
-        let playbackOptions = null;
-        try {
-            playbackOptions = await fetchPlaybackOptions(
-                selectedSeries.id, episode.season_number, episode.episode_number,
-            );
-        } catch (error) {
-            console.error('Impossible de charger les pistes de l’épisode Jellyfin:', error);
-        }
-        const audioStreamIndex = playbackOptions?.default_audio_index
-            ?? playbackOptions?.audio_tracks?.find((track) => track.is_default)?.index
-            ?? playbackOptions?.audio_tracks?.[0]?.index;
-        const subtitleStreamIndex = playbackOptions?.default_subtitle_index
-            ?? playbackOptions?.subtitle_tracks?.find((track) => track.is_default)?.index
-            ?? -1;
-        setPlayerMedia({
-            title: `${selectedSeries.title} · S${episode.season_number}E${episode.episode_number} — ${episode.title}`,
-            mediaId: selectedSeries.id,
-            seasonNumber: episode.season_number,
-            episodeNumber: episode.episode_number,
-            playbackOptions,
-            audioStreamIndex,
-            subtitleStreamIndex,
-            startSeconds: 0,
-        });
-    };
-
-    const changePlayerTrack = (field, value) => {
-        const startSeconds = videoRef.current?.currentTime || 0;
-        setPlayerLoading(true);
-        setPlayerMedia((current) => current ? {
-            ...current,
-            [field]: value === '' ? null : Number(value),
-            startSeconds,
-        } : current);
-    };
-
-    useEffect(() => {
-        if (!playerMedia || !videoRef.current) return undefined;
-        const video = videoRef.current;
-        const manifestUrl = playerMedia.manifestUrl || getPlaybackManifest(
-            playerMedia.mediaId,
-            playerMedia.seasonNumber,
-            playerMedia.episodeNumber,
-            playerMedia.audioStreamIndex,
-            playerMedia.subtitleStreamIndex,
-            (playerMedia.startSeconds || 0) * 10_000_000,
-        );
-        let hls;
-
-        const handleReady = () => setPlayerLoading(false);
-        const handleError = () => {
-            setPlayerLoading(false);
-            setPlayerError('Impossible de démarrer la lecture de ce média.');
-        };
-        video.addEventListener('loadeddata', handleReady);
-        video.addEventListener('error', handleError);
-
-        if (video.canPlayType('application/vnd.apple.mpegurl')) {
-            video.src = manifestUrl;
-            video.addEventListener('loadedmetadata', () => {
-                if (playerMedia.startSeconds > 0) video.currentTime = playerMedia.startSeconds;
-            }, {once: true});
-            video.play().catch(() => {});
-        } else if (Hls.isSupported()) {
-            hls = new Hls({ enableWorker: true });
-            hlsRef.current = hls;
-            hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                setPlayerLoading(false);
-                if (playerMedia.startSeconds > 0) video.currentTime = playerMedia.startSeconds;
-                video.play().catch(() => {});
-            });
-            hls.on(Hls.Events.ERROR, (_event, data) => {
-                if (!data.fatal) return;
-                console.error('Erreur de lecture HLS:', data);
-                let detail = data.response?.text || data.details || '';
-                try {
-                    detail = JSON.parse(detail).detail || detail;
-                } catch {
-                    // Keep the server/player message as plain text.
-                }
-                setPlayerLoading(false);
-                setPlayerError(detail ? `Flux Jellyfin : ${String(detail).slice(0, 240)}` : 'Impossible de démarrer la lecture de ce média.');
-            });
-            hls.loadSource(manifestUrl);
-            hls.attachMedia(video);
-        } else {
-            handleError();
-        }
-
-        return () => {
-            video.removeEventListener('loadeddata', handleReady);
-            video.removeEventListener('error', handleError);
-            hls?.destroy();
-            hlsRef.current = null;
-            video.pause();
-            video.removeAttribute('src');
-            video.load();
-        };
-    }, [playerMedia]);
+    const openPlayer = () => openJellyfinPlayer(selectedMedia?.id);
+    const openEpisodePlayer = (episode) => openJellyfinPlayer(
+        selectedSeries?.id, episode.season_number, episode.episode_number,
+    );
 
     useEffect(() => {
         if (!selectedMedia?.id) return;
@@ -522,9 +395,46 @@ export default function BackstagePrototype() {
         }
     };
 
+    const prepareSeerrFilmRequest = async (result) => {
+        setAddLoading(true);
+        setMediaServerError(null);
+        try {
+            const options = await fetchMediaServerOptions('Film');
+            setMediaServerOptions(options);
+            setAcquisitionForm({
+                quality_profile_id: options.default_quality_profile_id || options.quality_profiles?.[0]?.id || '',
+                language_profile_id: '',
+                root_folder: options.root_folders?.[0]?.path || '',
+                monitor: 'all',
+            });
+            setPendingSeerrFilm(result);
+            setShowAddDialog(false);
+            setShowAcquisitionModal(true);
+        } catch (error) {
+            setMediaServerError(error.message || 'Impossible de charger les profils Radarr.');
+            showToast(error.message || 'Impossible de préparer la demande Seerr.', 'error');
+        } finally {
+            setAddLoading(false);
+        }
+    };
+
     const submitAcquisition = async () => {
         setAcquisitionBusy(true);
         try {
+            if (pendingSeerrFilm) {
+                const result = await createSeerrRequest(pendingSeerrFilm.tmdb_id, 'movie', {
+                    quality_profile_id: acquisitionForm.quality_profile_id ? Number(acquisitionForm.quality_profile_id) : null,
+                    root_folder: acquisitionForm.root_folder || null,
+                });
+                setShowAcquisitionModal(false);
+                setPendingSeerrFilm(null);
+                setMediaServerError(null);
+                showToast(result.already_requested
+                    ? `« ${pendingSeerrFilm.title} » est déjà demandé ou disponible.`
+                    : `Demande Seerr envoyée pour « ${pendingSeerrFilm.title} » avec le profil choisi.`, 'success');
+                await refreshLibraryState({sync: true});
+                return;
+            }
             const result = await requestAcquisition(selectedMedia.id, isAdmin ? {
                 ...acquisitionForm,
                 quality_profile_id: acquisitionForm.quality_profile_id ? Number(acquisitionForm.quality_profile_id) : null,
@@ -687,9 +597,7 @@ export default function BackstagePrototype() {
         const availability = media?.id ? availabilityByMedia[media.id] : null;
         if (local && availability?.jellyfin_id) {
             setMediaAvailability({availability});
-            setPlayerError(null);
-            setPlayerLoading(true);
-            setPlayerMedia({title: local.title, manifestUrl: getPlaybackManifest(local.id)});
+            openJellyfinPlayer(local.id);
             return;
         }
         openDashboardMedia(media);
@@ -975,6 +883,8 @@ export default function BackstagePrototype() {
                 });
             }
             else setSelectedMovie(created);
+        } catch (error) {
+            showToast(error.message || 'Impossible d’ajouter ce titre.', 'error');
         } finally { setAddLoading(false); }
     };
 
@@ -2180,7 +2090,7 @@ export default function BackstagePrototype() {
                             {addLoading && <p className="text-sm opacity-70">Ajout en cours…</p>}
                             {!addLoading && addQuery.trim().length < 2 && <p className="py-6 text-center text-sm opacity-50">Tape au moins 2 lettres : les résultats s’affichent au fur et à mesure.</p>}
                             {!addLoading && !addSearching && addQuery.trim().length >= 2 && addResults.length === 0 && <p className="py-6 text-center text-sm opacity-50">Aucun résultat sur TMDB.</p>}
-                            {!addLoading && addResults.map(result => <button type="button" key={result.tmdb_id} onClick={() => isAdmin ? addFromTMDB(result.tmdb_id) : (setShowAddDialog(false), openTMDBPreview({tmdb_id: result.tmdb_id, title: result.title}))} className={`flex w-full items-center gap-3 rounded-lg border p-2 text-left transition hover:border-[#635bff] ${isDarkMode ? 'border-white/10 hover:bg-white/5' : 'border-[#e3e8ee] hover:bg-[#f6f9fc]'}`}>
+                            {!addLoading && addResults.map(result => <button type="button" key={result.tmdb_id} onClick={() => isAdmin ? (collection === 'Séries' ? addFromTMDB(result.tmdb_id) : prepareSeerrFilmRequest(result)) : (setShowAddDialog(false), openTMDBPreview({tmdb_id: result.tmdb_id, title: result.title}))} className={`flex w-full items-center gap-3 rounded-lg border p-2 text-left transition hover:border-[#635bff] ${isDarkMode ? 'border-white/10 hover:bg-white/5' : 'border-[#e3e8ee] hover:bg-[#f6f9fc]'}`}>
                                 {result.poster_url ? <img src={result.poster_url} alt="" loading="lazy" className="h-16 w-11 shrink-0 rounded object-cover" /> : <span className="flex h-16 w-11 shrink-0 items-center justify-center rounded bg-current/10 text-lg opacity-40">🎬</span>}
                                 <span className="min-w-0"><strong className="block truncate">{result.title}</strong><span className="text-xs opacity-60">{result.release_date?.slice(0, 4) || 'Date inconnue'}</span>{result.overview && <span className="mt-0.5 line-clamp-1 block text-[11px] opacity-50">{result.overview}</span>}</span>
                             </button>)}
@@ -2212,25 +2122,26 @@ export default function BackstagePrototype() {
                 </div>
             )}
 
-            {showAcquisitionModal && selectedMedia && isAdmin && (
+            {showAcquisitionModal && (selectedMedia || pendingSeerrFilm) && isAdmin && (
                 <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
                     <div className="w-full max-w-md rounded-xl bg-white p-5 text-[#0a2540]">
-                        <h2 className="font-serif text-lg font-bold">Ajouter {selectedMedia.title} au serveur</h2>
-                        {selectedMedia.type === 'Film' && <p className="mt-2 text-xs text-slate-600">Le profil choisi sera transmis à Seerr. Pour lancer la recherche Radarr automatiquement, active « Enable Automatic Search » dans les réglages Services de Seerr.</p>}
+                        <h2 className="font-serif text-lg font-bold">{pendingSeerrFilm ? `Demander ${pendingSeerrFilm.title} à Seerr` : `Ajouter ${selectedMedia.title} au serveur`}</h2>
+                        {pendingSeerrFilm && <p className="mt-2 text-xs text-slate-600">Après validation, Backstage enverra la demande à Seerr avec le profil choisi. Seerr doit avoir « Enable Automatic Search » activé pour lancer immédiatement la recherche Radarr.</p>}
+                        {!pendingSeerrFilm && selectedMedia?.type === 'Film' && <p className="mt-2 text-xs text-slate-600">Le profil choisi sera transmis à Seerr. Pour lancer la recherche Radarr automatiquement, active « Enable Automatic Search » dans les réglages Services de Seerr.</p>}
                         <div className="mt-4 space-y-3">
                             <select className="w-full rounded border p-2" value={acquisitionForm.quality_profile_id} onChange={e => setAcquisitionForm({...acquisitionForm, quality_profile_id: e.target.value})}>
                                 {mediaServerOptions?.quality_profiles?.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                             </select>
-                            {selectedMedia.type === 'Série' && <select className="w-full rounded border p-2" value={acquisitionForm.language_profile_id} onChange={e => setAcquisitionForm({...acquisitionForm, language_profile_id: e.target.value})}>
+                            {selectedMedia?.type === 'Série' && <select className="w-full rounded border p-2" value={acquisitionForm.language_profile_id} onChange={e => setAcquisitionForm({...acquisitionForm, language_profile_id: e.target.value})}>
                                 {mediaServerOptions?.language_profiles?.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                             </select>}
                             <select className="w-full rounded border p-2" value={acquisitionForm.root_folder} onChange={e => setAcquisitionForm({...acquisitionForm, root_folder: e.target.value})}>
                                 {mediaServerOptions?.root_folders?.map(folder => <option key={folder.path} value={folder.path}>{folder.path}</option>)}
                             </select>
-                            {selectedMedia.type === 'Série' && <select className="w-full rounded border p-2" value={acquisitionForm.monitor} onChange={e => setAcquisitionForm({...acquisitionForm, monitor: e.target.value})}><option value="all">Toutes les saisons</option><option value="future">Saisons futures</option></select>}
+                            {selectedMedia?.type === 'Série' && <select className="w-full rounded border p-2" value={acquisitionForm.monitor} onChange={e => setAcquisitionForm({...acquisitionForm, monitor: e.target.value})}><option value="all">Toutes les saisons</option><option value="future">Saisons futures</option></select>}
                         </div>
                         {mediaServerError && <p className="mt-3 text-xs text-red-600">{mediaServerError}</p>}
-                        <div className="mt-5 flex justify-end gap-2"><button onClick={() => setShowAcquisitionModal(false)}>Annuler</button><button className="rounded bg-[#635bff] px-3 py-2 text-white" onClick={submitAcquisition}>Demander</button></div>
+                        <div className="mt-5 flex justify-end gap-2"><button onClick={() => { setShowAcquisitionModal(false); setPendingSeerrFilm(null); setMediaServerError(null); }}>Annuler</button><button className="rounded bg-[#635bff] px-3 py-2 text-white disabled:opacity-50" disabled={acquisitionBusy} onClick={submitAcquisition}>{acquisitionBusy ? 'Envoi…' : pendingSeerrFilm ? 'Confirmer la demande' : 'Demander'}</button></div>
                     </div>
                 </div>
             )}
@@ -2378,78 +2289,6 @@ export default function BackstagePrototype() {
                             >
                                 Terminer
                             </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Full-screen Jellyfin player */}
-            {playerMedia && (
-                <div className="fixed inset-0 z-[70] flex flex-col bg-black">
-                    <div className="w-full h-full bg-[#0a0a0a] overflow-hidden flex flex-col">
-                        <div className="p-4 bg-black flex items-center justify-between border-b border-white/10">
-                            <div className="flex items-center gap-2">
-                                <span className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse" />
-                                <span className="text-xs font-mono font-bold text-white">
-                                    JELLYFIN PLAYER • {playerMedia.title}
-                                </span>
-                            </div>
-                            <button
-                                onClick={closePlayer}
-                                className="text-white/60 hover:text-white text-xs font-mono px-3 py-1 bg-white/10 rounded"
-                            >
-                                ✕ Fermer le lecteur
-                            </button>
-                        </div>
-                        {playerMedia.playbackOptions && (
-                            <div className="flex flex-wrap items-center gap-3 border-b border-white/10 bg-[#111] px-4 py-2 text-xs text-white">
-                                <label className="flex items-center gap-2">
-                                    <span className="opacity-70">Audio</span>
-                                    <select
-                                        value={playerMedia.audioStreamIndex ?? ''}
-                                        onChange={(event) => changePlayerTrack('audioStreamIndex', event.target.value)}
-                                        className="max-w-[min(50vw,24rem)] rounded border border-white/20 bg-[#222] px-2 py-1 text-white"
-                                    >
-                                        <option value="">Automatique</option>
-                                        {playerMedia.playbackOptions.audio_tracks.map((track) => (
-                                            <option key={track.index} value={track.index}>{track.label}</option>
-                                        ))}
-                                    </select>
-                                </label>
-                                <label className="flex items-center gap-2">
-                                    <span className="opacity-70">Sous-titres</span>
-                                    <select
-                                        value={playerMedia.subtitleStreamIndex ?? -1}
-                                        onChange={(event) => changePlayerTrack('subtitleStreamIndex', event.target.value)}
-                                        className="max-w-[min(50vw,24rem)] rounded border border-white/20 bg-[#222] px-2 py-1 text-white"
-                                    >
-                                        <option value={-1}>Désactivés</option>
-                                        {playerMedia.playbackOptions.subtitle_tracks.map((track) => (
-                                            <option key={track.index} value={track.index}>{track.label}</option>
-                                        ))}
-                                    </select>
-                                </label>
-                            </div>
-                        )}
-                        <div className="relative flex-1 min-h-0 bg-black flex items-center justify-center group">
-                            <video ref={videoRef} controls autoPlay playsInline className="relative z-10 w-full h-full object-contain" />
-                            {playerLoading && !playerError && (
-                                <div className="absolute inset-0 z-20 flex items-center justify-center text-white/80 bg-black/40">
-                                    <div className="text-center space-y-3">
-                                        <div className="w-12 h-12 border-4 border-white/20 border-t-emerald-400 rounded-full animate-spin mx-auto" />
-                                        <p className="text-sm">Préparation du flux Jellyfin…</p>
-                                    </div>
-                                </div>
-                            )}
-                            {playerError && (
-                                <div className="absolute inset-0 z-30 flex items-center justify-center text-white bg-black/70 p-6">
-                                    <div className="text-center space-y-4 max-w-md">
-                                        <p className="text-lg font-semibold">Lecture impossible</p>
-                                        <p className="text-sm text-white/70">{playerError}</p>
-                                        <button onClick={closePlayer} className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 font-semibold cursor-pointer">Fermer</button>
-                                    </div>
-                                </div>
-                            )}
                         </div>
                     </div>
                 </div>

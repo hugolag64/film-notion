@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 import httpx
 from fastapi import APIRouter, HTTPException, Depends, Request
-from fastapi.responses import Response
+from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel
 
 from backend.config import Config
@@ -37,7 +37,7 @@ from backend.core.recommendations import (
 from backend.core.gemini_recommendations import GeminiRecommendationGateway, SUPPORTED_QUESTION_AXES
 from backend.auth_api import AuthContext, get_auth_store, get_current_user, get_jellyfin_client, require_admin
 from backend.core.auth import AuthStore
-from urllib.parse import quote, parse_qsl, urlencode, urlsplit
+from urllib.parse import quote, parse_qsl, urlencode, urlsplit, urlunsplit
 
 logger = logging.getLogger(__name__)
 
@@ -320,6 +320,10 @@ class AcquisitionRequest(BaseModel):
 class SeerrRequestCreate(BaseModel):
     tmdb_id: int
     media_type: str = "movie"
+    quality_profile_id: Optional[int] = None
+    root_folder: Optional[str] = None
+    language_profile_id: Optional[int] = None
+    monitor: str = "all"
 
 
 class StorageProtectionRequest(BaseModel):
@@ -603,10 +607,22 @@ async def create_seerr_request(
     if payload.media_type not in {"movie", "tv"}:
         raise HTTPException(status_code=422, detail="Type de média Seerr invalide")
     if payload.media_type == "movie":
-        # Go through the catalogue: Jellyfin/pending state is checked, so no duplicate,
-        # and flatmates get a temporary rental instead of a raw Seerr request.
+        # Create the catalogue row and send its configured profile to Seerr only
+        # after the user confirms the request. Roll back a new row if Seerr rejects it.
+        existing = next((item for item in await service.store.fetch_all()
+                         if item.type == "Film" and item.tmdb_id == payload.tmdb_id), None)
         media = await _find_or_create_movie(service.store, payload.tmdb_id)
-        return await _acquire_media(media, AcquisitionRequest(), current, service)
+        try:
+            return await _acquire_media(media, AcquisitionRequest(
+                quality_profile_id=payload.quality_profile_id,
+                root_folder=payload.root_folder,
+                language_profile_id=payload.language_profile_id,
+                monitor=payload.monitor,
+            ), current, service)
+        except HTTPException:
+            if existing is None:
+                await service.store.delete(media.id)
+            raise
     if current.user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Demandez cette série à l'administrateur")
     try:
@@ -1634,6 +1650,38 @@ async def get_playback_options(
     if not options:
         raise HTTPException(status_code=404, detail="Lecture indisponible")
     return options
+
+
+@router.get("/medias/{media_id}/playback/jellyfin-url")
+async def get_jellyfin_player_url(
+    media_id: str,
+    request: Request,
+    season_number: Optional[int] = None,
+    episode_number: Optional[int] = None,
+    current: AuthContext = Depends(get_current_user),
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    if (season_number is None) != (episode_number is None):
+        raise HTTPException(status_code=422, detail="Saison et épisode requis")
+    await _ensure_playback_access(current, media_id, service.store)
+    if not service.jellyfin:
+        raise HTTPException(status_code=503, detail="Jellyfin n'est pas configuré")
+    playback = await service.playback_manifest(media_id, season_number, episode_number)
+    if not playback:
+        raise HTTPException(status_code=404, detail="Lecture indisponible")
+
+    public_url = Config.JELLYFIN_PUBLIC_URL
+    if not public_url:
+        # JELLYFIN_URL may be a Docker-only hostname. Build the browser URL from
+        # Backstage's public host and Jellyfin's published port instead.
+        origin = urlsplit(str(request.base_url))
+        hostname = origin.hostname or "localhost"
+        netloc = f"[{hostname}]:8096" if ":" in hostname else f"{hostname}:8096"
+        public_url = urlunsplit((origin.scheme, netloc, "", "", ""))
+    return RedirectResponse(
+        service.jellyfin.playback_url(playback["item_id"], base_url=public_url),
+        status_code=307,
+    )
 
 
 @router.get("/medias/{media_id}/playback/resource/{resource_path:path}")

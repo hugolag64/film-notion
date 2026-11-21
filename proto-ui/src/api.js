@@ -271,6 +271,16 @@ export async function fetchPlaybackOptions(mediaId, seasonNumber, episodeNumber)
     return response.json();
 }
 
+export function getJellyfinPlayerPath(mediaId, seasonNumber, episodeNumber) {
+    const path = `${API_BASE_URL}/medias/${encodeURIComponent(mediaId)}/playback/jellyfin-url`;
+    const params = new URLSearchParams();
+    if (seasonNumber !== undefined && episodeNumber !== undefined) {
+        params.set('season_number', seasonNumber);
+        params.set('episode_number', episodeNumber);
+    }
+    return params.size ? `${path}?${params}` : path;
+}
+
 export async function fetchMediaServerOptions(mediaType) {
     const response = await fetch(`${API_BASE_URL}/media-server/options?media_type=${encodeURIComponent(mediaType)}`);
     if (!response.ok) throw new Error((await response.json()).detail || 'Service non configuré');
@@ -469,12 +479,12 @@ export async function addRecommendationToWatchlist(tmdbId) {
     return response.json();
 }
 
-export async function createSeerrRequest(tmdbId, mediaType = 'movie') {
+export async function createSeerrRequest(tmdbId, mediaType = 'movie', options = {}) {
     const response = await fetch(`${API_BASE_URL}/seerr/requests`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({tmdb_id: tmdbId, media_type: mediaType}),
+        body: JSON.stringify({tmdb_id: tmdbId, media_type: mediaType, ...options}),
     });
     if (!response.ok) throw new Error((await response.json()).detail || 'Demande Seerr impossible');
     return response.json();
