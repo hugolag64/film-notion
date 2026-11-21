@@ -1102,8 +1102,8 @@ export default function BackstagePrototype() {
             {/* Top Header */}
             <header className={`border-b sticky top-0 z-40 backdrop-blur-xl transition-colors duration-300 ${isDarkMode ? 'border-white/10 bg-black/90' : 'border-[#e3e8ee] bg-white/90 shadow-sm'
                 }`}>
-                <div className="max-w-[1536px] mx-auto grid h-16 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-8 px-6">
-                    <div className="flex items-center gap-4">
+                <div className="max-w-[1536px] mx-auto flex h-16 items-center gap-6 px-6">
+                    <div className="flex shrink-0 items-center gap-4">
                         <img src="/static/Logo.png" alt="Backstage" className="h-10 w-auto object-contain" />
                         <div>
                             <span className={`font-serif italic font-bold text-xl tracking-tighter ${isDarkMode ? 'text-white' : 'text-[#0a2540]'
@@ -1113,7 +1113,7 @@ export default function BackstagePrototype() {
                         </div>
                     </div>
 
-                    <nav className="justify-self-center" aria-label="Navigation principale">
+                    <nav className="flex flex-1 justify-center" aria-label="Navigation principale">
                         <div className={`flex items-center gap-6 whitespace-nowrap text-sm font-semibold ${isDarkMode ? 'text-white/60' : 'text-[#425466]'}`}>
                             {[['dashboard', 'Accueil'], ['library', 'Films'], ['library', 'Séries']].map(([view, label]) => {
                                 const selected = view === 'dashboard' ? activeView === 'dashboard' : activeView === 'library' && collection === label;
@@ -1124,16 +1124,16 @@ export default function BackstagePrototype() {
                         </div>
                     </nav>
 
-                    <div className="flex min-w-0 shrink-0 items-center justify-self-end gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
 
                         {/* Search Input */}
-                        <div className="relative">
+                        <div className="relative w-56 min-w-[7rem] shrink">
                             <input
                                 type="text"
                                 placeholder={collection === 'Séries' ? 'Rechercher une série, créateur...' : 'Rechercher un film, réalisateur...'}
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
-                                className={`w-44 rounded-lg border px-3 py-2 text-xs outline-none transition-all xl:w-56 ${isDarkMode
+                                className={`w-full rounded-lg border px-3 py-2 text-xs outline-none transition-all ${isDarkMode
                                     ? 'bg-white/5 border-white/15 focus:border-[#635bff] text-white placeholder-white/40'
                                     : 'bg-[#f6f9fc] border-[#e3e8ee] focus:border-[#635bff] text-[#0a2540] placeholder-[#425466]/50'
                                     }`}
