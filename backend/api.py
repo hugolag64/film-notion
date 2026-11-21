@@ -1578,6 +1578,9 @@ async def get_playback_manifest(
     media_id: str,
     season_number: Optional[int] = None,
     episode_number: Optional[int] = None,
+    audio_stream_index: Optional[int] = None,
+    subtitle_stream_index: Optional[int] = None,
+    start_time_ticks: Optional[int] = None,
     current: AuthContext = Depends(get_current_user),
     service: MediaServerService = Depends(get_media_server_service),
 ):
@@ -1588,14 +1591,49 @@ async def get_playback_manifest(
     if not playback or not service.jellyfin:
         raise HTTPException(status_code=404, detail="Lecture indisponible")
     try:
+        options = await service.playback_options(media_id, season_number, episode_number)
+        if not options:
+            raise HTTPException(status_code=404, detail="Source Jellyfin indisponible")
         response = await service.jellyfin.fetch_playback_resource(
             playback["item_id"], "master.m3u8",
-            service.jellyfin.playback_manifest_params(playback["item_id"]),
+            service.jellyfin.playback_manifest_params(
+                playback["item_id"],
+                media_source_id=options["media_source_id"],
+                audio_stream_index=audio_stream_index,
+                subtitle_stream_index=subtitle_stream_index,
+                start_time_ticks=start_time_ticks,
+            ),
         )
-    except (httpx.HTTPError, ValueError):
-        raise HTTPException(status_code=502, detail="Flux Jellyfin indisponible") from None
+    except HTTPException:
+        raise
+    except (httpx.HTTPError, ValueError) as error:
+        logger.exception("[jellyfin-playback] Manifest failed for %s S%sE%s", media_id, season_number, episode_number)
+        status = getattr(getattr(error, "response", None), "status_code", None)
+        raise HTTPException(status_code=502, detail=f"Flux Jellyfin indisponible{f' (HTTP {status})' if status else ''}") from None
     manifest = _rewrite_hls_manifest(response.text, media_id, season_number, episode_number)
     return Response(content=manifest, media_type="application/vnd.apple.mpegurl")
+
+
+@router.get("/medias/{media_id}/playback/options")
+async def get_playback_options(
+    media_id: str,
+    season_number: Optional[int] = None,
+    episode_number: Optional[int] = None,
+    current: AuthContext = Depends(get_current_user),
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    if (season_number is None) != (episode_number is None):
+        raise HTTPException(status_code=422, detail="Saison et épisode requis")
+    await _ensure_playback_access(current, media_id, service.store)
+    try:
+        options = await service.playback_options(media_id, season_number, episode_number)
+    except (httpx.HTTPError, ValueError) as error:
+        logger.exception("[jellyfin-playback] Track lookup failed for %s S%sE%s", media_id, season_number, episode_number)
+        status = getattr(getattr(error, "response", None), "status_code", None)
+        raise HTTPException(status_code=502, detail=f"Pistes Jellyfin indisponibles{f' (HTTP {status})' if status else ''}") from None
+    if not options:
+        raise HTTPException(status_code=404, detail="Lecture indisponible")
+    return options
 
 
 @router.get("/medias/{media_id}/playback/resource/{resource_path:path}")
@@ -1619,8 +1657,10 @@ async def get_playback_resource(
         response = await service.playback_resource(
             media_id, resource_path, query, season_number, episode_number,
         )
-    except (httpx.HTTPError, ValueError):
-        raise HTTPException(status_code=502, detail="Ressource Jellyfin indisponible") from None
+    except (httpx.HTTPError, ValueError) as error:
+        logger.exception("[jellyfin-playback] Resource failed for %s: %s", media_id, resource_path)
+        status = getattr(getattr(error, "response", None), "status_code", None)
+        raise HTTPException(status_code=502, detail=f"Ressource Jellyfin indisponible{f' (HTTP {status})' if status else ''}") from None
     if response is None:
         raise HTTPException(status_code=404, detail="Lecture indisponible")
     media_type = response.headers.get("content-type", "application/octet-stream").split(";", 1)[0]

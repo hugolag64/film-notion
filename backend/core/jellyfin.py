@@ -264,6 +264,51 @@ class JellyfinClient:
             start_index += len(items)
         return episodes
 
+    async def playback_options(self, item_id: str) -> dict[str, Any]:
+        """Return audio/subtitle tracks and the source id Jellyfin uses for playback."""
+        client = self.client or http.get_client()
+        response = await client.get(
+            f"{self.base_url}/Items/{quote(item_id, safe='')}/PlaybackInfo",
+            headers=self._auth_headers(),
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        sources = payload.get("MediaSources", []) if isinstance(payload, dict) else []
+        if not isinstance(sources, list) or not sources:
+            raise ValueError("Jellyfin n'a renvoyé aucune source de lecture")
+        source = next((entry for entry in sources if isinstance(entry, dict)), None)
+        if source is None:
+            raise ValueError("Sources de lecture Jellyfin invalides")
+        streams = source.get("MediaStreams", [])
+        if not isinstance(streams, list):
+            streams = []
+
+        def normalize_track(track: Any) -> Optional[dict[str, Any]]:
+            if not isinstance(track, dict) or not isinstance(track.get("Index"), int):
+                return None
+            language = str(track.get("Language") or "").strip()
+            title = str(track.get("DisplayTitle") or track.get("Title") or "").strip()
+            details = " · ".join(part for part in (language, title, track.get("Codec")) if part)
+            return {
+                "index": track["Index"],
+                "label": details or f"Piste {track['Index'] + 1}",
+                "language": language or None,
+                "is_default": bool(track.get("IsDefault")),
+            }
+
+        audio = [normalize_track(track) for track in streams if isinstance(track, dict) and track.get("Type") == "Audio"]
+        subtitles = [normalize_track(track) for track in streams if isinstance(track, dict) and track.get("Type") == "Subtitle"]
+        audio = [track for track in audio if track]
+        subtitles = [track for track in subtitles if track]
+        return {
+            "media_source_id": str(source.get("Id") or item_id),
+            "audio_tracks": audio,
+            "subtitle_tracks": subtitles,
+            "default_audio_index": source.get("DefaultAudioStreamIndex"),
+            "default_subtitle_index": source.get("DefaultSubtitleStreamIndex"),
+        }
+
     async def find_by_tmdb(self, tmdb_id: int, media_type: str) -> Optional[dict[str, Any]]:
         item_type = "Series" if media_type == "Série" else "Movie"
         client = self.client or http.get_client()
@@ -309,8 +354,13 @@ class JellyfinClient:
         return f"{self.base_url}/Videos/{quote(item_id, safe='')}/master.m3u8?{params}"
 
     @staticmethod
-    def playback_manifest_params(item_id: str) -> dict[str, Any]:
-        return {
+    def playback_manifest_params(
+        item_id: str, *, media_source_id: Optional[str] = None,
+        audio_stream_index: Optional[int] = None,
+        subtitle_stream_index: Optional[int] = None,
+        start_time_ticks: Optional[int] = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
             "VideoCodec": "h264",
             "AudioCodec": "aac",
             "Container": "ts",
@@ -321,8 +371,16 @@ class JellyfinClient:
             "VideoBitrate": "40000000",
             "MaxStreamingBitrate": "45000000",
             "EnableAdaptiveBitrateStreaming": "true",
-            "MediaSourceId": item_id,
+            "MediaSourceId": media_source_id or item_id,
         }
+        if audio_stream_index is not None:
+            params["AudioStreamIndex"] = audio_stream_index
+        if subtitle_stream_index is not None:
+            params["SubtitleStreamIndex"] = subtitle_stream_index
+            params["SubtitleMethod"] = "Encode" if subtitle_stream_index >= 0 else "External"
+        if start_time_ticks is not None and start_time_ticks > 0:
+            params["StartTimeTicks"] = start_time_ticks
+        return params
 
     async def fetch_playback_resource(
         self, item_id: str, resource_path: str, query: Optional[dict[str, str]] = None,

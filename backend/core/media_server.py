@@ -74,8 +74,8 @@ class MediaServerService:
             try:
                 remote = await self.seerr.request_media(
                     tmdb_id=media.tmdb_id, media_type=media.type,
-                    quality_profile_id=None, root_folder=None,
-                    language_profile_id=None, monitor=monitor,
+                    quality_profile_id=quality_profile_id, root_folder=root_folder,
+                    language_profile_id=language_profile_id, monitor=monitor,
                 )
             except SeerrDuplicateRequest:
                 # Already requested in Seerr (from Backstage or elsewhere): track it, don't fail.
@@ -271,6 +271,21 @@ class MediaServerService:
                 "url": self.jellyfin.playback_manifest_url(item_id),
             }
         return None
+
+    async def playback_options(
+        self, media_id: str, season_number: Optional[int] = None,
+        episode_number: Optional[int] = None,
+    ) -> Optional[dict[str, Any]]:
+        availability = await self.store.get_availability(media_id)
+        if not availability or not availability.jellyfin_id or not self.jellyfin:
+            return None
+        item_id = availability.jellyfin_id
+        if season_number is not None and episode_number is not None:
+            episode = await self.jellyfin.find_episode(item_id, season_number, episode_number)
+            if not episode:
+                return None
+            item_id = str(episode["Id"])
+        return await self.jellyfin.playback_options(item_id)
 
     async def playback_resource(
         self, media_id: str, resource_path: str, query: dict[str, str],

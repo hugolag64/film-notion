@@ -23,6 +23,8 @@ class AuthUser(TypedDict):
     role: str
     is_active: bool
     jellyfin_user_id: str | None
+    must_change_password: bool
+    avatar_url: str | None
 
 
 def hash_password(password: str) -> str:
@@ -72,6 +74,9 @@ class AuthStore:
                     password_hash TEXT NOT NULL,
                     role TEXT NOT NULL CHECK (role IN ('admin', 'user')),
                     is_active INTEGER NOT NULL DEFAULT 1,
+                    must_change_password INTEGER NOT NULL DEFAULT 0,
+                    avatar_data BLOB,
+                    avatar_mime TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
@@ -82,6 +87,12 @@ class AuthStore:
             }
             if "jellyfin_user_id" not in columns:
                 connection.execute("ALTER TABLE users ADD COLUMN jellyfin_user_id TEXT")
+            if "must_change_password" not in columns:
+                connection.execute("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
+            if "avatar_data" not in columns:
+                connection.execute("ALTER TABLE users ADD COLUMN avatar_data BLOB")
+            if "avatar_mime" not in columns:
+                connection.execute("ALTER TABLE users ADD COLUMN avatar_mime TEXT")
             connection.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_jellyfin_user_id "
                 "ON users(jellyfin_user_id) WHERE jellyfin_user_id IS NOT NULL"
@@ -136,6 +147,7 @@ class AuthStore:
 
     @staticmethod
     def _row_to_user(row: sqlite3.Row) -> AuthUser:
+        avatar_data = row["avatar_data"] if "avatar_data" in row.keys() else None
         return {
             "id": row["id"],
             "display_name": row["display_name"],
@@ -143,6 +155,8 @@ class AuthStore:
             "role": row["role"],
             "is_active": bool(row["is_active"]),
             "jellyfin_user_id": row["jellyfin_user_id"],
+            "must_change_password": bool(row["must_change_password"]),
+            "avatar_url": f"/api/auth/users/{row['id']}/avatar" if avatar_data else None,
         }
 
     @staticmethod
@@ -183,7 +197,11 @@ class AuthStore:
 
     def create_user(self, display_name: str, email: str, password: str) -> AuthUser:
         with sqlite3.connect(self.db_path) as connection:
-            return self._insert_user(connection, display_name, email, password, "user")
+            user = self._insert_user(connection, display_name, email, password, "user")
+            connection.execute("UPDATE users SET must_change_password = 1 WHERE id = ?", (user["id"],))
+            connection.row_factory = sqlite3.Row
+            row = connection.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+            return self._row_to_user(row)
 
     def _cleanup_sessions(self, connection: sqlite3.Connection, now: datetime) -> None:
         connection.execute(
@@ -318,7 +336,7 @@ class AuthStore:
                 raise ValueError("invalid current password")
             now = self._now().isoformat()
             connection.execute(
-                "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+                "UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ? WHERE id = ?",
                 (hash_password(new_password), now, user_id),
             )
             connection.execute(
@@ -340,13 +358,61 @@ class AuthStore:
                 raise ValueError("user not found")
             now = self._now().isoformat()
             connection.execute(
-                "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+                "UPDATE users SET password_hash = ?, must_change_password = 1, updated_at = ? WHERE id = ?",
                 (hash_password(new_password), now, user_id),
             )
             connection.execute(
                 "UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
                 (now, user_id),
             )
+
+    def complete_initial_password_change(
+        self, user_id: str, new_password: str, current_session_id: str,
+    ) -> AuthUser:
+        self._validate_new_password(new_password)
+        with sqlite3.connect(self.db_path) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM users WHERE id = ? AND is_active = 1", (user_id,),
+            ).fetchone()
+            if not row or not row["must_change_password"]:
+                raise ValueError("initial password change is not required")
+            now = self._now().isoformat()
+            connection.execute(
+                "UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ? WHERE id = ?",
+                (hash_password(new_password), now, user_id),
+            )
+            connection.execute(
+                "UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND id != ? AND revoked_at IS NULL",
+                (now, user_id, current_session_id),
+            )
+            refreshed = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+            return self._row_to_user(refreshed)
+
+    def set_avatar(self, user_id: str, image_data: bytes | None, mime_type: str | None) -> AuthUser:
+        with sqlite3.connect(self.db_path) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("BEGIN IMMEDIATE")
+            if not connection.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone():
+                raise ValueError("user not found")
+            connection.execute(
+                "UPDATE users SET avatar_data = ?, avatar_mime = ?, updated_at = ? WHERE id = ?",
+                (image_data, mime_type, self._now().isoformat(), user_id),
+            )
+            refreshed = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+            return self._row_to_user(refreshed)
+
+    def get_avatar(self, user_id: str) -> tuple[bytes, str] | None:
+        with sqlite3.connect(self.db_path) as connection:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                "SELECT avatar_data, avatar_mime FROM users WHERE id = ? AND is_active = 1",
+                (user_id,),
+            ).fetchone()
+        if not row or not row["avatar_data"] or row["avatar_mime"] not in {"image/jpeg", "image/png", "image/webp"}:
+            return None
+        return bytes(row["avatar_data"]), row["avatar_mime"]
 
     def _cleanup_password_reset_tokens(
         self, connection: sqlite3.Connection, now: datetime,
@@ -404,7 +470,7 @@ class AuthStore:
                 raise ValueError("invalid or expired reset token")
             now_text = now.isoformat()
             connection.execute(
-                "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+                "UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ? WHERE id = ?",
                 (hash_password(new_password), now_text, row["user_id"]),
             )
             connection.execute(

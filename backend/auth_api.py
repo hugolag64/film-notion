@@ -56,6 +56,11 @@ class PasswordChangeRequest(BaseModel):
     password_confirmation: str
 
 
+class InitialPasswordChangeRequest(BaseModel):
+    new_password: str = Field(min_length=8)
+    password_confirmation: str
+
+
 class ForgotPasswordRequest(BaseModel):
     email: str = Field(min_length=3)
 
@@ -142,6 +147,11 @@ async def get_current_user(
     if session is None:
         raise HTTPException(status_code=401, detail="Authentification requise")
     user, session_id = session
+    allowed_during_forced_change = {
+        "/api/auth/me", "/api/auth/change-initial-password",
+    }
+    if user["must_change_password"] and request.url.path not in allowed_during_forced_change:
+        raise HTTPException(status_code=403, detail="Vous devez définir votre mot de passe personnel avant de continuer")
     return AuthContext(user=user, session_id=session_id, token=token)
 
 
@@ -227,6 +237,82 @@ async def change_password(
     except ValueError as error:
         raise _handle_store_error(error) from error
     return {"message": "Mot de passe modifié"}
+
+
+@auth_router.post("/change-initial-password")
+async def change_initial_password(
+    payload: InitialPasswordChangeRequest,
+    current: AuthContext = Depends(get_current_user),
+    store: AuthStore = Depends(get_auth_store),
+):
+    if payload.new_password != payload.password_confirmation:
+        raise HTTPException(status_code=422, detail="Les mots de passe ne correspondent pas")
+    try:
+        user = store.complete_initial_password_change(
+            current.user["id"], payload.new_password, current.session_id,
+        )
+    except ValueError as error:
+        raise _handle_store_error(error) from error
+    return {"user": user}
+
+
+def _avatar_mime_type(data: bytes) -> str | None:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+@auth_router.put("/me/avatar")
+async def upload_my_avatar(
+    request: Request,
+    current: AuthContext = Depends(get_current_user),
+    store: AuthStore = Depends(get_auth_store),
+):
+    image_data = bytearray()
+    async for chunk in request.stream():
+        image_data.extend(chunk)
+        if len(image_data) > 5 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="La photo doit faire 5 Mo maximum")
+    image_data = bytes(image_data)
+    mime_type = _avatar_mime_type(image_data)
+    if not mime_type:
+        raise HTTPException(status_code=415, detail="Formats acceptés : JPEG, PNG ou WebP")
+    declared_mime = request.headers.get("content-type", "").split(";", 1)[0].lower()
+    if declared_mime and declared_mime != mime_type:
+        raise HTTPException(status_code=415, detail="Le type du fichier ne correspond pas à son contenu")
+    try:
+        user = store.set_avatar(current.user["id"], image_data, mime_type)
+    except ValueError as error:
+        raise _handle_store_error(error) from error
+    return {"user": user}
+
+
+@auth_router.delete("/me/avatar")
+async def delete_my_avatar(
+    current: AuthContext = Depends(get_current_user),
+    store: AuthStore = Depends(get_auth_store),
+):
+    try:
+        return {"user": store.set_avatar(current.user["id"], None, None)}
+    except ValueError as error:
+        raise _handle_store_error(error) from error
+
+
+@auth_router.get("/users/{user_id}/avatar")
+async def user_avatar(
+    user_id: str,
+    _: AuthContext = Depends(get_current_user),
+    store: AuthStore = Depends(get_auth_store),
+):
+    avatar = store.get_avatar(user_id)
+    if not avatar:
+        raise HTTPException(status_code=404, detail="Photo introuvable")
+    image_data, mime_type = avatar
+    return Response(content=image_data, media_type=mime_type, headers={"Cache-Control": "no-cache"})
 
 
 @auth_router.post("/forgot-password", status_code=202)

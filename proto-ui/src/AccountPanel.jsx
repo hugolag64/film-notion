@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { changePassword, fetchDevices, fetchNotifications, markNotificationRead, revokeDevice, revokeOtherDevices, updateUser } from './api';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { changePassword, fetchDevices, fetchNotifications, markNotificationRead, removeMyAvatar, revokeDevice, revokeOtherDevices, updateUser, uploadMyAvatar } from './api';
 import { useAuth } from './auth-context';
 
 export default function AccountPanel({isDarkMode, onClose}) {
@@ -11,6 +11,8 @@ export default function AccountPanel({isDarkMode, onClose}) {
     const [error, setError] = useState('');
     const [notice, setNotice] = useState('');
     const [savingName, setSavingName] = useState(false);
+    const [savingAvatar, setSavingAvatar] = useState(false);
+    const avatarInput = useRef(null);
 
     const refresh = useCallback(async () => {
         try {
@@ -55,6 +57,35 @@ export default function AccountPanel({isDarkMode, onClose}) {
         }
     };
 
+    const handleAvatarChange = async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        try {
+            setSavingAvatar(true);
+            setError('');
+            setUser(await uploadMyAvatar(file));
+            setNotice('Photo de profil mise à jour.');
+        } catch (requestError) {
+            setError(requestError.message);
+        } finally {
+            setSavingAvatar(false);
+            event.target.value = '';
+        }
+    };
+
+    const handleAvatarRemove = async () => {
+        try {
+            setSavingAvatar(true);
+            setError('');
+            setUser(await removeMyAvatar());
+            setNotice('Photo de profil supprimée.');
+        } catch (requestError) {
+            setError(requestError.message);
+        } finally {
+            setSavingAvatar(false);
+        }
+    };
+
     const text = isDarkMode ? 'text-white' : 'text-[#0a2540]';
     const muted = isDarkMode ? 'text-white/60' : 'text-[#425466]';
     const panel = isDarkMode ? 'bg-[#111111] border-white/10' : 'bg-white border-[#e3e8ee]';
@@ -69,6 +100,16 @@ export default function AccountPanel({isDarkMode, onClose}) {
                         <p className={`text-sm ${muted}`}>{user.email} · {user.role === 'admin' ? 'Administrateur' : 'Utilisateur'}</p>
                     </div>
                     <button className="rounded-lg border px-3 py-1.5 text-sm" onClick={onClose}>Fermer</button>
+                </div>
+
+                <div className={`mb-8 flex flex-wrap items-center gap-4 rounded-xl border p-4 ${isDarkMode ? 'border-white/10' : 'border-[#e3e8ee]'}`}>
+                    {user.avatar_url ? <img src={user.avatar_url} alt="Photo de profil" className="h-16 w-16 rounded-full object-cover" /> : <span className="flex h-16 w-16 items-center justify-center rounded-full bg-[#635bff] text-2xl font-bold text-white">{user.display_name.charAt(0).toUpperCase()}</span>}
+                    <div className="flex flex-wrap items-center gap-2">
+                        <input ref={avatarInput} type="file" accept="image/jpeg,image/png,image/webp" onChange={handleAvatarChange} className="hidden" />
+                        <button type="button" disabled={savingAvatar} onClick={() => avatarInput.current?.click()} className="rounded-lg bg-[#635bff] px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">{savingAvatar ? 'Envoi…' : 'Choisir une photo'}</button>
+                        {user.avatar_url && <button type="button" disabled={savingAvatar} onClick={handleAvatarRemove} className="rounded-lg border px-3 py-2 text-sm disabled:opacity-50">Supprimer la photo</button>}
+                        <p className={`w-full text-xs ${muted}`}>JPEG, PNG ou WebP · 5 Mo maximum</p>
+                    </div>
                 </div>
 
                 {error && <p className="mb-4 rounded-lg bg-rose-500/10 p-3 text-sm text-rose-500" role="alert">{error}</p>}

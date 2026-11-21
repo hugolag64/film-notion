@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchAuthStatus, fetchCurrentUser, login, logout, requestPasswordReset, setupAdmin } from './api';
+import { completeInitialPasswordChange, fetchAuthStatus, fetchCurrentUser, login, logout, requestPasswordReset, setupAdmin } from './api';
 import { AuthContext } from './auth-context';
 import PasswordResetPage from './PasswordResetPage';
 
@@ -112,6 +112,30 @@ function ForgotPasswordForm({onBack}) {
     );
 }
 
+function FirstLoginPasswordForm({onSubmit, error, loading}) {
+    const [newPassword, setNewPassword] = useState('');
+    const [confirmation, setConfirmation] = useState('');
+    return (
+        <main className="auth-shell">
+            <form className="auth-card" onSubmit={(event) => { event.preventDefault(); onSubmit({new_password: newPassword, password_confirmation: confirmation}); }}>
+                <p className="auth-kicker">BACKSTAGE</p>
+                <h1>Choisissez votre mot de passe</h1>
+                <p className="auth-subtitle">Votre administrateur vous a donné un mot de passe provisoire. Créez maintenant votre mot de passe personnel pour continuer.</p>
+                <label>
+                    Nouveau mot de passe
+                    <input required minLength={8} type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />
+                </label>
+                <label>
+                    Confirmer le nouveau mot de passe
+                    <input required minLength={8} type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} />
+                </label>
+                {error && <p className="auth-error" role="alert">{error}</p>}
+                <button className="auth-submit" type="submit" disabled={loading}>{loading ? 'Enregistrement…' : 'Enregistrer et continuer'}</button>
+            </form>
+        </main>
+    );
+}
+
 function AuthenticatedGate({children}) {
     const [state, setState] = useState('loading');
     const [user, setUser] = useState(null);
@@ -131,7 +155,7 @@ function AuthenticatedGate({children}) {
                 const currentUser = await fetchCurrentUser();
                 if (!active) return;
                 setUser(currentUser);
-                setState(currentUser ? 'authenticated' : 'login');
+                setState(currentUser ? (currentUser.must_change_password ? 'force-password-change' : 'authenticated') : 'login');
             } catch (requestError) {
                 if (active) {
                     setError(requestError.message);
@@ -148,6 +172,20 @@ function AuthenticatedGate({children}) {
         try {
             const authenticatedUser = state === 'setup' ? await setupAdmin(payload) : await login(payload);
             setUser(authenticatedUser);
+            setState(authenticatedUser.must_change_password ? 'force-password-change' : 'authenticated');
+        } catch (requestError) {
+            setError(requestError.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const submitInitialPassword = async (payload) => {
+        setLoading(true);
+        setError('');
+        try {
+            const updatedUser = await completeInitialPasswordChange(payload);
+            setUser(updatedUser);
             setState('authenticated');
         } catch (requestError) {
             setError(requestError.message);
@@ -166,6 +204,9 @@ function AuthenticatedGate({children}) {
     if (state === 'error') return <main className="auth-shell"><p className="auth-error">{error}</p></main>;
     if (state === 'forgot') {
         return <ForgotPasswordForm onBack={() => { setError(''); setState('login'); }} />;
+    }
+    if (state === 'force-password-change') {
+        return <FirstLoginPasswordForm onSubmit={submitInitialPassword} error={error} loading={loading} />;
     }
     if (state === 'setup' || state === 'login') {
         return <AuthForm

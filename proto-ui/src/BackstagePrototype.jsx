@@ -8,7 +8,7 @@ import DashboardHome from './components/DashboardHome';
 import TMDBMoviePreview from './components/TMDBMoviePreview';
 import NotificationBell from './components/NotificationBell';
 import { useAuth } from './auth-context';
-import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, cancelRental, fetchMediaServerActivity, syncMediaServer, syncPlayback, fetchAvailableMediaIds, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest } from './api';
+import { fetchMedias, updateMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, getPlaybackManifest, fetchPlaybackOptions, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, cancelRental, fetchMediaServerActivity, syncMediaServer, syncPlayback, fetchAvailableMediaIds, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus } from './library';
 import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
 import { DEFAULT_MAX_ACTIVE_RENTALS, DEFAULT_MAX_QUEUED_RENTALS, countQueuedRentals, countRentalsInUse, indexRentalsByMedia, isQueuedRental, rentalExpiryLabel, rentalStatusLabel } from './rentals';
@@ -287,32 +287,83 @@ export default function BackstagePrototype() {
         setPlayerLoading(false);
     };
 
-    const openPlayer = () => {
+    const openPlayer = async () => {
         if (!selectedMedia?.id || !mediaAvailability?.availability?.jellyfin_id) return;
         setPlayerError(null);
         setPlayerLoading(true);
+        let playbackOptions = null;
+        try {
+            playbackOptions = await fetchPlaybackOptions(selectedMedia.id);
+        } catch (error) {
+            console.error('Impossible de charger les pistes Jellyfin:', error);
+        }
+        const audioStreamIndex = playbackOptions?.default_audio_index
+            ?? playbackOptions?.audio_tracks?.find((track) => track.is_default)?.index
+            ?? playbackOptions?.audio_tracks?.[0]?.index;
+        const subtitleStreamIndex = playbackOptions?.default_subtitle_index
+            ?? playbackOptions?.subtitle_tracks?.find((track) => track.is_default)?.index
+            ?? -1;
         setPlayerMedia({
             title: selectedMedia.title,
-            manifestUrl: getPlaybackManifest(selectedMedia.id),
+            mediaId: selectedMedia.id,
+            playbackOptions,
+            audioStreamIndex,
+            subtitleStreamIndex,
+            startSeconds: 0,
         });
     };
 
-    const openEpisodePlayer = (episode) => {
+    const openEpisodePlayer = async (episode) => {
         if (!selectedSeries?.id || !mediaAvailability?.availability?.jellyfin_id) return;
         setPlayerError(null);
         setPlayerLoading(true);
+        let playbackOptions = null;
+        try {
+            playbackOptions = await fetchPlaybackOptions(
+                selectedSeries.id, episode.season_number, episode.episode_number,
+            );
+        } catch (error) {
+            console.error('Impossible de charger les pistes de l’épisode Jellyfin:', error);
+        }
+        const audioStreamIndex = playbackOptions?.default_audio_index
+            ?? playbackOptions?.audio_tracks?.find((track) => track.is_default)?.index
+            ?? playbackOptions?.audio_tracks?.[0]?.index;
+        const subtitleStreamIndex = playbackOptions?.default_subtitle_index
+            ?? playbackOptions?.subtitle_tracks?.find((track) => track.is_default)?.index
+            ?? -1;
         setPlayerMedia({
             title: `${selectedSeries.title} · S${episode.season_number}E${episode.episode_number} — ${episode.title}`,
-            manifestUrl: getPlaybackManifest(
-                selectedSeries.id, episode.season_number, episode.episode_number,
-            ),
+            mediaId: selectedSeries.id,
+            seasonNumber: episode.season_number,
+            episodeNumber: episode.episode_number,
+            playbackOptions,
+            audioStreamIndex,
+            subtitleStreamIndex,
+            startSeconds: 0,
         });
+    };
+
+    const changePlayerTrack = (field, value) => {
+        const startSeconds = videoRef.current?.currentTime || 0;
+        setPlayerLoading(true);
+        setPlayerMedia((current) => current ? {
+            ...current,
+            [field]: value === '' ? null : Number(value),
+            startSeconds,
+        } : current);
     };
 
     useEffect(() => {
         if (!playerMedia || !videoRef.current) return undefined;
         const video = videoRef.current;
-        const manifestUrl = playerMedia.manifestUrl;
+        const manifestUrl = playerMedia.manifestUrl || getPlaybackManifest(
+            playerMedia.mediaId,
+            playerMedia.seasonNumber,
+            playerMedia.episodeNumber,
+            playerMedia.audioStreamIndex,
+            playerMedia.subtitleStreamIndex,
+            (playerMedia.startSeconds || 0) * 10_000_000,
+        );
         let hls;
 
         const handleReady = () => setPlayerLoading(false);
@@ -325,16 +376,29 @@ export default function BackstagePrototype() {
 
         if (video.canPlayType('application/vnd.apple.mpegurl')) {
             video.src = manifestUrl;
+            video.addEventListener('loadedmetadata', () => {
+                if (playerMedia.startSeconds > 0) video.currentTime = playerMedia.startSeconds;
+            }, {once: true});
             video.play().catch(() => {});
         } else if (Hls.isSupported()) {
             hls = new Hls({ enableWorker: true });
             hlsRef.current = hls;
             hls.on(Hls.Events.MANIFEST_PARSED, () => {
                 setPlayerLoading(false);
+                if (playerMedia.startSeconds > 0) video.currentTime = playerMedia.startSeconds;
                 video.play().catch(() => {});
             });
             hls.on(Hls.Events.ERROR, (_event, data) => {
-                if (data.fatal) handleError();
+                if (!data.fatal) return;
+                console.error('Erreur de lecture HLS:', data);
+                let detail = data.response?.text || data.details || '';
+                try {
+                    detail = JSON.parse(detail).detail || detail;
+                } catch {
+                    // Keep the server/player message as plain text.
+                }
+                setPlayerLoading(false);
+                setPlayerError(detail ? `Flux Jellyfin : ${String(detail).slice(0, 240)}` : 'Impossible de démarrer la lecture de ce média.');
             });
             hls.loadSource(manifestUrl);
             hls.attachMedia(video);
@@ -1164,7 +1228,9 @@ export default function BackstagePrototype() {
                         </button>}
                         <NotificationBell isDarkMode={isDarkMode} />
                         <button onClick={() => setShowAccountPanel(true)} className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs font-semibold" title="Ouvrir le compte">
-                            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#635bff] text-[11px] font-bold text-white" aria-hidden="true">{(user?.display_name || 'Compte').charAt(0).toUpperCase()}</span>
+                            {user?.avatar_url
+                                ? <img src={user.avatar_url} alt="" className="h-7 w-7 rounded-full object-cover" />
+                                : <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#635bff] text-[11px] font-bold text-white" aria-hidden="true">{(user?.display_name || 'Compte').charAt(0).toUpperCase()}</span>}
                             <span className="hidden lg:inline">{user?.display_name || 'Compte'}</span>
                         </button>
                         <button
@@ -2150,6 +2216,7 @@ export default function BackstagePrototype() {
                 <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
                     <div className="w-full max-w-md rounded-xl bg-white p-5 text-[#0a2540]">
                         <h2 className="font-serif text-lg font-bold">Ajouter {selectedMedia.title} au serveur</h2>
+                        {selectedMedia.type === 'Film' && <p className="mt-2 text-xs text-slate-600">Le profil choisi sera transmis à Seerr. Pour lancer la recherche Radarr automatiquement, active « Enable Automatic Search » dans les réglages Services de Seerr.</p>}
                         <div className="mt-4 space-y-3">
                             <select className="w-full rounded border p-2" value={acquisitionForm.quality_profile_id} onChange={e => setAcquisitionForm({...acquisitionForm, quality_profile_id: e.target.value})}>
                                 {mediaServerOptions?.quality_profiles?.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -2334,6 +2401,36 @@ export default function BackstagePrototype() {
                                 ✕ Fermer le lecteur
                             </button>
                         </div>
+                        {playerMedia.playbackOptions && (
+                            <div className="flex flex-wrap items-center gap-3 border-b border-white/10 bg-[#111] px-4 py-2 text-xs text-white">
+                                <label className="flex items-center gap-2">
+                                    <span className="opacity-70">Audio</span>
+                                    <select
+                                        value={playerMedia.audioStreamIndex ?? ''}
+                                        onChange={(event) => changePlayerTrack('audioStreamIndex', event.target.value)}
+                                        className="max-w-[min(50vw,24rem)] rounded border border-white/20 bg-[#222] px-2 py-1 text-white"
+                                    >
+                                        <option value="">Automatique</option>
+                                        {playerMedia.playbackOptions.audio_tracks.map((track) => (
+                                            <option key={track.index} value={track.index}>{track.label}</option>
+                                        ))}
+                                    </select>
+                                </label>
+                                <label className="flex items-center gap-2">
+                                    <span className="opacity-70">Sous-titres</span>
+                                    <select
+                                        value={playerMedia.subtitleStreamIndex ?? -1}
+                                        onChange={(event) => changePlayerTrack('subtitleStreamIndex', event.target.value)}
+                                        className="max-w-[min(50vw,24rem)] rounded border border-white/20 bg-[#222] px-2 py-1 text-white"
+                                    >
+                                        <option value={-1}>Désactivés</option>
+                                        {playerMedia.playbackOptions.subtitle_tracks.map((track) => (
+                                            <option key={track.index} value={track.index}>{track.label}</option>
+                                        ))}
+                                    </select>
+                                </label>
+                            </div>
+                        )}
                         <div className="relative flex-1 min-h-0 bg-black flex items-center justify-center group">
                             <video ref={videoRef} controls autoPlay playsInline className="relative z-10 w-full h-full object-contain" />
                             {playerLoading && !playerError && (

@@ -32,7 +32,7 @@ export default function UserManagement({isDarkMode, currentUser, onError, onNoti
         try {
             await createUser(newUser);
             setNewUser({display_name: '', email: '', password: ''});
-            onNotice?.('Utilisateur créé.');
+            onNotice?.('Utilisateur créé. Il devra remplacer son mot de passe provisoire lors de sa première connexion.');
             await refresh();
         } catch (requestError) {
             onError?.(requestError.message);
@@ -92,7 +92,7 @@ export default function UserManagement({isDarkMode, currentUser, onError, onNoti
         try {
             await updateUser(target.id, {password});
             setAdminPasswords((current) => ({...current, [target.id]: ''}));
-            onNotice?.(`Mot de passe de ${target.display_name} modifié.`);
+            onNotice?.(`Mot de passe provisoire défini pour ${target.display_name} ; il devra en choisir un nouveau à sa prochaine connexion.`);
         } catch (requestError) {
             onError?.(requestError.message);
         }
@@ -151,12 +151,13 @@ export default function UserManagement({isDarkMode, currentUser, onError, onNoti
                                         </label>
                                     </div>
                                     <div className="flex flex-wrap items-center gap-2">
-                                        <input type="password" minLength="8" placeholder="Nouveau mot de passe" value={adminPasswords[target.id] || ''} onChange={(event) => setAdminPasswords((current) => ({...current, [target.id]: event.target.value}))} className="min-w-52 flex-1 rounded border bg-transparent px-2 py-2" aria-label={`Nouveau mot de passe de ${target.email}`} />
-                                        <button type="button" className="rounded border px-3 py-2 text-xs" onClick={() => handleAdminPassword(target)}>Définir</button>
+                                        <input type="password" minLength="8" placeholder="Nouveau mot de passe provisoire" value={adminPasswords[target.id] || ''} onChange={(event) => setAdminPasswords((current) => ({...current, [target.id]: event.target.value}))} className="min-w-52 flex-1 rounded border bg-transparent px-2 py-2" aria-label={`Nouveau mot de passe provisoire de ${target.email}`} />
+                                        <button type="button" className="rounded border px-3 py-2 text-xs" onClick={() => handleAdminPassword(target)}>Définir et exiger un changement</button>
                                         <button type="button" className="rounded border px-3 py-2 text-xs text-[#635bff]" onClick={() => handleUserUpdate(target, {is_active: !target.is_active})}>{target.is_active ? 'Désactiver' : 'Activer'}</button>
                                         <button type="button" className="rounded border border-rose-500 px-3 py-2 text-xs text-rose-500" onClick={() => handleUserDelete(target)} disabled={target.id === currentUser?.id}>Supprimer</button>
                                     </div>
                                     <p className={`text-xs ${target.is_active ? 'text-emerald-500' : 'text-rose-500'}`}>{target.is_active ? 'Compte actif' : 'Compte désactivé'}</p>
+                                    {target.must_change_password && <p className="text-xs text-amber-600">Mot de passe provisoire : changement obligatoire à la prochaine connexion.</p>}
                                 </div>
                             )}
                         </article>
@@ -166,9 +167,10 @@ export default function UserManagement({isDarkMode, currentUser, onError, onNoti
 
             <form className={`grid gap-2 rounded-xl border p-4 ${card} sm:grid-cols-3`} onSubmit={handleCreateUser}>
                 <h4 className="font-semibold sm:col-span-3">Créer un utilisateur</h4>
+                <p className={`text-xs sm:col-span-3 ${muted}`}>Le mot de passe saisi est provisoire. L’utilisateur devra le remplacer à sa première connexion.</p>
                 <input required placeholder="Nom" value={newUser.display_name} onChange={(event) => setNewUser({...newUser, display_name: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
                 <input required type="email" placeholder="Email" value={newUser.email} onChange={(event) => setNewUser({...newUser, email: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
-                <input required minLength="8" type="password" placeholder="Mot de passe (8 caractères min.)" value={newUser.password} onChange={(event) => setNewUser({...newUser, password: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
+                <input required minLength="8" type="password" placeholder="Mot de passe provisoire (8 caractères min.)" value={newUser.password} onChange={(event) => setNewUser({...newUser, password: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
                 <button className="rounded bg-[#635bff] px-3 py-2 text-sm font-semibold text-white sm:col-span-3" type="submit">Créer un utilisateur</button>
             </form>
         </div>

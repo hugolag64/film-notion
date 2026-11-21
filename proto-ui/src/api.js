@@ -76,6 +76,26 @@ export async function changePassword(payload) {
     return authRequest('/change-password', {method: 'POST', body: JSON.stringify(payload)});
 }
 
+export async function completeInitialPasswordChange(payload) {
+    return (await authRequest('/change-initial-password', {
+        method: 'POST', body: JSON.stringify(payload),
+    })).user;
+}
+
+export async function uploadMyAvatar(file) {
+    const response = await fetch(`${API_BASE_URL}/auth/me/avatar`, {
+        method: 'PUT', credentials: 'same-origin',
+        headers: file.type ? {'Content-Type': file.type} : {}, body: file,
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(body?.detail || 'Impossible d’enregistrer la photo');
+    return body.user;
+}
+
+export async function removeMyAvatar() {
+    return (await authRequest('/me/avatar', {method: 'DELETE'})).user;
+}
+
 export async function requestPasswordReset(email) {
     return authRequest('/forgot-password', {
         method: 'POST', body: JSON.stringify({email}),
@@ -226,13 +246,29 @@ export async function fetchAvailability(mediaId) {
     return response.json();
 }
 
-export function getPlaybackManifest(mediaId, seasonNumber, episodeNumber) {
+export function getPlaybackManifest(mediaId, seasonNumber, episodeNumber, audioStreamIndex, subtitleStreamIndex, startTimeTicks) {
     const path = `${API_BASE_URL}/medias/${encodeURIComponent(mediaId)}/playback/manifest`;
+    const params = new URLSearchParams();
     if (seasonNumber !== undefined && episodeNumber !== undefined) {
-        const params = new URLSearchParams({season_number: seasonNumber, episode_number: episodeNumber});
-        return `${path}?${params}`;
+        params.set('season_number', seasonNumber);
+        params.set('episode_number', episodeNumber);
     }
-    return path;
+    if (audioStreamIndex !== undefined && audioStreamIndex !== null) params.set('audio_stream_index', audioStreamIndex);
+    if (subtitleStreamIndex !== undefined && subtitleStreamIndex !== null) params.set('subtitle_stream_index', subtitleStreamIndex);
+    if (startTimeTicks > 0) params.set('start_time_ticks', Math.floor(startTimeTicks));
+    return params.size ? `${path}?${params}` : path;
+}
+
+export async function fetchPlaybackOptions(mediaId, seasonNumber, episodeNumber) {
+    const path = `${API_BASE_URL}/medias/${encodeURIComponent(mediaId)}/playback/options`;
+    const params = new URLSearchParams();
+    if (seasonNumber !== undefined && episodeNumber !== undefined) {
+        params.set('season_number', seasonNumber);
+        params.set('episode_number', episodeNumber);
+    }
+    const response = await fetch(params.size ? `${path}?${params}` : path);
+    if (!response.ok) throw new Error((await response.json()).detail || 'Pistes Jellyfin indisponibles');
+    return response.json();
 }
 
 export async function fetchMediaServerOptions(mediaType) {
