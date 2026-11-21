@@ -15,7 +15,10 @@ def test_header_uses_compact_primary_navigation_and_right_aligned_utilities():
     assert '+ Ajouter un film' not in source
     assert 'Ajouter un film' in source
     assert source.index('title="Changer de thème"') > source.index('title="Ouvrir le compte"')
-    assert 'grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]' in source
+    # Flex header: the search box shrinks so the nav (incl. Séries) is never covered.
+    assert 'mx-auto flex h-16 items-center' in source
+    assert '<nav className="flex flex-1 justify-center"' in source
+    assert 'relative w-56 min-w-[7rem] shrink' in source
     assert 'absolute left-1/2' not in source
 
 

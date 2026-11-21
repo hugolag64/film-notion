@@ -1,4 +1,6 @@
 """Server-side Jellyfin lookup; no API key reaches the browser."""
+import re
+import uuid
 from typing import Any, Optional
 from pathlib import PurePosixPath
 from urllib.parse import quote, urlencode
@@ -6,6 +8,15 @@ from urllib.parse import quote, urlencode
 import httpx
 
 from backend.core import http
+
+CLIENT_NAME = "Backstage"
+DEVICE_NAME = "Backstage Server"
+CLIENT_VERSION = "1.0.0"
+
+
+def _quote_auth_value(value: str) -> str:
+    """Values of the MediaBrowser scheme are double-quoted; strip what would break it."""
+    return re.sub(r'["\\\x00-\x1f]', "", str(value))
 
 
 class JellyfinClient:
@@ -17,12 +28,26 @@ class JellyfinClient:
         self.api_key = api_key
         self.client = client
         self.server_id = server_id
+        # Stable per Jellyfin server, so Jellyfin lists a single "Backstage" device.
+        self.device_id = uuid.uuid5(uuid.NAMESPACE_URL, f"backstage:{self.base_url}").hex
+
+    def _auth_headers(self) -> dict[str, str]:
+        """Modern Jellyfin authentication; the API key never leaves the backend."""
+        fields = {
+            "Client": CLIENT_NAME,
+            "Device": DEVICE_NAME,
+            "DeviceId": self.device_id,
+            "Version": CLIENT_VERSION,
+            "Token": self.api_key,
+        }
+        value = ", ".join(f'{key}="{_quote_auth_value(item)}"' for key, item in fields.items())
+        return {"Authorization": f"MediaBrowser {value}"}
 
     async def list_users(self) -> list[dict[str, Any]]:
         client = self.client or http.get_client()
         response = await client.get(
             f"{self.base_url}/Users",
-            headers={"X-Emby-Token": self.api_key},
+            headers=self._auth_headers(),
             timeout=10.0,
         )
         response.raise_for_status()
@@ -76,7 +101,7 @@ class JellyfinClient:
         for url, params in requests:
             response = await client.get(
                 url,
-                headers={"X-Emby-Token": self.api_key},
+                headers=self._auth_headers(),
                 params=params,
                 timeout=10.0,
             )
@@ -115,7 +140,7 @@ class JellyfinClient:
         while True:
             response = await client.get(
                 f"{self.base_url}/Items",
-                headers={"X-Emby-Token": self.api_key},
+                headers=self._auth_headers(),
                 params={
                     "IncludeItemTypes": "Movie,Series",
                     "Recursive": "true",
@@ -166,7 +191,7 @@ class JellyfinClient:
             while True:
                 response = await client.get(
                     f"{self.base_url}/Items",
-                    headers={"X-Emby-Token": self.api_key},
+                    headers=self._auth_headers(),
                     params={
                         "IncludeItemTypes": item_type,
                         "Recursive": "true",
@@ -218,7 +243,7 @@ class JellyfinClient:
         url = f"{self.base_url}/Videos/{quote(item_id, safe='')}/{quote(str(normalized), safe='/')}"
         client = self.client or http.get_client()
         response = await client.get(
-            url, headers={"X-Emby-Token": self.api_key}, params=query or {}, timeout=60.0,
+            url, headers=self._auth_headers(), params=query or {}, timeout=60.0,
         )
         response.raise_for_status()
         return response

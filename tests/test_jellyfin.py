@@ -76,7 +76,8 @@ def test_find_by_tmdb_requests_provider_ids_from_jellyfin():
 def test_list_users_returns_only_safe_fields_and_uses_api_key():
     async def handler(request):
         assert request.url.path == "/Users"
-        assert request.headers["X-Emby-Token"] == "secret"
+        assert "X-Emby-Token" not in request.headers
+        assert 'Token="secret"' in request.headers["Authorization"]
         return httpx.Response(200, json={
             "Users": [
                 {
@@ -158,7 +159,8 @@ def test_list_users_propagates_http_errors():
 def test_user_playback_reads_resumable_and_latest_items_for_the_selected_user():
     async def handler(request):
         assert request.url.path.startswith("/Users/jf-ophelie/Items")
-        assert request.headers["X-Emby-Token"] == "secret"
+        assert "X-Emby-Token" not in request.headers
+        assert 'Token="secret"' in request.headers["Authorization"]
         if request.url.path.endswith("/Latest"):
             return httpx.Response(200, json=[{
                 "Id": "jf-dune", "Name": "Dune", "Type": "Movie",
@@ -239,3 +241,21 @@ def test_list_library_skips_items_without_tmdb_id():
     ]}]))
 
     assert items == []
+
+
+def test_requests_use_the_mediabrowser_authorization_header():
+    client = JellyfinClient("http://127.0.0.1:8096/", "secret")
+    header = client._auth_headers()["Authorization"]
+
+    assert header.startswith("MediaBrowser ")
+    for field in ("Client=\"Backstage\"", "Device=\"Backstage Server\"", "Version=", "Token=\"secret\""):
+        assert field in header
+    assert f'DeviceId="{client.device_id}"' in header
+    # The device id is stable per server and never derived from the key.
+    assert JellyfinClient("http://127.0.0.1:8096", "other").device_id == client.device_id
+    assert "secret" not in client.device_id
+
+
+def test_auth_header_values_cannot_break_out_of_their_quotes():
+    header = JellyfinClient("http://127.0.0.1:8096", 'bad"key\r\nX: y')._auth_headers()["Authorization"]
+    assert 'Token="badkeyX: y"' in header
