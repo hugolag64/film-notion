@@ -24,7 +24,9 @@ from backend.core.models import (
 from backend.core.tmdb import TMDBClient
 from backend.core.mapping import is_series
 from backend.core.tmdb_relink import build_relink_updates
-from backend.core.series_episodes import ensure_series_episodes, fetch_tmdb_episodes
+from backend.core.series_episodes import (
+    build_series_view, ensure_series_metadata, fetch_tmdb_series, save_tmdb_series,
+)
 from backend.core.arr import RadarrClient, SonarrClient, MediaServerError
 from backend.core.seerr import SeerrClient, SeerrDuplicateRequest
 from backend.core.jellyfin import JellyfinClient
@@ -1554,17 +1556,22 @@ async def get_series_episodes(
     if not media:
         raise HTTPException(status_code=404, detail="Média non trouvé")
 
-    # Series created by the library sync have no episode yet: load them once.
-    await ensure_series_episodes(store, _optional_tmdb_client(), media)
+    # Series created by the library sync have no episode yet, and older series
+    # lack air dates/runtimes/seasons: load them from TMDB (weekly at most).
+    await ensure_series_metadata(store, _optional_tmdb_client(), media)
 
-    if isinstance(current, AuthContext):
-        episodes = await store.list_episodes_for_user(media_id, current.user["id"])
-        progress = await store.series_progress_for_user(media_id, current.user["id"])
+    user_id = current.user["id"] if isinstance(current, AuthContext) else None
+    if user_id:
+        episodes = await store.list_episodes_for_user(media_id, user_id)
+        progress = await store.series_progress_for_user(media_id, user_id)
+        playback = await store.list_episode_playback(media_id, user_id)
     else:
         episodes = await store.list_episodes(media_id)
         progress = await store.series_progress(media_id)
+        playback = {}
     availability = await store.get_availability(media_id)
     playable_episodes: set[tuple[int, int]] = set()
+    has_server = False
     list_series_episodes = getattr(jellyfin, "list_series_episodes", None)
     if availability and availability.jellyfin_id and callable(list_series_episodes):
         try:
@@ -1573,6 +1580,7 @@ async def get_series_episodes(
                 (item["ParentIndexNumber"], item["IndexNumber"])
                 for item in remote_episodes
             }
+            has_server = True
         except (httpx.HTTPError, ValueError):
             logger.exception("[jellyfin-episodes] Impossible de vérifier les épisodes de %s", media_id)
     episodes = [
@@ -1582,7 +1590,39 @@ async def get_series_episodes(
         }
         for episode in episodes
     ]
-    return {"episodes": episodes, "progress": progress}
+    view = build_series_view(
+        episodes, await store.get_series_metadata(media_id), playback, has_server=has_server,
+    )
+    return {**view, "progress": progress, "has_server": has_server}
+
+
+class UpdateSeasonRequest(BaseModel):
+    watched: bool
+
+
+@router.patch("/medias/{media_id}/seasons/{season_number}/watched")
+async def update_season_watched(
+    media_id: str,
+    season_number: int,
+    payload: UpdateSeasonRequest,
+    store: MediaStore = Depends(get_store),
+    current: AuthContext = Depends(get_current_user),
+    jellyfin: Optional[JellyfinClient] = Depends(get_jellyfin_client),
+):
+    """Mark every episode of a season as watched or unwatched in one call."""
+    media = await store.fetch_one(media_id)
+    if not media or media.type != "Série":
+        raise HTTPException(status_code=404, detail="Série non trouvée")
+    if isinstance(current, AuthContext):
+        changed = await store.set_user_season_watched(media_id, season_number, current.user["id"], payload.watched)
+    else:
+        episodes = [e for e in await store.list_episodes(media_id) if e["season_number"] == season_number]
+        for episode in episodes:
+            await store.set_episode_watched(episode["id"], payload.watched)
+        changed = len(episodes)
+    if not changed:
+        raise HTTPException(status_code=404, detail="Saison non trouvée")
+    return await get_series_episodes(media_id, store, current, jellyfin)
 
 
 @router.patch("/episodes/{episode_id}")
@@ -1643,7 +1683,7 @@ async def create_series_from_tmdb(
     if not details:
         raise HTTPException(status_code=400, detail="Impossible de récupérer les détails TMDB")
 
-    episodes = await _fetch_tmdb_series_episodes(payload.tmdb_id, details, tmdb)
+    tmdb_series = await _fetch_tmdb_series(payload.tmdb_id, details, tmdb)
 
     series = await store.create({
         "title": details.get("name") or details.get("title") or details.get("original_name") or "Sans titre",
@@ -1661,18 +1701,19 @@ async def create_series_from_tmdb(
         "tmdb_ok": True,
         "tmdb_id": payload.tmdb_id,
     })
-    await store.create_episodes(series.id, episodes)
+    await store.create_episodes(series.id, tmdb_series["episodes"])
+    await store.save_series_metadata(series.id, tmdb_series["seasons"], tmdb_series["info"])
     return await store.fetch_one(series.id)
 
 
-async def _fetch_tmdb_series_episodes(
+async def _fetch_tmdb_series(
     tmdb_id: int, details: Dict[str, Any], tmdb: TMDBClient,
-) -> List[Dict[str, Any]]:
-    """Load every non-special TMDB episode for an import or refresh."""
-    episodes = await fetch_tmdb_episodes(tmdb, tmdb_id, details)
-    if episodes is None:
+) -> Dict[str, Any]:
+    """Load episodes, seasons and series facts for an import or refresh."""
+    series = await fetch_tmdb_series(tmdb, tmdb_id, details)
+    if series is None:
         raise HTTPException(status_code=502, detail="Impossible de récupérer les épisodes TMDB")
-    return episodes
+    return series
 
 
 async def refresh_series_from_tmdb(media_id: str, store: MediaStore, tmdb: TMDBClient) -> Media:
@@ -1694,7 +1735,7 @@ async def refresh_series_from_tmdb(media_id: str, store: MediaStore, tmdb: TMDBC
     details = await tmdb.get_tv_details(tmdb_id)
     if not details:
         raise HTTPException(status_code=502, detail="Impossible de récupérer les détails TMDB")
-    episodes = await _fetch_tmdb_series_episodes(tmdb_id, details, tmdb)
+    tmdb_series = await _fetch_tmdb_series(tmdb_id, details, tmdb)
     updates = {
         "original_title": details.get("original_name") or series.original_title,
         "release_date": details.get("first_air_date") or details.get("release_date") or series.release_date,
@@ -1708,7 +1749,7 @@ async def refresh_series_from_tmdb(media_id: str, store: MediaStore, tmdb: TMDBC
         "tmdb_id": tmdb_id,
     }
     await store.update(media_id, updates)
-    await store.upsert_episodes(media_id, episodes)
+    await save_tmdb_series(store, media_id, tmdb_series)
     return await store.fetch_one(media_id)
 
 

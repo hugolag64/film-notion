@@ -174,19 +174,23 @@ def test_availability_is_refreshed_periodically_with_cleanup():
     assert "clearInterval" in source
 
 
+SERIES_VIEW = UI_SOURCE.parent / "components" / "SeriesDetailView.jsx"
+
+
 def test_series_detail_uses_the_centered_film_detail_shell():
     source = UI_SOURCE.read_text(encoding="utf-8")
-    series = source[source.index("{selectedSeries && ("):source.index("{/* TMDB Search & Relink Modal */}")]
+    view = SERIES_VIEW.read_text(encoding="utf-8")
 
-    assert "<FilmDetailView" in series
-    assert "FICHE SÉRIE" in series
-    assert "Statut de la série" in series
+    assert "<SeriesDetailView" in source
+    assert "<FilmDetailView" in view
+    assert "primaryEpisodeLabel" in view
 
 
-def test_series_detail_keeps_details_and_episodes_tabs():
-    source = UI_SOURCE.read_text(encoding="utf-8")
-    series = source[source.index("{selectedSeries && ("):source.index("{/* TMDB Search & Relink Modal */}")]
+def test_series_detail_shows_seasons_episodes_stats_and_about():
+    view = SERIES_VIEW.read_text(encoding="utf-8")
 
-    assert "Détails" in series
-    assert "Épisodes" in series
-    assert "groupEpisodesBySeason" in source
+    assert "groupEpisodesBySeason" in view
+    assert "Choisir la saison" in view
+    assert "Tout marquer vu" in view
+    assert "Épisodes vus" in view
+    assert "À propos" in view

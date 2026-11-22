@@ -675,3 +675,11 @@ export async function fetchPlaybackHealth() {
     const body = await readResponseBody(response);
     return body?.playback || 'unknown';
 }
+
+export async function updateSeasonWatched(mediaId, seasonNumber, watched) {
+    const response = await apiFetch(`${API_BASE_URL}/medias/${encodeURIComponent(mediaId)}/seasons/${seasonNumber}/watched`, {
+        method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({watched}),
+    });
+    if (!response.ok) throw new Error(`La saison n’a pas pu être mise à jour (erreur ${response.status}).`);
+    return response.json();
+}

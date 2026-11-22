@@ -129,7 +129,8 @@ def test_episode_api_reads_progress_and_updates_episode(tmp_path):
     initial = asyncio.run(get_series_episodes(series.id, store))
     updated = asyncio.run(update_episode(episode["id"], UpdateEpisodeRequest(watched=True), store))
 
-    assert initial["episodes"] == [{**episode, "available": False}]
+    assert initial["episodes"] == [{**episode, "available": False, "upcoming": False, "percent": 0}]
+    assert initial["next_episode"]["mode"] == "start"
     assert initial["progress"]["status"] == "À regarder"
     assert updated["episode"]["watched"] is True
     assert updated["episode"]["synopsis"] == "Episode synopsis"
@@ -212,6 +213,9 @@ def test_create_series_imports_unwatched_non_special_episodes(fake_tmdb, store):
             "episode_number": 1,
             "title": "Good News About Hell",
             "watched": False,
+            "air_date": None,
+            "runtime": None,
+            "still_url": None,
         },
         {
             "id": ANY,
@@ -220,6 +224,9 @@ def test_create_series_imports_unwatched_non_special_episodes(fake_tmdb, store):
             "episode_number": 2,
             "title": "Half Loop",
             "watched": False,
+            "air_date": None,
+            "runtime": None,
+            "still_url": None,
         },
     ]
 
@@ -351,3 +358,110 @@ def test_episode_api_without_tmdb_returns_empty_list(tmp_path, monkeypatch):
     monkeypatch.setattr(api_module, "_optional_tmdb_client", lambda: None)
 
     assert asyncio.run(get_series_episodes(series.id, store))["episodes"] == []
+
+
+def _view_episode(number, watched=False, available=True, air_date="2020-01-01", runtime=40, season=1):
+    return {
+        "id": f"s{season}e{number}", "media_id": "m", "season_number": season, "episode_number": number,
+        "title": f"Épisode {number}", "watched": watched, "available": available,
+        "air_date": air_date, "runtime": runtime, "still_url": None,
+    }
+
+
+def test_series_view_points_to_the_episode_after_the_last_watched():
+    from backend.core.series_episodes import build_series_view
+
+    episodes = [_view_episode(1, watched=True), _view_episode(2), _view_episode(3, watched=True), _view_episode(4)]
+    view = build_series_view(episodes, {"seasons": [], "info": None}, {}, has_server=True, today="2026-11-22")
+
+    assert view["next_episode"]["episode_number"] == 4
+    assert view["next_episode"]["mode"] == "next"
+    assert view["stats"]["watched"] == 2
+    assert view["stats"]["remaining_minutes"] == 80
+
+
+def test_series_view_resumes_a_started_episode_first():
+    from backend.core.series_episodes import build_series_view
+
+    episodes = [_view_episode(1, watched=True), _view_episode(2), _view_episode(3)]
+    playback = {(1, 3): {"percent": 42.0, "played": 0, "last_played_at": "2026-11-20T20:00:00+00:00"}}
+    view = build_series_view(episodes, {"seasons": [], "info": None}, playback, has_server=True, today="2026-11-22")
+
+    assert view["next_episode"]["episode_number"] == 3
+    assert view["next_episode"]["mode"] == "resume"
+    assert view["next_episode"]["percent"] == 42.0
+
+
+def test_series_view_summarises_season_availability_and_upcoming_episodes():
+    from backend.core.series_episodes import build_series_view
+
+    episodes = [
+        _view_episode(1, season=1), _view_episode(2, season=1),
+        _view_episode(1, season=2), _view_episode(2, season=2, available=False),
+        _view_episode(3, season=2, available=False, air_date="2027-01-01"),
+        _view_episode(1, season=3, available=False),
+    ]
+    metadata = {"seasons": [{"season_number": 2, "name": "Saison deux", "poster_url": "p.jpg"}], "info": None}
+    view = build_series_view(episodes, metadata, {}, has_server=True, today="2026-11-22")
+
+    seasons = {season["season_number"]: season for season in view["seasons"]}
+    assert seasons[1]["availability"] == "complete"
+    assert seasons[2]["availability"] == "partial"
+    assert seasons[2]["name"] == "Saison deux"
+    assert seasons[2]["aired"] == 2
+    assert seasons[3]["availability"] == "missing"
+    assert view["stats"]["upcoming"] == 1
+    assert view["stats"]["available"] == 3
+    assert [e["upcoming"] for e in view["episodes"] if e["season_number"] == 2] == [False, False, True]
+
+
+def test_series_view_without_server_hides_availability():
+    from backend.core.series_episodes import build_series_view
+
+    view = build_series_view([_view_episode(1, available=False)], {"seasons": [], "info": None}, {},
+                             has_server=False, today="2026-11-22")
+
+    assert view["seasons"][0]["availability"] is None
+    assert view["stats"]["available"] is None
+
+
+def test_season_watched_endpoint_marks_every_episode_for_the_user(tmp_path):
+    from backend.api import UpdateSeasonRequest, update_season_watched
+
+    store = _store(tmp_path)
+    series = asyncio.run(store.create({"title": "Severance", "type": "Série"}))
+    asyncio.run(store.create_episodes(series.id, [
+        {"season_number": 1, "episode_number": 1, "title": "A"},
+        {"season_number": 1, "episode_number": 2, "title": "B"},
+        {"season_number": 2, "episode_number": 1, "title": "C"},
+    ]))
+    user = AuthContext(user={"id": "user-a", "role": "user"}, session_id="s", token="t")
+
+    result = asyncio.run(update_season_watched(series.id, 1, UpdateSeasonRequest(watched=True), store, user, None))
+
+    assert [e["watched"] for e in result["episodes"]] == [True, True, False]
+    assert result["next_episode"]["season_number"] == 2
+
+
+def test_tmdb_series_loader_keeps_air_dates_runtimes_and_season_facts():
+    from backend.core.series_episodes import fetch_tmdb_series
+
+    class TMDB:
+        async def get_tv_details(self, tmdb_id):
+            return {"status": "Returning Series", "vote_average": 8.4, "first_air_date": "2022-02-18",
+                    "next_episode_to_air": {"air_date": "2027-01-10", "season_number": 3, "episode_number": 1},
+                    "seasons": [{"season_number": 0}, {"season_number": 1, "name": "Saison 1"}]}
+
+        async def get_tv_season_details(self, tmdb_id, season_number):
+            return {"name": "Saison 1", "poster_path": "/s1.jpg", "air_date": "2022-02-18", "episodes": [
+                {"episode_number": 1, "name": "Pilote", "air_date": "2022-02-18", "runtime": 57, "still_path": "/e1.jpg"},
+            ]}
+
+    series = asyncio.run(fetch_tmdb_series(TMDB(), 95396))
+
+    assert series["episodes"][0]["runtime"] == 57
+    assert series["episodes"][0]["still_url"] == "https://image.tmdb.org/t/p/w300/e1.jpg"
+    assert series["seasons"] == [{"season_number": 1, "name": "Saison 1", "overview": None,
+                                  "poster_url": "https://image.tmdb.org/t/p/w342/s1.jpg", "air_date": "2022-02-18"}]
+    assert series["info"]["tmdb_status"] == "Returning Series"
+    assert series["info"]["next_air_date"] == "2027-01-10"

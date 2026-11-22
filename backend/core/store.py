@@ -73,6 +73,42 @@ class MediaStore:
                 )
                 """
             )
+            episode_columns = {row[1] for row in conn.execute("PRAGMA table_info(episode)").fetchall()}
+            for column, sql_type in (("air_date", "TEXT"), ("runtime", "INTEGER"), ("still_url", "TEXT")):
+                if column not in episode_columns:
+                    conn.execute(f"ALTER TABLE episode ADD COLUMN {column} {sql_type}")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS series_season (
+                    media_id TEXT NOT NULL,
+                    season_number INTEGER NOT NULL,
+                    name TEXT,
+                    overview TEXT,
+                    poster_url TEXT,
+                    air_date TEXT,
+                    PRIMARY KEY (media_id, season_number),
+                    FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS series_info (
+                    media_id TEXT PRIMARY KEY,
+                    tmdb_status TEXT,
+                    first_air_date TEXT,
+                    last_air_date TEXT,
+                    number_of_seasons INTEGER,
+                    vote_average REAL,
+                    next_air_date TEXT,
+                    next_season_number INTEGER,
+                    next_episode_number INTEGER,
+                    next_episode_name TEXT,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE CASCADE
+                )
+                """
+            )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS media_availability (
@@ -864,6 +900,7 @@ class MediaStore:
             for table in (
                 "episode", "media_availability", "user_media_state",
                 "media_recommendation_preferences", "media_storage_protection",
+                "series_season", "series_info",
             ):
                 conn.execute(f"DELETE FROM {table} WHERE media_id = ?", (media_id,))
             cursor = conn.execute("DELETE FROM media WHERE id = ?", (media_id,))
@@ -914,7 +951,8 @@ class MediaStore:
             rows = conn.execute(
                 """
                 SELECT episode.id, episode.media_id, episode.season_number,
-                       episode.episode_number, episode.title, episode.synopsis, episode.watched
+                       episode.episode_number, episode.title, episode.synopsis, episode.watched,
+                       episode.air_date, episode.runtime, episode.still_url
                 FROM episode
                 JOIN media ON media.id = episode.media_id
                 WHERE episode.media_id = ? AND substr(media.type, 1, 1) = 'S' AND substr(media.type, -3) = 'rie'
@@ -931,6 +969,7 @@ class MediaStore:
                 """
                 SELECT episode.id, episode.media_id, episode.season_number,
                        episode.episode_number, episode.title, episode.synopsis,
+                       episode.air_date, episode.runtime, episode.still_url,
                        COALESCE(user_episode_state.watched, 0) AS watched
                 FROM episode
                 JOIN media ON media.id = episode.media_id
@@ -1000,8 +1039,9 @@ class MediaStore:
             for episode in episodes:
                 conn.execute(
                     """
-                    INSERT INTO episode (id, media_id, season_number, episode_number, title, synopsis, watched)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO episode (id, media_id, season_number, episode_number, title, synopsis, watched,
+                                         air_date, runtime, still_url)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         episode.get("id") or str(uuid.uuid4()),
@@ -1011,6 +1051,9 @@ class MediaStore:
                         episode["title"],
                         episode.get("synopsis"),
                         int(bool(episode.get("watched", False))),
+                        episode.get("air_date"),
+                        episode.get("runtime"),
+                        episode.get("still_url"),
                     ),
                 )
             self._recalculate_series_status(conn, media_id)
@@ -1027,19 +1070,116 @@ class MediaStore:
             for episode in episodes:
                 conn.execute(
                     """
-                    INSERT INTO episode (id, media_id, season_number, episode_number, title, synopsis, watched)
-                    VALUES (?, ?, ?, ?, ?, ?, 0)
+                    INSERT INTO episode (id, media_id, season_number, episode_number, title, synopsis, watched,
+                                         air_date, runtime, still_url)
+                    VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
                     ON CONFLICT(media_id, season_number, episode_number) DO UPDATE SET
                         title = excluded.title,
-                        synopsis = excluded.synopsis
+                        synopsis = excluded.synopsis,
+                        air_date = excluded.air_date,
+                        runtime = excluded.runtime,
+                        still_url = excluded.still_url
                     """,
                     (
                         str(uuid.uuid4()), media_id, episode["season_number"],
                         episode["episode_number"], episode["title"], episode.get("synopsis"),
+                        episode.get("air_date"), episode.get("runtime"), episode.get("still_url"),
                     ),
                 )
             self._recalculate_series_status(conn, media_id)
         return self._list_episodes_sync(media_id)
+
+    def _save_series_metadata_sync(
+        self, media_id: str, seasons: List[Dict[str, Any]], info: Dict[str, Any],
+    ) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            for season in seasons:
+                conn.execute(
+                    """
+                    INSERT INTO series_season (media_id, season_number, name, overview, poster_url, air_date)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(media_id, season_number) DO UPDATE SET
+                        name = excluded.name, overview = excluded.overview,
+                        poster_url = excluded.poster_url, air_date = excluded.air_date
+                    """,
+                    (media_id, season["season_number"], season.get("name"), season.get("overview"),
+                     season.get("poster_url"), season.get("air_date")),
+                )
+            conn.execute(
+                """
+                INSERT INTO series_info (
+                    media_id, tmdb_status, first_air_date, last_air_date, number_of_seasons,
+                    vote_average, next_air_date, next_season_number, next_episode_number,
+                    next_episode_name, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(media_id) DO UPDATE SET
+                    tmdb_status = excluded.tmdb_status, first_air_date = excluded.first_air_date,
+                    last_air_date = excluded.last_air_date, number_of_seasons = excluded.number_of_seasons,
+                    vote_average = excluded.vote_average, next_air_date = excluded.next_air_date,
+                    next_season_number = excluded.next_season_number,
+                    next_episode_number = excluded.next_episode_number,
+                    next_episode_name = excluded.next_episode_name, updated_at = excluded.updated_at
+                """,
+                (media_id, info.get("tmdb_status"), info.get("first_air_date"), info.get("last_air_date"),
+                 info.get("number_of_seasons"), info.get("vote_average"), info.get("next_air_date"),
+                 info.get("next_season_number"), info.get("next_episode_number"),
+                 info.get("next_episode_name"), now),
+            )
+
+    def _get_series_metadata_sync(self, media_id: str) -> Dict[str, Any]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            info = conn.execute("SELECT * FROM series_info WHERE media_id = ?", (media_id,)).fetchone()
+            seasons = conn.execute(
+                "SELECT season_number, name, overview, poster_url, air_date FROM series_season "
+                "WHERE media_id = ? ORDER BY season_number",
+                (media_id,),
+            ).fetchall()
+        return {
+            "info": dict(info) if info else None,
+            "seasons": [dict(row) for row in seasons],
+        }
+
+    def _list_episode_playback_sync(self, media_id: str, user_id: str) -> Dict[tuple, Dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT season_number, episode_number, percent, played, last_played_at
+                FROM playback_progress
+                WHERE backstage_user_id = ? AND media_id = ?
+                  AND season_number IS NOT NULL AND episode_number IS NOT NULL
+                """,
+                (user_id, media_id),
+            ).fetchall()
+        return {(row["season_number"], row["episode_number"]): dict(row) for row in rows}
+
+    def _set_user_season_watched_sync(
+        self, media_id: str, season_number: int, user_id: str, watched: bool,
+    ) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT episode.id FROM episode
+                JOIN media ON media.id = episode.media_id
+                WHERE episode.media_id = ? AND episode.season_number = ?
+                  AND substr(media.type, 1, 1) = 'S' AND substr(media.type, -3) = 'rie'
+                """,
+                (media_id, season_number),
+            ).fetchall()
+            for (episode_id,) in rows:
+                conn.execute(
+                    """
+                    INSERT INTO user_episode_state (backstage_user_id, episode_id, watched, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(backstage_user_id, episode_id) DO UPDATE SET
+                        watched = excluded.watched, updated_at = excluded.updated_at
+                    """,
+                    (user_id, episode_id, int(watched), now),
+                )
+        return len(rows)
 
     def _set_episode_watched_sync(self, episode_id: str, watched: bool) -> Optional[Dict[str, Any]]:
         with sqlite3.connect(self.db_path) as conn:
@@ -1059,7 +1199,8 @@ class MediaStore:
             self._recalculate_series_status(conn, episode["media_id"])
             row = conn.execute(
                 """
-                SELECT id, media_id, season_number, episode_number, title, synopsis, watched
+                SELECT id, media_id, season_number, episode_number, title, synopsis, watched,
+                       air_date, runtime, still_url
                 FROM episode WHERE id = ?
                 """,
                 (episode_id,),
@@ -1102,6 +1243,7 @@ class MediaStore:
                 """
                 SELECT episode.id, episode.media_id, episode.season_number,
                        episode.episode_number, episode.title, episode.synopsis,
+                       episode.air_date, episode.runtime, episode.still_url,
                        COALESCE(user_episode_state.watched, 0) AS watched
                 FROM episode
                 JOIN media ON media.id = episode.media_id
@@ -1757,6 +1899,24 @@ class MediaStore:
         self, episode_id: str, user_id: str, watched: bool,
     ) -> Optional[Dict[str, Any]]:
         return await asyncio.to_thread(self._set_user_episode_watched_sync, episode_id, user_id, watched)
+
+    async def save_series_metadata(
+        self, media_id: str, seasons: List[Dict[str, Any]], info: Dict[str, Any],
+    ) -> None:
+        await asyncio.to_thread(self._save_series_metadata_sync, media_id, seasons, info)
+
+    async def get_series_metadata(self, media_id: str) -> Dict[str, Any]:
+        return await asyncio.to_thread(self._get_series_metadata_sync, media_id)
+
+    async def list_episode_playback(self, media_id: str, user_id: str) -> Dict[tuple, Dict[str, Any]]:
+        return await asyncio.to_thread(self._list_episode_playback_sync, media_id, user_id)
+
+    async def set_user_season_watched(
+        self, media_id: str, season_number: int, user_id: str, watched: bool,
+    ) -> int:
+        return await asyncio.to_thread(
+            self._set_user_season_watched_sync, media_id, season_number, user_id, watched,
+        )
 
     async def series_progress(self, media_id: str) -> Optional[Dict[str, Any]]:
         return await asyncio.to_thread(self._series_progress_sync, media_id)

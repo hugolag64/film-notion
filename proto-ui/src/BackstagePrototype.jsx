@@ -10,12 +10,13 @@ import NotificationBell from './components/NotificationBell';
 import ChatDock from './components/ChatDock';
 import useLayer from './useLayer';
 import { useAuth } from './auth-context';
-import { fetchPlaybackHealth, fetchMedias, updateMedia, deleteMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, refreshSeriesFromTMDB, fetchAvailability, fetchJellyfinPlaybackTarget, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, cancelRental, fetchMediaServerActivity, syncMediaServer, syncPlayback, fetchAvailableMediaIds, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest } from './api';
+import { fetchPlaybackHealth, fetchMedias, updateMedia, deleteMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, updateSeasonWatched, refreshSeriesFromTMDB, fetchAvailability, fetchJellyfinPlaybackTarget, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, cancelRental, fetchMediaServerActivity, syncMediaServer, syncPlayback, fetchAvailableMediaIds, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest } from './api';
 import { filterAndSortMovies, filterOptions, normalizeStatus, mediaPath, parseMediaPath, searchLibrary } from './library';
 
 // Read once, before anything changes the address bar.
 const INITIAL_DEEP_LINK = parseMediaPath(window.location.pathname);
-import { groupEpisodesBySeason, replaceEpisode, seriesProgressText } from './series';
+import { replaceEpisode } from './series';
+import SeriesDetailView from './components/SeriesDetailView';
 import { DEFAULT_MAX_ACTIVE_RENTALS, DEFAULT_MAX_QUEUED_RENTALS, countQueuedRentals, countRentalsInUse, indexRentalsByMedia, isQueuedRental, rentalExpiryLabel, rentalStatusLabel } from './rentals';
 
 const ALL_GENRES = [
@@ -195,17 +196,15 @@ export default function BackstagePrototype() {
     }, []);
     const [selectedSeries, setSelectedSeries] = useState(null);
     const [seriesEpisodes, setSeriesEpisodes] = useState([]);
-    const [seriesProgress, setSeriesProgress] = useState(null);
-    const [openSeasons, setOpenSeasons] = useState({});
-    const [openEpisodes, setOpenEpisodes] = useState({});
-    const [seriesTab, setSeriesTab] = useState('details');
+    const [, setSeriesProgress] = useState(null);
+    const [seriesView, setSeriesView] = useState(null);
+    const [seriesLoading, setSeriesLoading] = useState(false);
     const [seriesRefreshing, setSeriesRefreshing] = useState(false);
-    const [seriesBackdropFailed, setSeriesBackdropFailed] = useState(false);
+    const seriesViewTimer = useRef(null);
     const seriesRequestId = useRef(0);
     const selectedSeriesId = useRef(null);
     const episodeUpdateQueue = useRef(Promise.resolve());
     const episodeIntents = useRef(new Map());
-    const episodeClickTimers = useRef(new Map());
     const [searchQuery, setSearchQuery] = useState('');
     const [headerSearchResults, setHeaderSearchResults] = useState([]);
     const [headerSearchTotal, setHeaderSearchTotal] = useState({count: 0, total: 0, collection: 'Films'});
@@ -1213,18 +1212,57 @@ export default function BackstagePrototype() {
         });
         setSeriesEpisodes([]);
         setSeriesProgress(null);
-        setSeriesBackdropFailed(false);
-        setOpenSeasons({});
-        setSeriesTab('episodes');
+        setSeriesView(null);
+        setSeriesLoading(true);
         try {
             const details = await fetchSeriesEpisodes(series.id);
             if (requestId !== seriesRequestId.current || selectedSeriesId.current !== series.id) return;
-            setSeriesEpisodes(details.episodes || []);
-            setSeriesProgress(details.progress);
-            const firstSeason = details.progress?.seasons?.[0]?.season_number;
-            if (firstSeason !== undefined) setOpenSeasons({ [firstSeason]: true });
+            applySeriesDetails(details);
         } catch (error) {
             console.error('Impossible de charger les épisodes de la série:', error);
+        } finally {
+            if (requestId === seriesRequestId.current) setSeriesLoading(false);
+        }
+    };
+
+    const applySeriesDetails = (details, {keepEpisodes = false} = {}) => {
+        if (!keepEpisodes) setSeriesEpisodes(details.episodes || []);
+        setSeriesProgress(details.progress);
+        setSeriesView({
+            seasons: details.seasons || [], stats: details.stats || null, info: details.info || null,
+            next_episode: details.next_episode || null, has_server: Boolean(details.has_server),
+        });
+    };
+
+    // After watch toggles settle, refresh the server-computed parts (next episode, stats).
+    const scheduleSeriesViewRefresh = (mediaId) => {
+        window.clearTimeout(seriesViewTimer.current);
+        seriesViewTimer.current = window.setTimeout(async () => {
+            if (selectedSeriesId.current !== mediaId || episodeIntents.current.size) return;
+            try {
+                const details = await fetchSeriesEpisodes(mediaId);
+                if (selectedSeriesId.current === mediaId && !episodeIntents.current.size) {
+                    applySeriesDetails(details, {keepEpisodes: true});
+                }
+            } catch (error) {
+                console.error('Impossible de rafraîchir la fiche série:', error);
+            }
+        }, 700);
+    };
+
+    const setSeasonWatched = async (seasonNumber, watched) => {
+        const mediaId = selectedSeriesId.current;
+        if (!mediaId) return;
+        try {
+            const details = await updateSeasonWatched(mediaId, seasonNumber, watched);
+            if (selectedSeriesId.current !== mediaId) return;
+            applySeriesDetails(details);
+            setSelectedSeries((current) => current ? { ...current, status: details.progress?.status || current.status } : null);
+            setMovies((current) => current.map((movie) => (
+                movie.id === mediaId && details.progress ? { ...movie, status: details.progress.status } : movie
+            )));
+        } catch (error) {
+            showToast(error.message || 'La saison n’a pas pu être mise à jour.', 'error');
         }
     };
 
@@ -1261,8 +1299,7 @@ export default function BackstagePrototype() {
             setSelectedSeries(mapped);
             setMovies((current) => current.map((media) => media.id === refreshed.id ? { ...media, ...mapped, status: refreshed.status } : media));
             const details = await fetchSeriesEpisodes(refreshed.id);
-            setSeriesEpisodes(details.episodes || []);
-            setSeriesProgress(details.progress);
+            applySeriesDetails(details);
         } catch (error) {
             console.error('Impossible d’actualiser la série depuis TMDB:', error);
         } finally {
@@ -1296,6 +1333,7 @@ export default function BackstagePrototype() {
                     }
                     setSeriesProgress(result.progress);
                     setSelectedSeries((current) => current ? { ...current, status: result.progress.status } : null);
+                    scheduleSeriesViewRefresh(mediaId);
                 } catch (error) {
                     console.error('Impossible de mettre à jour cet épisode:', error);
                     const isCurrentSeries = selectedSeriesId.current === mediaId;
@@ -1315,23 +1353,6 @@ export default function BackstagePrototype() {
             });
     };
 
-    const handleEpisodeClick = (episodeId) => {
-        const timer = window.setTimeout(() => {
-            episodeClickTimers.current.delete(episodeId);
-            setOpenEpisodes((current) => ({ ...current, [episodeId]: !current[episodeId] }));
-        }, 220);
-        episodeClickTimers.current.set(episodeId, timer);
-    };
-
-    const handleEpisodeDoubleClick = (event, episode) => {
-        event.preventDefault();
-        const timer = episodeClickTimers.current.get(episode.id);
-        if (timer) {
-            window.clearTimeout(timer);
-            episodeClickTimers.current.delete(episode.id);
-        }
-        toggleEpisode(episode);
-    };
 
     return (
         <div className={`min-h-screen pb-[calc(3.5rem+env(safe-area-inset-bottom))] lg:pb-0 font-sans antialiased selection:bg-[#635bff] selection:text-white flex flex-col transition-colors duration-300 ${isDarkMode ? 'bg-[#0a0a0a] text-white' : 'bg-[#f6f9fc] text-[#0a2540]'
@@ -1824,119 +1845,37 @@ export default function BackstagePrototype() {
 
 
             {selectedSeries && (
-                <FilmDetailView media={selectedSeries} isDarkMode={isDarkMode} onClose={closeSeries} url={mediaPath(selectedSeries)}>
-                    <div className={`flex h-[min(94vh,980px)] w-full max-w-5xl flex-col overflow-y-auto rounded-2xl border shadow-2xl animate-fade-in-smooth cursor-default ${isDarkMode
-                        ? 'bg-[#0a0a0a] text-white border-white/10'
-                        : 'bg-[#f6f9fc] text-[#0a2540] border-[#e3e8ee]'}`} onClick={(event) => event.stopPropagation()}>
-                        <div className="relative aspect-[16/9] shrink-0 overflow-hidden bg-slate-950">
-                            {selectedSeries.hasBackdrop && !seriesBackdropFailed ? (
-                                <img src={selectedSeries.backdrop} alt="" onError={() => setSeriesBackdropFailed(true)} className="h-full w-full object-cover" />
-                            ) : (
-                                /* No landscape image: blurred poster + poster thumbnail, like the film fiche */
-                                <div className="relative h-full w-full overflow-hidden bg-gradient-to-br from-[#1a1c29] via-[#0d101d] to-[#04060c]">
-                                    <img src={selectedSeries.poster} alt="" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-35 blur-2xl" />
-                                    <img src={selectedSeries.poster} alt="" className="absolute right-6 top-6 hidden h-[70%] rounded-lg border border-white/20 object-cover shadow-2xl sm:block md:right-10" />
-                                </div>
-                            )}
-                            <div className="absolute inset-0 bg-gradient-to-t from-black via-black/45 to-transparent" />
-                            <div className="absolute inset-0 bg-gradient-to-r from-black/60 via-transparent to-transparent" />
-                            <button onClick={closeSeries} className="absolute right-4 top-4 rounded-full bg-black/60 px-3 py-2 text-xs text-white">✕</button>
-                            <div className="absolute bottom-6 left-6 right-6 text-white md:left-8 md:right-8">
-                                <span className="rounded bg-[#635bff] px-2 py-1 text-xs font-mono font-bold">FICHE SÉRIE</span>
-                                <h2 className="mt-2 text-3xl font-serif font-bold md:text-5xl">{selectedSeries.title}</h2>
-                                <p className="mt-1 text-xs text-white/70">Créée par {selectedSeries.director || '—'} • {selectedSeries.year || '—'}</p>
-                            </div>
+                <SeriesDetailView
+                    key={selectedSeries.id}
+                    series={selectedSeries}
+                    url={mediaPath(selectedSeries)}
+                    episodes={seriesEpisodes}
+                    view={seriesView}
+                    loading={seriesLoading}
+                    isDarkMode={isDarkMode}
+                    isAdmin={isAdmin}
+                    mediaAction={mediaAction}
+                    onClose={closeSeries}
+                    onPlayEpisode={openEpisodePlayer}
+                    onToggleEpisode={toggleEpisode}
+                    onSetSeasonWatched={setSeasonWatched}
+                    onStatusChange={(status) => handleStatusChange(selectedSeries.id, status)}
+                    onShare={() => shareMedia(selectedSeries)}
+                    onToggleWatchlist={() => toggleWatchlist(selectedSeries.id)}
+                    onAcquire={openAcquisition}
+                    onRefresh={refreshSelectedSeries}
+                    refreshing={seriesRefreshing}
+                    onUseOriginalTitle={useOriginalSeriesTitle}
+                    rentalPanel={selectedRental && (
+                        <div className="rounded-xl border border-[#635bff]/30 bg-[#635bff]/5 p-4 text-xs">
+                            <div>Location : <strong>{rentalStatusLabel(selectedRental)}</strong></div>
+                            {rentalExpiryLabel(selectedRental) && <div className="mt-1 opacity-70">Location : {rentalExpiryLabel(selectedRental)} (le {new Date(selectedRental.expires_at).toLocaleDateString('fr-FR')})</div>}
+                            {isQueuedRental(selectedRental) && <div className="mt-1 opacity-70">Demande prise en compte : la série n’est pas encore dans Jellyfin. Elle apparaîtra ici dès qu’elle sera disponible.</div>}
+                            {isQueuedRental(selectedRental) && <button onClick={() => cancelQueuedRental()} className="mr-2 mt-2 rounded border border-rose-500/50 px-2 py-1 font-semibold text-rose-500">Annuler la demande</button>}
+                            {selectedRental.status === 'available' && <button onClick={() => keepRental()} className="mt-2 rounded border border-[#635bff] px-2 py-1 font-semibold text-[#635bff]">Demander à conserver</button>}
                         </div>
-
-                        <div className="p-5">
-                            <div className={`mb-5 rounded-xl border p-5 shadow-sm ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
-                                <h3 className="text-xs font-mono uppercase tracking-widest opacity-75">Statut de la série</h3>
-                                <div className="mt-3 flex flex-wrap gap-2">
-                                    {['À regarder', 'Terminée'].map((status) => <button key={status} onClick={() => handleStatusChange(selectedSeries.id, status)} className={`rounded-lg border px-3 py-2 text-xs ${(status === 'Terminée' ? ['Terminé', 'Terminée'].includes(selectedSeries.status) : selectedSeries.status === status) ? 'border-[#635bff] bg-[#635bff]/10 text-[#635bff]' : 'opacity-70'}`}>{status}</button>)}
-                                    <button type="button" onClick={() => shareMedia(selectedSeries)} className="rounded-lg border px-3 py-2 text-xs opacity-70" aria-label={`Partager le lien de ${selectedSeries.title}`} title="Partager le lien"><Icon name="send" className="mr-1 h-3.5 w-3.5 align-[-2px]" />Partager</button>
-                                    <button type="button" onClick={() => toggleWatchlist(selectedSeries.id)} className={`rounded-lg border px-3 py-2 text-xs ${selectedSeries.isWatchlist ? 'border-blue-500/40 bg-blue-500/10 text-blue-500' : 'opacity-70'}`}><Icon name="pin" className="mr-1 h-3.5 w-3.5 align-[-2px]" />Watchlist</button>
-                                </div>
-                            </div>
-                            <div className={`mb-5 flex items-center justify-between gap-4 rounded-xl border p-4 shadow-sm ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
-                                <div>
-                                    <p className="text-sm font-semibold">{mediaAction.canPlay ? 'Cette série est disponible' : 'Cette série n’est pas encore disponible'}</p>
-                                    <p className="mt-1 text-xs opacity-75">{mediaAction.canPlay ? 'Lecture depuis le serveur' : (isAdmin ? 'Lancer une demande de téléchargement via Seerr' : selectedMedia?.type === 'Série' ? 'Demande-la à l’admin' : 'Location de 21 jours, lisible dès la fin du téléchargement')}</p>
-                                </div>
-                                <button onClick={mediaAction.disabled ? undefined : mediaAction.canPlay ? (selectedMedia?.type === 'Série' ? () => setSeriesTab('episodes') : openPlayer) : openAcquisition} disabled={mediaAction.disabled} className="rounded-lg bg-[#635bff] px-4 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60">{selectedMedia?.type === 'Série' && mediaAction.canPlay ? 'Choisir un épisode' : mediaAction.label}</button>
-                            </div>
-                            <div className={`mb-5 flex rounded-xl border p-1 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
-                                {[['episodes', 'Épisodes'], ['details', 'Détails']].map(([tab, label]) => <button key={tab} onClick={() => setSeriesTab(tab)} className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold transition ${seriesTab === tab ? 'bg-[#635bff] text-white shadow-lg' : 'opacity-75 hover:opacity-100'}`}>{label}</button>)}
-                            </div>
-
-                            {seriesTab === 'details' && <div className="space-y-5 animate-fade-in-smooth">
-                                {selectedSeries.originalTitle && selectedSeries.originalTitle !== selectedSeries.title && <div className={`rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
-                                    <p className="text-xs font-mono uppercase tracking-widest opacity-75">Titre original</p>
-                                    <div className="mt-2 flex items-center justify-between gap-3"><strong>{selectedSeries.originalTitle}</strong>{isAdmin && <button onClick={useOriginalSeriesTitle} className="rounded-lg border border-[#635bff]/40 px-3 py-1.5 text-xs font-semibold text-[#635bff]">Utiliser comme titre principal</button>}</div>
-                                </div>}
-                                <div className={`rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
-                                    <div className="flex items-center justify-between gap-3"><p className="text-xs font-mono uppercase tracking-widest opacity-75">Synopsis</p>{isAdmin && <button onClick={refreshSelectedSeries} disabled={seriesRefreshing} className="rounded-lg bg-[#635bff] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{seriesRefreshing ? 'Actualisation…' : 'Actualiser TMDB'}</button>}</div>
-                                    <p className="mt-3 text-sm leading-6 opacity-80">{selectedSeries.synopsis || 'Aucun synopsis disponible.'}</p>
-                                    {selectedRental && (
-                                        <div className="mt-3 rounded-lg border border-[#635bff]/30 bg-[#635bff]/5 p-3 text-xs">
-                                            <div>Location : <strong>{rentalStatusLabel(selectedRental)}</strong></div>
-                                            {rentalExpiryLabel(selectedRental) && <div className="mt-1 opacity-70">Location : {rentalExpiryLabel(selectedRental)} (le {new Date(selectedRental.expires_at).toLocaleDateString('fr-FR')})</div>}
-                                            {isQueuedRental(selectedRental) && <div className="mt-1 opacity-70">Demande prise en compte : le film n’est pas encore dans Jellyfin. Il apparaîtra ici dès qu’il sera disponible.</div>}{isQueuedRental(selectedRental) && <button onClick={() => cancelQueuedRental()} className="mr-2 mt-2 rounded border border-rose-500/50 px-2 py-1 font-semibold text-rose-500">Annuler la demande</button>}{selectedRental.status === 'available' && <button onClick={() => keepRental()} className="mt-2 rounded border border-[#635bff] px-2 py-1 font-semibold text-[#635bff]">Demander à conserver</button>}
-                                        </div>
-                                    )}
-                                </div>
-                                <div className={`rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
-                                    <p className="text-xs font-mono uppercase tracking-widest opacity-75">Informations</p>
-                                    <div className="mt-3 grid grid-cols-2 gap-4 text-sm"><div><span className="block text-xs opacity-75">Créateur</span>{selectedSeries.director || '—'}</div><div><span className="block text-xs opacity-75">Statut</span>{selectedSeries.status || 'À regarder'}</div><div className="col-span-2"><span className="block text-xs opacity-75">Genres</span>{(selectedSeries.genre || []).join(' • ') || '—'}</div><div className="col-span-2"><span className="block text-xs opacity-75">Casting</span>{(selectedSeries.cast || []).join(' • ') || '—'}</div></div>
-                                </div>
-                            </div>}
-
-                            {seriesTab === 'episodes' && <div className="space-y-4 animate-fade-in-smooth">
-                            <div className={`series-progress rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
-                                <div className="flex items-center justify-between gap-3 text-xs font-mono">
-                                    <strong>Progression générale</strong>
-                                    <span>{seriesProgressText(seriesProgress)}</span>
-                                </div>
-                                <div className="mt-3 h-2 overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
-                                    <div className="series-progress-fill h-full rounded-full bg-[#635bff]" style={{ width: `${seriesProgress?.percentage || 0}%` }} />
-                                </div>
-                            </div>
-
-                            {Object.entries(groupEpisodesBySeason(seriesEpisodes)).map(([seasonNumber, episodes]) => {
-                                const progress = seriesProgress?.seasons?.find((season) => String(season.season_number) === seasonNumber);
-                                const isOpen = openSeasons[seasonNumber];
-                                return (
-                                    <div key={seasonNumber} className={`overflow-hidden rounded-xl border ${isDarkMode ? 'border-white/10' : 'border-[#e3e8ee] bg-white'}`}>
-                                        <button onClick={() => setOpenSeasons((current) => ({ ...current, [seasonNumber]: !isOpen }))} className="flex w-full items-center justify-between gap-3 p-4 text-left">
-                                            <span className="font-semibold">Saison {seasonNumber}</span>
-                                            <span className="text-xs font-mono text-[#635bff]">{progress ? `${progress.watched} / ${progress.total} • ${Math.round(progress.percentage)} %` : 'Chargement…'} {isOpen ? '⌃' : '⌄'}</span>
-                                        </button>
-                                        <div className="h-1 bg-black/10 dark:bg-white/10"><div className="series-progress-fill h-full bg-[#635bff]" style={{ width: `${progress?.percentage || 0}%` }} /></div>
-                                        <div className={`season-content ${isOpen ? 'season-content-open' : ''}`}><div className="divide-y divide-black/10 dark:divide-white/10">
-                                            {episodes.map((episode) => (
-                                                <div key={episode.id} onClick={() => handleEpisodeClick(episode.id)} onDoubleClick={(event) => handleEpisodeDoubleClick(event, episode)} className="cursor-pointer p-3 text-sm">
-                                                    <div className="flex items-center gap-3">
-                                                    <input type="checkbox" checked={episode.watched} onClick={(event) => event.stopPropagation()} onChange={() => toggleEpisode(episode)} className="h-4 w-4 accent-[#635bff]" />
-                                                    <span className="font-mono text-xs text-[#635bff]">E{String(episode.episode_number).padStart(2, '0')}</span>
-                                                    <span className={episode.watched ? 'line-through opacity-75' : ''}>{episode.title}</span>
-                                                    {episode.available
-                                                        ? <button type="button" onClick={(event) => { event.stopPropagation(); openEpisodePlayer(episode); }} className="ml-auto rounded-md bg-[#635bff] px-3 py-1 text-xs font-semibold text-white">Lire</button>
-                                                        : <span className="ml-auto text-xs opacity-75">Non téléchargé</span>}
-                                                    </div>
-                                                    {openEpisodes[episode.id] && <p className="ml-7 mt-2 text-xs leading-relaxed opacity-70">{episode.synopsis || 'Aucun synopsis disponible pour cet épisode.'}</p>}
-                                                </div>
-                                            ))}
-                                        </div></div>
-                                    </div>
-                                );
-                            })}
-                            {!seriesEpisodes.length && seriesProgress && <div className="py-8 text-center text-xs opacity-75">
-                                <p>La liste des épisodes n’a pas pu être chargée depuis TMDB.</p>
-                                {isAdmin && <button onClick={refreshSelectedSeries} disabled={seriesRefreshing} className="mt-3 rounded-lg bg-[#635bff] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{seriesRefreshing ? 'Actualisation…' : 'Actualiser depuis TMDB'}</button>}
-                            </div>}
-                            </div>}
-                        </div>
-                    </div>
-                </FilmDetailView>
+                    )}
+                />
             )}
 
 

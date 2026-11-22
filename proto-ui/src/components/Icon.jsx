@@ -21,6 +21,10 @@ const PATHS = {
     smile: <><circle cx="12" cy="12" r="9" /><path d="M8.5 14.5c1 1.2 2.1 1.8 3.5 1.8s2.5-.6 3.5-1.8M9 9.5h.01M15 9.5h.01" /></>,
     send: <path d="M4 12l16-8-6 16-2.5-6.5L4 12Z" />,
     minus: <path d="M5 12h14" />,
+    play: <path d="M7 4.5v15l12-7.5-12-7.5Z" />,
+    more: <path d="M5 12h.01M12 12h.01M19 12h.01" />,
+    star: <path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9L12 3.5Z" />,
+    download: <path d="M12 4v11M7 10.5l5 5 5-5M5 20h14" />,
 };
 
 export default function Icon({name, className = 'h-4 w-4', filled = false}) {
