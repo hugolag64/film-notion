@@ -794,3 +794,88 @@ def test_scheduler_syncs_when_only_jellyfin_is_configured(monkeypatch):
     monkeypatch.setattr(Config, "jellyfin_enabled", classmethod(lambda cls: True))
 
     assert should_sync_media_servers() is True
+
+
+class _SeriesTMDB:
+    """TMDB double for the Person of Interest sync scenario."""
+
+    find_calls: list = []
+
+    def __init__(self):
+        pass
+
+    async def find_tmdb_id(self, external_id, source, is_series):
+        _SeriesTMDB.find_calls.append((external_id, source, is_series))
+        return 1411 if (source, external_id) == ("tvdb_id", "248742") else None
+
+    async def get_details(self, tmdb_id, is_series=False):
+        return {"name": "Person of Interest", "poster_path": "/p.jpg", "backdrop_path": "/b.jpg",
+                "overview": "La Machine.", "genres": [], "credits": {"cast": [], "crew": []}}
+
+    async def get_tv_details(self, tmdb_id):
+        return {"seasons": [{"season_number": 1}]}
+
+    async def get_tv_season_details(self, tmdb_id, season_number):
+        return {"episodes": [{"episode_number": 1, "name": "Pilote"}, {"episode_number": 2, "name": "Ghosts"}]}
+
+    def get_poster_url(self, details):
+        return "https://image.tmdb.org/t/p/w500/p.jpg"
+
+    def get_backdrop_url(self, details):
+        return "https://image.tmdb.org/t/p/w1280/b.jpg"
+
+    def get_genres(self, details):
+        return ["Drame"]
+
+    def get_cast(self, details, limit=5):
+        return []
+
+    def get_director(self, details):
+        return "Jonathan Nolan"
+
+
+def test_import_links_tvdb_only_jellyfin_series_and_loads_its_episodes(tmp_path, monkeypatch):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    existing = asyncio.run(store.create({
+        "id": "poi", "title": "Person of Interest", "type": "Série", "tmdb_id": 1411,
+        "cover_url": "https://image.tmdb.org/t/p/w500/p.jpg", "synopsis": "La Machine.",
+    }))
+    monkeypatch.setattr(media_server_module, "TMDBClient", _SeriesTMDB)
+    jellyfin = FakeJellyfinLibrary([{
+        "jellyfin_id": "jf-poi", "tmdb_id": None, "tvdb_id": 248742, "imdb_id": None,
+        "title": "Person of Interest", "media_type": "Série",
+    }])
+    service = MediaServerService(store, jellyfin=jellyfin)
+
+    summary = asyncio.run(service.import_existing_libraries())
+
+    assert summary["created"] == 0
+    availability = asyncio.run(store.get_availability(existing.id))
+    assert availability.jellyfin_id == "jf-poi"
+    assert availability.state == "available"
+    episodes = asyncio.run(store.list_episodes(existing.id))
+    assert [(e["season_number"], e["episode_number"]) for e in episodes] == [(1, 1), (1, 2)]
+    media = asyncio.run(store.fetch_one(existing.id))
+    assert media.backdrop_url == "https://image.tmdb.org/t/p/w1280/b.jpg"
+
+
+def test_sonarr_series_with_only_tvdb_id_is_matched_by_tmdb(tmp_path, monkeypatch):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    asyncio.run(store.create({"id": "poi", "title": "Person of Interest", "type": "Série", "tmdb_id": 1411}))
+    monkeypatch.setattr(media_server_module, "TMDBClient", _SeriesTMDB)
+
+    class FakeSonarr:
+        async def list_library(self):
+            return [{"id": 9, "tvdbId": 248742, "title": "Person of Interest", "hasFile": True}]
+
+        async def list_queue(self):
+            return []
+
+    service = MediaServerService(store, sonarr=FakeSonarr())
+
+    summary = asyncio.run(service.import_existing_libraries())
+
+    assert summary == {"linked": 1, "created": 0}
+    assert asyncio.run(store.get_availability("poi")).arr_id == 9

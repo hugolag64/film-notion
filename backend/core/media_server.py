@@ -9,12 +9,69 @@ from pydantic import BaseModel, Field
 from backend.core.playback import PlaybackProgress
 from backend.config import Config
 from backend.core.seerr import SeerrDuplicateRequest
+from backend.core.series_episodes import ensure_series_episodes
 from backend.core.tmdb import TMDBClient
 
 
 logger = logging.getLogger(__name__)
 STALE_REQUEST_GRACE = timedelta(hours=1)
 HARD_STORAGE_PROTECTION_REASONS = {"favorite", "active_rental", "manual"}
+# (source, external id, is_series) -> TMDB id, so each sync does not ask TMDB again.
+_EXTERNAL_TMDB_IDS: dict[tuple[str, str, bool], int] = {}
+# Medias already enriched once in this process (avoid a TMDB call per sync).
+_ENRICHED_MEDIA_IDS: set[tuple[str, str]] = set()
+
+
+def _optional_tmdb():
+    try:
+        return TMDBClient()
+    except ValueError:
+        return None
+
+
+async def _lookup_tmdb_id(tmdb, external_ids: list[tuple[str, Any]], is_series: bool) -> Optional[int]:
+    """Translate the first resolvable TVDB/IMDb id into a TMDB id."""
+    if tmdb is None or not hasattr(tmdb, "find_tmdb_id"):
+        return None
+    for source, value in external_ids:
+        if not value:
+            continue
+        key = (source, str(value), is_series)
+        if key not in _EXTERNAL_TMDB_IDS:
+            found = await tmdb.find_tmdb_id(str(value), source, is_series)
+            if not found:
+                continue  # not cached: a TMDB outage must not hide the item forever
+            _EXTERNAL_TMDB_IDS[key] = found
+        return _EXTERNAL_TMDB_IDS[key]
+    return None
+
+
+async def resolve_jellyfin_tmdb_ids(items: list[dict[str, Any]], tmdb) -> list[dict[str, Any]]:
+    """Fill ``tmdb_id`` on Jellyfin items only known by TVDB/IMDb ids."""
+    resolved = []
+    for item in items:
+        if item.get("tmdb_id") is None:
+            tmdb_id = await _lookup_tmdb_id(
+                tmdb, [("tvdb_id", item.get("tvdb_id")), ("imdb_id", item.get("imdb_id"))],
+                item.get("media_type") == "Série",
+            )
+            item = {**item, "tmdb_id": tmdb_id}
+        resolved.append(item)
+    return resolved
+
+
+async def resolve_arr_tmdb_ids(items: list[dict[str, Any]], tmdb, is_series: bool) -> list[dict[str, Any]]:
+    """Sonarr v3 only exposes ``tvdbId``: translate it so TMDB matching works."""
+    resolved = []
+    for item in items:
+        if not item.get("tmdbId"):
+            tmdb_id = await _lookup_tmdb_id(
+                tmdb, [("tvdb_id", item.get("tvdbId")), ("imdb_id", item.get("imdbId"))], is_series,
+            )
+            if tmdb_id:
+                item = {**item, "tmdbId": tmdb_id}
+        resolved.append(item)
+    return resolved
 
 
 AvailabilityState = Literal[
@@ -62,6 +119,16 @@ class MediaServerService:
         self.sonarr = sonarr
         self.jellyfin = jellyfin
         self.seerr = seerr
+
+    async def _jellyfin_library(self, tmdb=None) -> list[dict[str, Any]]:
+        items = await self.jellyfin.list_library()
+        return await resolve_jellyfin_tmdb_ids(items, tmdb if tmdb is not None else _optional_tmdb())
+
+    async def _arr_library(self, client, is_series: bool, tmdb=None) -> list[dict[str, Any]]:
+        items = await client.list_library()
+        if not is_series:
+            return items
+        return await resolve_arr_tmdb_ids(items, tmdb if tmdb is not None else _optional_tmdb(), True)
 
     async def add(
         self, media, quality_profile_id: Optional[int], root_folder: Optional[str],
@@ -126,7 +193,7 @@ class MediaServerService:
         jellyfin_error = None
         if library_items is None and hasattr(self.jellyfin, "list_library"):
             try:
-                library_items = await self.jellyfin.list_library()
+                library_items = await self._jellyfin_library()
             except Exception as error:
                 library_items = None
                 jellyfin_error = "Jellyfin indisponible"
@@ -185,7 +252,7 @@ class MediaServerService:
             remote = None
             if arr is not None:
                 if arr_items is None:
-                    arr_items = await arr.list_library()
+                    arr_items = await self._arr_library(arr, provider == "sonarr")
                 remote = next((item for item in arr_items if item.get("tmdbId") == media.tmdb_id), None)
             if jellyfin_item:
                 return await self._save_jellyfin_availability(media, provider, jellyfin_item, remote)
@@ -303,8 +370,11 @@ class MediaServerService:
         return await self.jellyfin.fetch_playback_resource(item_id, resource_path, query)
 
     async def _enrich_media(self, media, media_type: str, tmdb):
-        if not tmdb or not media.tmdb_id or (media.cover_url and media.synopsis):
+        complete = media.cover_url and media.synopsis and media.backdrop_url
+        enrich_key = (str(getattr(self.store, "db_path", "")), media.id)
+        if not tmdb or not media.tmdb_id or complete or enrich_key in _ENRICHED_MEDIA_IDS:
             return media
+        _ENRICHED_MEDIA_IDS.add(enrich_key)
         try:
             details = await tmdb.get_details(media.tmdb_id, is_series=media_type == "Série")
             if details:
@@ -339,8 +409,10 @@ class MediaServerService:
         ):
             if client is None:
                 continue
-            for remote in await client.list_library():
+            for remote in await self._arr_library(client, media_type == "Série", tmdb):
                 tmdb_id = remote.get("tmdbId")
+                if not tmdb_id:
+                    continue
                 media = next((item for item in medias if item.type == media_type and item.tmdb_id == tmdb_id), None)
                 if not media:
                     title = remote.get("title") or remote.get("sortTitle") or "Sans titre"
@@ -351,6 +423,7 @@ class MediaServerService:
                     medias.append(media)
                     created += 1
                 media = await self._enrich_media(media, media_type, tmdb)
+                await ensure_series_episodes(self.store, tmdb, media)
                 await self.store.upsert_availability(Availability(
                     media_id=media.id, provider=provider, arr_id=remote.get("id"),
                     state="imported" if remote.get("hasFile") else "requested",
@@ -359,7 +432,7 @@ class MediaServerService:
                 linked += 1
         if self.jellyfin and hasattr(self.jellyfin, "list_library"):
             try:
-                jellyfin_items = await self.jellyfin.list_library()
+                jellyfin_items = await self._jellyfin_library(tmdb)
             except Exception as error:
                 logger.warning("[jellyfin-sync] Library import failed: %s", error)
                 jellyfin_items = []
@@ -377,6 +450,7 @@ class MediaServerService:
                     medias.append(media)
                     created += 1
                 media = await self._enrich_media(media, media_type, tmdb)
+                await ensure_series_episodes(self.store, tmdb, media)
                 await self._save_jellyfin_availability(
                     media, "sonarr" if media_type == "Série" else "radarr", item,
                 )
@@ -388,7 +462,7 @@ class MediaServerService:
         jellyfin_items = None
         if self.jellyfin and hasattr(self.jellyfin, "list_library"):
             try:
-                jellyfin_items = await self.jellyfin.list_library()
+                jellyfin_items = await self._jellyfin_library()
             except Exception as error:
                 logger.warning("[jellyfin-sync] Library snapshot failed: %s", error)
                 jellyfin_items = None
@@ -397,7 +471,7 @@ class MediaServerService:
         for provider, client in (("radarr", self.radarr), ("sonarr", self.sonarr)):
             if client is None:
                 continue
-            arr_items_by_provider[provider] = await client.list_library()
+            arr_items_by_provider[provider] = await self._arr_library(client, provider == "sonarr")
             queue_items_by_provider[provider] = await client.list_queue()
         synced = 0
         for media in await self.store.fetch_all():

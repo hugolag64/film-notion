@@ -180,7 +180,7 @@ def test_series_detail_uses_the_centered_film_detail_shell():
 
     assert "<FilmDetailView" in series
     assert "FICHE SÉRIE" in series
-    assert "Statut & support de stockage" in series
+    assert "Statut de la série" in series
 
 
 def test_series_detail_keeps_details_and_episodes_tabs():

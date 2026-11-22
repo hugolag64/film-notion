@@ -207,12 +207,13 @@ def test_list_library_normalizes_movies_and_series():
 
     assert items == [
         {
-            "jellyfin_id": "movie-1", "tmdb_id": 438631, "title": "Dune",
+            "jellyfin_id": "movie-1", "tmdb_id": 438631, "tvdb_id": None, "imdb_id": None, "title": "Dune",
             "media_type": "Film", "year": 2021, "overview": "Sable.",
             "poster_tag": "poster-1", "backdrop_tag": "backdrop-1",
         },
         {
-            "jellyfin_id": "series-1", "tmdb_id": 1399, "title": "Game of Thrones",
+            "jellyfin_id": "series-1", "tmdb_id": 1399, "tvdb_id": None, "imdb_id": None,
+            "title": "Game of Thrones",
             "media_type": "Série", "year": 2011, "overview": "Westeros.",
             "poster_tag": "poster-2", "backdrop_tag": "backdrop-2",
         },
@@ -244,6 +245,17 @@ def test_list_library_skips_items_without_tmdb_id():
     ]}]))
 
     assert items == []
+
+
+def test_list_library_keeps_series_known_only_by_tvdb():
+    items = asyncio.run(_run_library_request([{"Items": [
+        {"Id": "poi", "Type": "Series", "Name": "Person of Interest",
+         "ProviderIds": {"Tvdb": "248742", "Imdb": "tt1839578"}},
+    ]}]))
+
+    assert items[0]["tmdb_id"] is None
+    assert items[0]["tvdb_id"] == 248742
+    assert items[0]["imdb_id"] == "tt1839578"
 
 
 def test_find_episode_uses_jellyfin_season_episode_numbers():

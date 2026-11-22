@@ -303,3 +303,51 @@ def test_refresh_series_links_legacy_series_and_adds_episode_synopses(fake_tmdb,
 
     assert refreshed.tmdb_id == 1
     assert asyncio.run(store.list_episodes(legacy.id))[0]["synopsis"] == "Synopsis TMDB de l'épisode."
+
+
+class _EpisodeTMDB:
+    """TMDB double that knows one series with a single regular season."""
+
+    def __init__(self):
+        self.detail_calls = 0
+
+    async def get_tv_details(self, tmdb_id):
+        self.detail_calls += 1
+        assert tmdb_id == 1411
+        return {"seasons": [{"season_number": 0}, {"season_number": 1}]}
+
+    async def get_tv_season_details(self, tmdb_id, season_number):
+        assert season_number == 1
+        return {"episodes": [
+            {"episode_number": 1, "name": "Pilote", "overview": "La Machine."},
+            {"episode_number": 2, "name": "Ghosts"},
+        ]}
+
+
+def test_episode_api_loads_missing_episodes_for_synced_series(tmp_path, monkeypatch):
+    import backend.api as api_module
+
+    store = _store(tmp_path)
+    series = asyncio.run(store.create({
+        "id": "poi", "title": "Person of Interest", "type": "Série", "tmdb_id": 1411,
+    }))
+    tmdb = _EpisodeTMDB()
+    monkeypatch.setattr(api_module, "_optional_tmdb_client", lambda: tmdb)
+
+    result = asyncio.run(get_series_episodes(series.id, store))
+    again = asyncio.run(get_series_episodes(series.id, store))
+
+    assert [(e["season_number"], e["episode_number"]) for e in result["episodes"]] == [(1, 1), (1, 2)]
+    assert result["progress"]["total"] == 2
+    assert len(again["episodes"]) == 2
+    assert tmdb.detail_calls == 1
+
+
+def test_episode_api_without_tmdb_returns_empty_list(tmp_path, monkeypatch):
+    import backend.api as api_module
+
+    store = _store(tmp_path)
+    series = asyncio.run(store.create({"id": "poi", "title": "POI", "type": "Série", "tmdb_id": 1411}))
+    monkeypatch.setattr(api_module, "_optional_tmdb_client", lambda: None)
+
+    assert asyncio.run(get_series_episodes(series.id, store))["episodes"] == []

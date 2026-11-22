@@ -195,6 +195,22 @@ class TMDBClient:
             logger.error("TMDB season details failed for %s/%s: %s", tmdb_id, season_number, e)
             return None
 
+    async def find_tmdb_id(
+        self, external_id: str, source: str, is_series: bool,
+    ) -> Optional[int]:
+        """Translate a TVDB/IMDb id into a TMDB id (``source``: tvdb_id or imdb_id)."""
+        url = f"{self.BASE_URL}/find/{external_id}"
+        params = {**self.params, "external_source": source}
+        try:
+            response = await http.request_with_retry("GET", url, params=params)
+            response.raise_for_status()
+            results = response.json().get("tv_results" if is_series else "movie_results") or []
+        except Exception as e:
+            logger.error("TMDB find failed for %s %s: %s", source, external_id, e)
+            return None
+        first = results[0] if results else {}
+        return first.get("id") if isinstance(first.get("id"), int) else None
+
     async def get_details(self, tmdb_id: int, is_series: bool = False) -> Optional[Dict[str, Any]]:
         return await (self.get_tv_details(tmdb_id) if is_series else self.get_movie_details(tmdb_id))
 

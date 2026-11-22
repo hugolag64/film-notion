@@ -150,6 +150,7 @@ const mapMediaToMovie = (media, index = 0) => {
             genre: categories,
             poster: media.cover_url || 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?auto=format&fit=crop&w=600&q=80',
             backdrop: media.backdrop_url || media.cover_url || 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=1200&q=80',
+            hasBackdrop: Boolean(media.backdrop_url),
             synopsis: media.synopsis || 'Aucun synopsis disponible pour le moment.',
             cast: castList.length > 0 ? castList : ['Acteur principal'],
             rating: numericRating,
@@ -199,6 +200,7 @@ export default function BackstagePrototype() {
     const [openEpisodes, setOpenEpisodes] = useState({});
     const [seriesTab, setSeriesTab] = useState('details');
     const [seriesRefreshing, setSeriesRefreshing] = useState(false);
+    const [seriesBackdropFailed, setSeriesBackdropFailed] = useState(false);
     const seriesRequestId = useRef(0);
     const selectedSeriesId = useRef(null);
     const episodeUpdateQueue = useRef(Promise.resolve());
@@ -1205,13 +1207,15 @@ export default function BackstagePrototype() {
             tmdbId: series.tmdbId || series.tmdb_id || null,
             poster: series.poster || series.cover_url,
             backdrop: series.backdrop || series.backdrop_url,
+            hasBackdrop: series.hasBackdrop ?? Boolean(series.backdrop_url),
             genre: series.genre || series.categories || [],
             year: series.year || (series.release_date ? new Date(series.release_date).getFullYear() : '—'),
         });
         setSeriesEpisodes([]);
         setSeriesProgress(null);
+        setSeriesBackdropFailed(false);
         setOpenSeasons({});
-        setSeriesTab('details');
+        setSeriesTab('episodes');
         try {
             const details = await fetchSeriesEpisodes(series.id);
             if (requestId !== seriesRequestId.current || selectedSeriesId.current !== series.id) return;
@@ -1251,6 +1255,7 @@ export default function BackstagePrototype() {
                 synopsis: refreshed.synopsis || selectedSeries.synopsis,
                 poster: refreshed.cover_url || selectedSeries.poster,
                 backdrop: refreshed.backdrop_url || selectedSeries.backdrop,
+                hasBackdrop: Boolean(refreshed.backdrop_url) || selectedSeries.hasBackdrop,
                 year: refreshed.release_date ? new Date(refreshed.release_date).getFullYear() : selectedSeries.year,
             };
             setSelectedSeries(mapped);
@@ -1685,7 +1690,7 @@ export default function BackstagePrototype() {
                         <select aria-label="Trier par" value={sort.key} onChange={e => setSort(prev => ({ ...prev, key: e.target.value }))} className="text-xs rounded border px-2 py-1.5"><option value="createdAt">Date d'ajout</option><option value="title">Titre</option><option value="year">Année</option><option value="rating">Note</option></select>
                         <button onClick={() => setSort(prev => ({ ...prev, direction: prev.direction === 'asc' ? 'desc' : 'asc' }))} className="text-xs rounded border px-2 py-1.5">{sort.direction === 'asc' ? '↑ Croissant' : '↓ Décroissant'}</button>
                         {[['genre', 'Genre', filterOptions(collectionMedias, 'genre')], ['director', collection === 'Séries' ? 'Créateur' : 'Réalisateur', filterOptions(collectionMedias, 'director')], ['status', 'Statut', ['À regarder', 'En cours', 'Terminé', 'Terminée']], ['support', 'Support', filterOptions(collectionMedias, 'supports')]].map(([key, label, options]) => <select key={key} aria-label={`Filtrer par ${label.toLowerCase()}`} value={filters[key]} onChange={e => setFilters(prev => ({ ...prev, [key]: e.target.value }))} className="text-xs rounded border px-2 py-1.5"><option value="">{label}</option>{options.map(option => <option key={option} value={option}>{option}</option>)}</select>)}
-                        <button type="button" onClick={() => setOnlyAvailable((value) => !value)} aria-pressed={onlyAvailable} className={`rounded border px-2 py-1.5 text-xs font-semibold transition ${onlyAvailable ? 'border-emerald-500 bg-emerald-500 text-white' : 'border-emerald-500/40 text-emerald-600 hover:bg-emerald-500/10'}`} title="Films prêts à être lus sur le serveur">▶ Disponible maintenant</button>
+                        <button type="button" onClick={() => setOnlyAvailable((value) => !value)} aria-pressed={onlyAvailable} className={`rounded border px-2 py-1.5 text-xs font-semibold transition ${onlyAvailable ? 'border-emerald-500 bg-emerald-500 text-white' : 'border-emerald-500/40 text-emerald-600 hover:bg-emerald-500/10'}`} title={collection === 'Séries' ? 'Séries présentes sur le serveur' : 'Films prêts à être lus sur le serveur'}>▶ Disponible maintenant</button>
                         <button onClick={() => { setFilters({ genre: '', director: '', status: '', support: '' }); setOnlyAvailable(false); }} className="text-xs text-[#635bff] px-2">Réinitialiser</button>
                     </div>
 
@@ -1793,11 +1798,6 @@ export default function BackstagePrototype() {
                                         <span>{movie.runtime}</span>
                                         <span className="font-semibold text-[#635bff]">{['Terminé', 'Terminée'].includes(movie.status) ? 'Vu' : movie.status}</span>
                                     </div>
-                                    {movie.type === 'Série' && (
-                                        <div className="series-progress mt-2 text-xs font-mono text-[#635bff]">
-                                            Suivi des épisodes disponible
-                                        </div>
-                                    )}
                                 </div>
                             </div>
                         ))}
@@ -1815,7 +1815,7 @@ export default function BackstagePrototype() {
                     {filteredMovies.length === 0 && !catalogueLoading && !catalogueError && (
                         <div className={`py-20 text-center font-mono text-sm ${isDarkMode ? 'text-white/40' : 'text-[#425466]'
                             }`}>
-                            Aucun film ne correspond à ce filtre.
+                            {collection === 'Séries' ? 'Aucune série ne correspond à ce filtre.' : 'Aucun film ne correspond à ce filtre.'}
                         </div>
                     )}
                     </>}
@@ -1828,8 +1828,16 @@ export default function BackstagePrototype() {
                     <div className={`flex h-[min(94vh,980px)] w-full max-w-5xl flex-col overflow-y-auto rounded-2xl border shadow-2xl animate-fade-in-smooth cursor-default ${isDarkMode
                         ? 'bg-[#0a0a0a] text-white border-white/10'
                         : 'bg-[#f6f9fc] text-[#0a2540] border-[#e3e8ee]'}`} onClick={(event) => event.stopPropagation()}>
-                        <div className="relative aspect-[16/9] overflow-hidden bg-slate-950">
-                            <img src={selectedSeries.backdrop || selectedSeries.poster} alt="" className="h-full w-full object-cover" />
+                        <div className="relative aspect-[16/9] shrink-0 overflow-hidden bg-slate-950">
+                            {selectedSeries.hasBackdrop && !seriesBackdropFailed ? (
+                                <img src={selectedSeries.backdrop} alt="" onError={() => setSeriesBackdropFailed(true)} className="h-full w-full object-cover" />
+                            ) : (
+                                /* No landscape image: blurred poster + poster thumbnail, like the film fiche */
+                                <div className="relative h-full w-full overflow-hidden bg-gradient-to-br from-[#1a1c29] via-[#0d101d] to-[#04060c]">
+                                    <img src={selectedSeries.poster} alt="" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-35 blur-2xl" />
+                                    <img src={selectedSeries.poster} alt="" className="absolute right-6 top-6 hidden h-[70%] rounded-lg border border-white/20 object-cover shadow-2xl sm:block md:right-10" />
+                                </div>
+                            )}
                             <div className="absolute inset-0 bg-gradient-to-t from-black via-black/45 to-transparent" />
                             <div className="absolute inset-0 bg-gradient-to-r from-black/60 via-transparent to-transparent" />
                             <button onClick={closeSeries} className="absolute right-4 top-4 rounded-full bg-black/60 px-3 py-2 text-xs text-white">✕</button>
@@ -1842,16 +1850,11 @@ export default function BackstagePrototype() {
 
                         <div className="p-5">
                             <div className={`mb-5 rounded-xl border p-5 shadow-sm ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
-                                <h3 className="text-xs font-mono uppercase tracking-widest opacity-75">Statut & support de stockage</h3>
-                                <p className="mt-4 text-xs font-semibold">Statut de la série :</p>
-                                <div className="mt-2 flex flex-wrap gap-2">
-                                    {['À regarder', 'Terminée'].map((status) => <button key={status} onClick={() => handleStatusChange(selectedSeries.id, status)} className={`rounded-lg border px-3 py-2 text-xs ${selectedSeries.status === status ? 'border-[#635bff] bg-[#635bff]/10 text-[#635bff]' : 'opacity-70'}`}>{status}</button>)}
+                                <h3 className="text-xs font-mono uppercase tracking-widest opacity-75">Statut de la série</h3>
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                    {['À regarder', 'Terminée'].map((status) => <button key={status} onClick={() => handleStatusChange(selectedSeries.id, status)} className={`rounded-lg border px-3 py-2 text-xs ${(status === 'Terminée' ? ['Terminé', 'Terminée'].includes(selectedSeries.status) : selectedSeries.status === status) ? 'border-[#635bff] bg-[#635bff]/10 text-[#635bff]' : 'opacity-70'}`}>{status}</button>)}
                                     <button type="button" onClick={() => shareMedia(selectedSeries)} className="rounded-lg border px-3 py-2 text-xs opacity-70" aria-label={`Partager le lien de ${selectedSeries.title}`} title="Partager le lien"><Icon name="send" className="mr-1 h-3.5 w-3.5 align-[-2px]" />Partager</button>
                                     <button type="button" onClick={() => toggleWatchlist(selectedSeries.id)} className={`rounded-lg border px-3 py-2 text-xs ${selectedSeries.isWatchlist ? 'border-blue-500/40 bg-blue-500/10 text-blue-500' : 'opacity-70'}`}><Icon name="pin" className="mr-1 h-3.5 w-3.5 align-[-2px]" />Watchlist</button>
-                                </div>
-                                <p className="mt-4 text-xs font-semibold">Support / Emplacement :</p>
-                                <div className="mt-2 flex flex-wrap gap-2">
-                                    {['Serveur', 'Physique', 'Streaming', 'Salle Cinéma'].map((support) => <span key={support} className="rounded-lg border px-3 py-2 text-xs opacity-80">{support}</span>)}
                                 </div>
                             </div>
                             <div className={`mb-5 flex items-center justify-between gap-4 rounded-xl border p-4 shadow-sm ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
@@ -1862,7 +1865,7 @@ export default function BackstagePrototype() {
                                 <button onClick={mediaAction.disabled ? undefined : mediaAction.canPlay ? (selectedMedia?.type === 'Série' ? () => setSeriesTab('episodes') : openPlayer) : openAcquisition} disabled={mediaAction.disabled} className="rounded-lg bg-[#635bff] px-4 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60">{selectedMedia?.type === 'Série' && mediaAction.canPlay ? 'Choisir un épisode' : mediaAction.label}</button>
                             </div>
                             <div className={`mb-5 flex rounded-xl border p-1 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
-                                {[['details', 'Détails'], ['episodes', 'Épisodes']].map(([tab, label]) => <button key={tab} onClick={() => setSeriesTab(tab)} className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold transition ${seriesTab === tab ? 'bg-[#635bff] text-white shadow-lg' : 'opacity-75 hover:opacity-100'}`}>{label}</button>)}
+                                {[['episodes', 'Épisodes'], ['details', 'Détails']].map(([tab, label]) => <button key={tab} onClick={() => setSeriesTab(tab)} className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold transition ${seriesTab === tab ? 'bg-[#635bff] text-white shadow-lg' : 'opacity-75 hover:opacity-100'}`}>{label}</button>)}
                             </div>
 
                             {seriesTab === 'details' && <div className="space-y-5 animate-fade-in-smooth">
@@ -1873,13 +1876,6 @@ export default function BackstagePrototype() {
                                 <div className={`rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
                                     <div className="flex items-center justify-between gap-3"><p className="text-xs font-mono uppercase tracking-widest opacity-75">Synopsis</p>{isAdmin && <button onClick={refreshSelectedSeries} disabled={seriesRefreshing} className="rounded-lg bg-[#635bff] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{seriesRefreshing ? 'Actualisation…' : 'Actualiser TMDB'}</button>}</div>
                                     <p className="mt-3 text-sm leading-6 opacity-80">{selectedSeries.synopsis || 'Aucun synopsis disponible.'}</p>
-                                    <button
-                                        onClick={mediaAction.disabled ? undefined : mediaAction.canPlay ? (selectedMedia?.type === 'Série' ? () => setSeriesTab('episodes') : openPlayer) : openAcquisition}
-                                        disabled={mediaAction.disabled}
-                                        className="mt-3 rounded-lg bg-[#635bff] px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-                                    >
-                                        {selectedMedia?.type === 'Série' && mediaAction.canPlay ? 'Choisir un épisode' : mediaAction.label}
-                                    </button>
                                     {selectedRental && (
                                         <div className="mt-3 rounded-lg border border-[#635bff]/30 bg-[#635bff]/5 p-3 text-xs">
                                             <div>Location : <strong>{rentalStatusLabel(selectedRental)}</strong></div>
@@ -1891,10 +1887,6 @@ export default function BackstagePrototype() {
                                 <div className={`rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-[#e3e8ee] bg-white'}`}>
                                     <p className="text-xs font-mono uppercase tracking-widest opacity-75">Informations</p>
                                     <div className="mt-3 grid grid-cols-2 gap-4 text-sm"><div><span className="block text-xs opacity-75">Créateur</span>{selectedSeries.director || '—'}</div><div><span className="block text-xs opacity-75">Statut</span>{selectedSeries.status || 'À regarder'}</div><div className="col-span-2"><span className="block text-xs opacity-75">Genres</span>{(selectedSeries.genre || []).join(' • ') || '—'}</div><div className="col-span-2"><span className="block text-xs opacity-75">Casting</span>{(selectedSeries.cast || []).join(' • ') || '—'}</div></div>
-                                    <div className="mt-4 flex flex-wrap gap-2">
-                                        {['À regarder', 'Terminé'].map((status) => <button key={status} onClick={() => handleStatusChange(selectedSeries.id, status)} className={`rounded-lg border px-3 py-1.5 text-xs ${selectedSeries.status === status ? 'border-[#635bff] bg-[#635bff]/10 text-[#635bff]' : 'opacity-70'}`}>{status}</button>)}
-                                        <button type="button" onClick={() => toggleWatchlist(selectedSeries.id)} className={`rounded-lg border px-3 py-1.5 text-xs ${selectedSeries.isWatchlist ? 'border-blue-500/40 bg-blue-500/10 text-blue-500' : 'opacity-70'}`}><Icon name="pin" className="mr-1 h-3.5 w-3.5 align-[-2px]" />Watchlist</button>
-                                    </div>
                                 </div>
                             </div>}
 
@@ -1937,7 +1929,10 @@ export default function BackstagePrototype() {
                                     </div>
                                 );
                             })}
-                            {!seriesEpisodes.length && <p className="py-8 text-center text-xs font-mono opacity-75">Aucun épisode disponible.</p>}
+                            {!seriesEpisodes.length && seriesProgress && <div className="py-8 text-center text-xs opacity-75">
+                                <p>La liste des épisodes n’a pas pu être chargée depuis TMDB.</p>
+                                {isAdmin && <button onClick={refreshSelectedSeries} disabled={seriesRefreshing} className="mt-3 rounded-lg bg-[#635bff] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{seriesRefreshing ? 'Actualisation…' : 'Actualiser depuis TMDB'}</button>}
+                            </div>}
                             </div>}
                         </div>
                     </div>

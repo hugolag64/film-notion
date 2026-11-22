@@ -24,6 +24,7 @@ from backend.core.models import (
 from backend.core.tmdb import TMDBClient
 from backend.core.mapping import is_series
 from backend.core.tmdb_relink import build_relink_updates
+from backend.core.series_episodes import ensure_series_episodes, fetch_tmdb_episodes
 from backend.core.arr import RadarrClient, SonarrClient, MediaServerError
 from backend.core.seerr import SeerrClient, SeerrDuplicateRequest
 from backend.core.jellyfin import JellyfinClient
@@ -1534,6 +1535,14 @@ async def finish_recommendation(
     return updated.model_dump(mode="json")
 
 
+def _optional_tmdb_client() -> Optional[TMDBClient]:
+    """TMDB client, or None when no API key is configured."""
+    try:
+        return TMDBClient()
+    except ValueError:
+        return None
+
+
 @router.get("/medias/{media_id}/episodes")
 async def get_series_episodes(
     media_id: str,
@@ -1544,6 +1553,9 @@ async def get_series_episodes(
     media = await store.fetch_one(media_id)
     if not media:
         raise HTTPException(status_code=404, detail="Média non trouvé")
+
+    # Series created by the library sync have no episode yet: load them once.
+    await ensure_series_episodes(store, _optional_tmdb_client(), media)
 
     if isinstance(current, AuthContext):
         episodes = await store.list_episodes_for_user(media_id, current.user["id"])
@@ -1657,28 +1669,9 @@ async def _fetch_tmdb_series_episodes(
     tmdb_id: int, details: Dict[str, Any], tmdb: TMDBClient,
 ) -> List[Dict[str, Any]]:
     """Load every non-special TMDB episode for an import or refresh."""
-    episodes: List[Dict[str, Any]] = []
-    for season in details.get("seasons") or []:
-        season_number = season.get("season_number")
-        if not isinstance(season_number, int) or season_number <= 0:
-            continue
-        season_details = await tmdb.get_tv_season_details(tmdb_id, season_number)
-        if season_details is None:
-            raise HTTPException(
-                status_code=502,
-                detail="Impossible de récupérer les épisodes TMDB",
-            )
-        for episode in (season_details or {}).get("episodes") or []:
-            episode_number = episode.get("episode_number")
-            if not isinstance(episode_number, int):
-                continue
-            episodes.append({
-                "season_number": season_number,
-                "episode_number": episode_number,
-                "title": episode.get("name") or "Sans titre",
-                "synopsis": (episode.get("overview") or "")[:2000],
-                "watched": False,
-            })
+    episodes = await fetch_tmdb_episodes(tmdb, tmdb_id, details)
+    if episodes is None:
+        raise HTTPException(status_code=502, detail="Impossible de récupérer les épisodes TMDB")
     return episodes
 
 

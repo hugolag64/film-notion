@@ -172,12 +172,18 @@ class JellyfinClient:
                 if item.get("Type") not in {"Movie", "Series"}:
                     continue
                 provider_ids = item.get("ProviderIds") or {}
-                raw_tmdb_id = provider_ids.get("Tmdb")
-                if not str(raw_tmdb_id or "").isdigit():
+                raw_tmdb_id = str(provider_ids.get("Tmdb") or "")
+                raw_tvdb_id = str(provider_ids.get("Tvdb") or "")
+                raw_imdb_id = str(provider_ids.get("Imdb") or "").strip()
+                # Series are often identified by TVDB only: keep them so the
+                # service can translate the id into TMDB instead of ignoring them.
+                if not raw_tmdb_id.isdigit() and not raw_tvdb_id.isdigit() and not raw_imdb_id:
                     continue
                 normalized.append({
                     "jellyfin_id": str(item["Id"]),
-                    "tmdb_id": int(raw_tmdb_id),
+                    "tmdb_id": int(raw_tmdb_id) if raw_tmdb_id.isdigit() else None,
+                    "tvdb_id": int(raw_tvdb_id) if raw_tvdb_id.isdigit() else None,
+                    "imdb_id": raw_imdb_id or None,
                     "title": str(item.get("Name") or item["Id"]),
                     "media_type": "Série" if item.get("Type") == "Series" else "Film",
                     "year": item.get("ProductionYear"),
