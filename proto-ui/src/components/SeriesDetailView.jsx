@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import FilmDetailView from './FilmDetailView';
 import Icon from './Icon';
+import { isActiveRental, rentalStatusLabel } from '../rentals';
 import {
     episodeCode, formatAirDate, formatDuration, groupEpisodesBySeason, primaryEpisodeLabel,
     seasonAvailabilityLabel, seriesYears, tmdbStatusLabel,
@@ -17,14 +18,21 @@ export default function SeriesDetailView({
     series, url, episodes, view, loading, isDarkMode, isAdmin, mediaAction,
     onClose, onPlayEpisode, onToggleEpisode, onSetSeasonWatched, onStatusChange,
     onShare, onToggleWatchlist, onAcquire, onRefresh, refreshing, onUseOriginalTitle,
-    rentalPanel,
+    rentalPanel, seasonRentals = [], onRequestParts,
 }) {
     const [backdropFailed, setBackdropFailed] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
     const [expanded, setExpanded] = useState({});
     const [busySeason, setBusySeason] = useState(null);
+    const [downloadOpen, setDownloadOpen] = useState(false);
+    const [pickerOpen, setPickerOpen] = useState(false);
+    const [pickedSeasons, setPickedSeasons] = useState([]);
+    // Requests sent from this fiche: the server only tracks the series as a whole.
+    const [requested, setRequested] = useState({});
+    const [sending, setSending] = useState(null);
     const episodesRef = useRef(null);
     const menuRef = useRef(null);
+    const downloadRef = useRef(null);
 
     const seasonGroups = useMemo(() => groupEpisodesBySeason(episodes), [episodes]);
     const seasons = useMemo(() => {
@@ -49,11 +57,14 @@ export default function SeriesDetailView({
     const seasonEpisodes = season ? seasonGroups[season.season_number] || [] : [];
 
     useEffect(() => {
-        if (!menuOpen) return undefined;
-        const close = (event) => { if (!menuRef.current?.contains(event.target)) setMenuOpen(false); };
+        if (!menuOpen && !downloadOpen) return undefined;
+        const close = (event) => {
+            if (!menuRef.current?.contains(event.target)) setMenuOpen(false);
+            if (!downloadRef.current?.contains(event.target)) setDownloadOpen(false);
+        };
         document.addEventListener('mousedown', close);
         return () => document.removeEventListener('mousedown', close);
-    }, [menuOpen]);
+    }, [menuOpen, downloadOpen]);
 
     const info = view?.info;
     const stats = view?.stats;
@@ -75,15 +86,53 @@ export default function SeriesDetailView({
 
     const scrollToEpisodes = () => episodesRef.current?.scrollIntoView({behavior: 'smooth', block: 'start'});
 
+    const rentalForSeason = (number) => seasonRentals.find((rental) => rental.season_number === number && isActiveRental(rental));
+    const isSeasonComplete = (item) => item?.availability === 'complete';
+
+    /** Send a request once; `key` marks what this fiche shows as « demandé ». */
+    const request = async (key, payload, label) => {
+        if (!onRequestParts || sending) return;
+        setSending(key);
+        try {
+            if (await onRequestParts(payload, label)) setRequested((current) => ({...current, [key]: true}));
+        } finally {
+            setSending(null);
+        }
+    };
+    const requestSeason = (number) => request(`s${number}`, {seasons: [number]}, `Saison ${number}`);
+    const requestEpisode = (episode) => request(
+        episode.id,
+        {episodes: [{season_number: episode.season_number, episode_number: episode.episode_number}]},
+        episodeCode(episode.season_number, episode.episode_number),
+    );
+    const requestPicked = async () => {
+        const numbers = [...pickedSeasons].sort((a, b) => a - b);
+        if (!numbers.length) return;
+        await request(`s${numbers.join('-')}`, {seasons: numbers}, numbers.length > 1 ? `Saisons ${numbers.join(', ')}` : `Saison ${numbers[0]}`);
+        setRequested((current) => Object.fromEntries([...Object.entries(current), ...numbers.map((number) => [`s${number}`, true])]));
+        setPickerOpen(false);
+        setPickedSeasons([]);
+    };
+
     // One main action, chosen from what the viewer can actually do.
     let primary;
     if (mediaAction.canPlay && nextEpisode?.available) {
         primary = {label: primaryEpisodeLabel(nextEpisode), onClick: () => onPlayEpisode(nextEpisode), icon: 'play'};
     } else if (mediaAction.canPlay) {
         primary = {label: 'Choisir un épisode', onClick: scrollToEpisodes, icon: 'play'};
+    } else if (mediaAction.disabled) {
+        primary = {label: mediaAction.label, disabled: true};
+    } else if (isAdmin) {
+        primary = {label: 'Télécharger', onClick: () => setDownloadOpen((open) => !open), icon: 'download'};
+    } else if (season) {
+        const rented = rentalForSeason(season.season_number) || requested[`s${season.season_number}`];
+        primary = rented
+            ? {label: `Saison ${season.season_number} louée`, disabled: true, icon: 'check'}
+            : {label: `Louer la saison ${season.season_number}`, onClick: () => requestSeason(season.season_number), icon: 'ticket'};
     } else {
-        primary = {label: mediaAction.label, onClick: mediaAction.disabled ? undefined : onAcquire, disabled: mediaAction.disabled};
+        primary = {label: mediaAction.label, disabled: true};
     }
+    const missingSeasons = seasons.filter((item) => !isSeasonComplete(item));
 
     const setSeasonWatched = async (watched) => {
         // Stay on this season: otherwise the picker follows the next episode away.
@@ -124,9 +173,20 @@ export default function SeriesDetailView({
                         {info?.vote_average && <span className="inline-flex items-center gap-1"><span className="opacity-50">·</span><Icon name="star" filled className="h-3.5 w-3.5 text-amber-400" />{info.vote_average.toFixed(1)}</span>}
                     </p>
                     <div className="mt-4 flex flex-wrap items-center gap-2">
-                        <button type="button" onClick={primary.onClick} disabled={primary.disabled} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-white px-5 text-sm font-semibold text-black shadow-lg transition hover:bg-white/90 disabled:cursor-not-allowed disabled:bg-white/60">
-                            {primary.icon && <Icon name={primary.icon} filled className="h-4 w-4" />}{primary.label}
-                        </button>
+                        <div ref={downloadRef} className="relative">
+                            <button type="button" onClick={primary.onClick} disabled={primary.disabled || Boolean(sending)} aria-haspopup={primary.icon === 'download' ? 'menu' : undefined} aria-expanded={primary.icon === 'download' ? downloadOpen : undefined} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-white px-5 text-sm font-semibold text-black shadow-lg transition hover:bg-white/90 disabled:cursor-not-allowed disabled:bg-white/60">
+                                {primary.icon && <Icon name={primary.icon} filled={primary.icon === 'play'} className="h-4 w-4" />}{primary.label}{primary.icon === 'download' && <span aria-hidden="true" className="text-xs opacity-60">▾</span>}
+                            </button>
+                            {downloadOpen && <div role="menu" className={`absolute bottom-12 left-0 z-20 w-72 overflow-hidden rounded-xl border py-1 text-sm shadow-2xl ${isDarkMode ? 'border-white/10 bg-[#141414] text-white' : 'border-[#e3e8ee] bg-white text-[#0a2540]'}`}>
+                                {!mediaAction.canPlay && <MenuItem onClick={() => { setDownloadOpen(false); onAcquire(); }}>Toute la série</MenuItem>}
+                                {season && !isSeasonComplete(season) && <MenuItem onClick={() => { setDownloadOpen(false); requestSeason(season.season_number); }}>{season.name} (saison complète)</MenuItem>}
+                                {missingSeasons.length > 1 && <MenuItem onClick={() => { setDownloadOpen(false); setPickerOpen(true); }}>Choisir des saisons…</MenuItem>}
+                                <p className="px-4 py-2 text-xs opacity-60">Pour un seul épisode, utilise l’icône ⇩ dans la liste.</p>
+                            </div>}
+                        </div>
+                        {isAdmin && mediaAction.canPlay && missingSeasons.length > 0 && <button type="button" onClick={() => setDownloadOpen((open) => !open)} aria-label="Télécharger des saisons manquantes" title="Télécharger des saisons manquantes" className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-white/30 bg-black/30 text-white/90 backdrop-blur-md transition hover:bg-black/50">
+                            <Icon name="download" className="h-4 w-4" />
+                        </button>}
                         {nextEpisode?.mode === 'resume' && mediaAction.canPlay && nextEpisode.available && <span className="text-xs text-white/70">{Math.round(nextEpisode.percent)} % vu</span>}
                         <button type="button" onClick={onToggleWatchlist} aria-pressed={series.isWatchlist} className={`inline-flex min-h-11 items-center gap-1.5 rounded-lg border px-3 text-sm backdrop-blur-md transition ${series.isWatchlist ? 'border-white bg-white/20 text-white' : 'border-white/30 bg-black/30 text-white/90 hover:bg-black/50'}`}>
                             <Icon name={series.isWatchlist ? 'check' : 'pin'} className="h-4 w-4" />Watchlist
@@ -168,6 +228,24 @@ export default function SeriesDetailView({
                         hint={info?.next_air_date && info.next_season_number ? episodeCode(info.next_season_number, info.next_episode_number) : nextEpisode?.title} />
                 </section>
 
+                {pickerOpen && <section aria-label="Choisir des saisons à télécharger" className={`rounded-xl border p-4 ${card}`}>
+                    <div className="flex items-center justify-between gap-3">
+                        <h3 className="text-sm font-semibold">Saisons à télécharger</h3>
+                        <button type="button" onClick={() => setPickerOpen(false)} aria-label="Fermer" className="opacity-60 hover:opacity-100"><Icon name="close" /></button>
+                    </div>
+                    <p className={`mt-1 text-xs ${muted}`}>Chaque saison est cherchée en entier : les packs de saison sont privilégiés.</p>
+                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                        {missingSeasons.map((item) => <label key={item.season_number} className={`flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border px-3 text-sm ${isDarkMode ? 'border-white/10' : 'border-[#e3e8ee]'}`}>
+                            <input type="checkbox" checked={pickedSeasons.includes(item.season_number)} onChange={(event) => setPickedSeasons((current) => event.target.checked ? [...current, item.season_number] : current.filter((number) => number !== item.season_number))} className="h-4 w-4 accent-[#635bff]" />
+                            <span className="flex-1">{item.name}</span>
+                            {seasonAvailabilityLabel(item) && <span className="text-xs opacity-60">{item.availability === 'partial' ? `${item.available}/${item.aired}` : '—'}</span>}
+                        </label>)}
+                    </div>
+                    <button type="button" onClick={requestPicked} disabled={!pickedSeasons.length || Boolean(sending)} className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-lg px-4 text-sm font-semibold text-white disabled:opacity-50" style={{background: ACCENT}}>
+                        <Icon name="download" className="h-4 w-4" />{pickedSeasons.length ? `Télécharger ${pickedSeasons.length} saison${pickedSeasons.length > 1 ? 's' : ''}` : 'Coche les saisons voulues'}
+                    </button>
+                </section>}
+
                 {/* Episodes */}
                 <section ref={episodesRef} aria-label="Épisodes" className="scroll-mt-4">
                     {loading && !episodes.length && <div className="space-y-3" aria-busy="true">
@@ -193,6 +271,11 @@ export default function SeriesDetailView({
                                 {season.air_date && ` · ${season.air_date.slice(0, 4)}`}
                             </span>
                             {seasonAvailabilityLabel(season) && <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${season.availability === 'complete' ? 'bg-emerald-500/15 text-emerald-600' : season.availability === 'partial' ? 'bg-amber-500/15 text-amber-600' : 'bg-current/10 opacity-70'}`}>{seasonAvailabilityLabel(season)}</span>}
+                            <SeasonAction
+                                isAdmin={isAdmin} rental={rentalForSeason(season.season_number)}
+                                requested={requested[`s${season.season_number}`]} busy={sending === `s${season.season_number}`}
+                                complete={isSeasonComplete(season)} onRequest={() => requestSeason(season.season_number)}
+                            />
                             <button type="button" onClick={() => setSeasonWatched(!seasonAllWatched)} disabled={busySeason === season.season_number} className={`ml-auto inline-flex min-h-9 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold transition disabled:opacity-50 ${isDarkMode ? 'border-white/15 hover:bg-white/10' : 'border-[#e3e8ee] bg-white hover:bg-[#f6f9fc]'}`}>
                                 <Icon name={seasonAllWatched ? 'minus' : 'check'} className="h-3.5 w-3.5" />{seasonAllWatched ? 'Tout marquer non vu' : 'Tout marquer vu'}
                             </button>
@@ -235,7 +318,12 @@ export default function SeriesDetailView({
                                         <p className="mt-1.5 text-xs">
                                             {episode.upcoming
                                                 ? <span className="font-semibold text-amber-600">À venir{episode.air_date ? ` · ${formatAirDate(episode.air_date)}` : ''}</span>
-                                                : !episode.available && view?.has_server ? <span className={muted}>Non téléchargé</span> : null}
+                                                : !episode.available && (view?.has_server || !mediaAction.canPlay) ? <span className="inline-flex items-center gap-2">
+                                                    <span className={muted}>{requested[episode.id] ? 'Téléchargement demandé' : 'Non téléchargé'}</span>
+                                                    {isAdmin && !requested[episode.id] && !isSeasonComplete(season) && <button type="button" onClick={() => requestEpisode(episode)} disabled={Boolean(sending)} className="inline-flex items-center gap-1 rounded-md border px-2 py-1 font-semibold transition hover:border-[#635bff] hover:text-[#635bff] disabled:opacity-50" aria-label={`Télécharger seulement ${episodeCode(episode.season_number, episode.episode_number)}`}>
+                                                        <Icon name="download" className="h-3.5 w-3.5" />Cet épisode
+                                                    </button>}
+                                                </span> : null}
                                         </p>
                                     </div>
                                 </li>;
@@ -259,6 +347,16 @@ export default function SeriesDetailView({
             </div>
         </div>
     </FilmDetailView>;
+}
+
+function SeasonAction({isAdmin, rental, requested, busy, complete, onRequest}) {
+    if (complete) return null;
+    if (rental) return <span className="rounded-full bg-[#635bff]/15 px-2.5 py-1 text-xs font-semibold text-[#635bff]">Louée · {rentalStatusLabel(rental)}</span>;
+    if (requested) return <span className="rounded-full bg-[#635bff]/15 px-2.5 py-1 text-xs font-semibold text-[#635bff]">{isAdmin ? 'Téléchargement demandé' : 'Location demandée'}</span>;
+    return <button type="button" onClick={onRequest} disabled={busy} className="inline-flex min-h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold text-white transition disabled:opacity-50" style={{background: ACCENT}}>
+        <Icon name={isAdmin ? 'download' : 'ticket'} className="h-3.5 w-3.5" />
+        {busy ? 'Envoi…' : isAdmin ? 'Télécharger la saison' : 'Louer la saison'}
+    </button>;
 }
 
 function MenuItem({children, onClick, disabled}) {

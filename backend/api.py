@@ -318,11 +318,19 @@ class UpdateEpisodeRequest(BaseModel):
     watched: bool
 
 
+class EpisodeRef(BaseModel):
+    season_number: int
+    episode_number: int
+
+
 class AcquisitionRequest(BaseModel):
     quality_profile_id: Optional[int] = None
     root_folder: Optional[str] = None
     language_profile_id: Optional[int] = None
     monitor: str = "all"
+    # Series only: request some seasons and/or single episodes instead of everything.
+    seasons: Optional[List[int]] = None
+    episodes: Optional[List[EpisodeRef]] = None
 
 
 class SeerrRequestCreate(BaseModel):
@@ -2109,8 +2117,10 @@ async def _acquire_media(
         raise HTTPException(status_code=409, detail="Associe d'abord ce film à TMDB")
     is_admin = current.user.get("role") == "admin"
     owner_id = current.user["id"]
+    if media.type == "Série" and (payload.seasons or payload.episodes):
+        return await _acquire_series_parts(media, payload, current, service)
     if not is_admin and media.type == "Série":
-        raise HTTPException(status_code=403, detail="Demande cette série à l'administrateur")
+        raise HTTPException(status_code=403, detail="Choisis une saison à louer")
     if not is_admin:
         now = datetime.now(timezone.utc)
         await service.store.expire_rentals(now)
@@ -2209,6 +2219,71 @@ async def _acquire_media(
         raise HTTPException(status_code=502, detail=str(error)) from error
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error) or "Service non configuré") from error
+
+
+async def _acquire_series_parts(
+    media: Media, payload: AcquisitionRequest, current: AuthContext, service: MediaServerService,
+) -> dict[str, Any]:
+    """Download chosen seasons/episodes: the admin keeps them, a flatmate rents one season."""
+    is_admin = current.user.get("role") == "admin"
+    owner_id = current.user["id"]
+    seasons = sorted({number for number in payload.seasons or [] if number > 0})
+    episodes = sorted({(ref.season_number, ref.episode_number) for ref in payload.episodes or []})
+    if not seasons and not episodes:
+        raise HTTPException(status_code=422, detail="Aucune saison ni aucun épisode demandé")
+    rental_season: Optional[int] = None
+    if not is_admin:
+        if episodes or len(seasons) != 1:
+            raise HTTPException(status_code=403, detail="Tu peux louer une saison à la fois")
+        rental_season = seasons[0]
+        now = datetime.now(timezone.utc)
+        await service.store.expire_rentals(now)
+        existing_rental = await service.store.find_active_rental(owner_id, media.id, rental_season)
+        if existing_rental:
+            return {
+                "availability": await service.store.get_availability(media.id),
+                "rental": _serialize_rental(existing_rental),
+            }
+        availability = await service.store.get_availability(media.id)
+        if availability and availability.jellyfin_id:
+            try:
+                on_server = await service.seasons_on_server(media, availability.jellyfin_id)
+            except (httpx.HTTPError, ValueError):
+                on_server = set()
+            if rental_season in on_server:
+                # Already complete in the shared library: nothing to rent.
+                return {"availability": availability, "season_available": True}
+        slots = await service.store.count_rental_slots(owner_id)
+        if slots["queued"] >= MAX_QUEUED_RENTALS:
+            raise HTTPException(
+                status_code=409,
+                detail=f"File d'attente pleine : {MAX_QUEUED_RENTALS} demandes attendent déjà une source",
+            )
+        if hasattr(service, "storage_status"):
+            storage = await service.storage_status()
+            if storage.get("low_space") or storage.get("temporary_quota_reached"):
+                raise HTTPException(status_code=507, detail="Espace disque insuffisant pour une nouvelle location")
+    try:
+        availability = await service.add(
+            media, payload.quality_profile_id, payload.root_folder, payload.language_profile_id,
+            payload.monitor, seasons=seasons or None, episodes=episodes or None,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except MediaServerError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error) or "Service non configuré") from error
+    response: dict[str, Any] = {"availability": availability, "seasons": seasons, "episodes": episodes}
+    if rental_season is not None:
+        now = datetime.now(timezone.utc)
+        rental = await service.store.create_rental(Rental(
+            id=str(uuid.uuid4()), media_id=media.id, backstage_user_id=owner_id,
+            status="requested", rental_scope="season", season_number=rental_season,
+            requested_at=now, created_at=now, updated_at=now,
+        ))
+        response["rental"] = _serialize_rental(rental)
+    return response
 
 
 @router.get("/rentals")

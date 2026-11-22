@@ -178,6 +178,8 @@ class MediaStore:
                 )
             if "size_bytes" not in rental_columns:
                 conn.execute("ALTER TABLE media_rentals ADD COLUMN size_bytes INTEGER")
+            if "season_number" not in rental_columns:
+                conn.execute("ALTER TABLE media_rentals ADD COLUMN season_number INTEGER")
             if "keep_decision" not in rental_columns:
                 conn.execute("ALTER TABLE media_rentals ADD COLUMN keep_decision TEXT")
             if "decided_by" not in rental_columns:
@@ -221,9 +223,12 @@ class MediaStore:
                 "ON notifications(dedupe_key) WHERE dedupe_key IS NOT NULL"
             )
             active_states = ", ".join(f"'{state}'" for state in _ACTIVE_RENTAL_STATES)
+            # One active rental per user and media — per season for season rentals.
+            conn.execute("DROP INDEX IF EXISTS idx_active_media_rentals_user_media")
             conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_active_media_rentals_user_media "
-                f"ON media_rentals(backstage_user_id, media_id) WHERE status IN ({active_states})"
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_active_media_rentals_user_media_season "
+                "ON media_rentals(backstage_user_id, media_id, COALESCE(season_number, -1)) "
+                f"WHERE status IN ({active_states})"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_media_rentals_user_status "
@@ -1350,14 +1355,16 @@ class MediaStore:
             row = conn.execute(query, params).fetchone()
         return int(row[0] or 0)
 
-    def _find_active_rental_sync(self, user_id: str, media_id: str) -> Optional[Rental]:
+    def _find_active_rental_sync(
+        self, user_id: str, media_id: str, season_number: Optional[int] = None,
+    ) -> Optional[Rental]:
         placeholders = ", ".join("?" for _ in _ACTIVE_RENTAL_STATES)
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 f"SELECT * FROM media_rentals WHERE backstage_user_id = ? AND media_id = ? "
-                f"AND status IN ({placeholders})",
-                (user_id, media_id, *_ACTIVE_RENTAL_STATES),
+                f"AND status IN ({placeholders}) AND season_number IS ?",
+                (user_id, media_id, *_ACTIVE_RENTAL_STATES, season_number),
             ).fetchone()
         return self._row_to_rental(row) if row else None
 
@@ -1578,8 +1585,25 @@ class MediaStore:
             cursor = conn.execute(
                 f"UPDATE media_rentals SET status = 'available', available_at = COALESCE(available_at, ?), "
                 f"expires_at = COALESCE(expires_at, ?), size_bytes = COALESCE(size_bytes, ?), updated_at = ? "
-                f"WHERE media_id = ? AND status IN ({placeholders})",
+                f"WHERE media_id = ? AND status IN ({placeholders}) AND rental_scope != 'season'",
                 (available_at.isoformat(), expires_at.isoformat(), size_bytes, available_at.isoformat(), media_id, *active_states),
+            )
+        return cursor.rowcount
+
+    def _mark_season_rentals_available_sync(
+        self, media_id: str, season_numbers: List[int], available_at: datetime, expires_at: datetime,
+    ) -> int:
+        """A season rental becomes available once its whole season is on the server."""
+        if not season_numbers:
+            return 0
+        seasons = ", ".join("?" for _ in season_numbers)
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                f"UPDATE media_rentals SET status = 'available', available_at = COALESCE(available_at, ?), "
+                f"expires_at = COALESCE(expires_at, ?), updated_at = ? "
+                f"WHERE media_id = ? AND rental_scope = 'season' AND status IN ('requested', 'downloading') "
+                f"AND season_number IN ({seasons})",
+                (available_at.isoformat(), expires_at.isoformat(), available_at.isoformat(), media_id, *season_numbers),
             )
         return cursor.rowcount
 
@@ -1948,8 +1972,10 @@ class MediaStore:
     async def active_temporary_bytes(self, user_id: Optional[str] = None) -> int:
         return await asyncio.to_thread(self._active_temporary_bytes_sync, user_id)
 
-    async def find_active_rental(self, user_id: str, media_id: str) -> Optional[Rental]:
-        return await asyncio.to_thread(self._find_active_rental_sync, user_id, media_id)
+    async def find_active_rental(
+        self, user_id: str, media_id: str, season_number: Optional[int] = None,
+    ) -> Optional[Rental]:
+        return await asyncio.to_thread(self._find_active_rental_sync, user_id, media_id, season_number)
 
     async def update_rental(self, rental_id: str, updates: Dict[str, Any]) -> Optional[Rental]:
         return await asyncio.to_thread(self._update_rental_sync, rental_id, updates)
@@ -1988,6 +2014,13 @@ class MediaStore:
         size_bytes: Optional[int] = None,
     ) -> int:
         return await asyncio.to_thread(self._mark_rentals_available_sync, media_id, available_at, expires_at, size_bytes)
+
+    async def mark_season_rentals_available(
+        self, media_id: str, season_numbers: List[int], available_at: datetime, expires_at: datetime,
+    ) -> int:
+        return await asyncio.to_thread(
+            self._mark_season_rentals_available_sync, media_id, season_numbers, available_at, expires_at,
+        )
 
     async def mark_rental_first_played(
         self, user_id: str, media_id: str, first_played_at: datetime, expires_at: datetime,

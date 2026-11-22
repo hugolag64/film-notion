@@ -130,13 +130,85 @@ class MediaServerService:
             return items
         return await resolve_arr_tmdb_ids(items, tmdb if tmdb is not None else _optional_tmdb(), True)
 
+    async def sonarr_defaults(self) -> dict[str, Any]:
+        """Quality profile / root folder / language used for one-click series downloads."""
+        if self.sonarr is None:
+            raise RuntimeError("Sonarr n'est pas configuré")
+        options = await self.sonarr.list_options()
+        profiles = options.get("quality_profiles") or []
+        wanted = Config.SONARR_DEFAULT_QUALITY_PROFILE_NAME
+        profile = next((item for item in profiles if wanted and item.get("name") == wanted), None) or (
+            profiles[0] if profiles else None
+        )
+        if profile is None or profile.get("id") is None:
+            raise ValueError("Aucun profil qualité Sonarr disponible")
+        root_folder = Config.SONARR_DEFAULT_ROOT_FOLDER or next(
+            (item.get("path") for item in options.get("root_folders") or [] if item.get("path")), None,
+        )
+        if not root_folder:
+            raise ValueError("Aucun dossier racine Sonarr disponible")
+        languages = options.get("language_profiles") or []
+        return {
+            "quality_profile_id": int(profile["id"]),
+            "root_folder": root_folder,
+            "language_profile_id": languages[0].get("id") if languages else None,
+        }
+
+    async def _add_series_parts(
+        self, media, quality_profile_id: Optional[int], root_folder: Optional[str],
+        language_profile_id: Optional[int], seasons: Optional[list[int]],
+        episodes: Optional[list[tuple[int, int]]],
+    ) -> dict[str, Any]:
+        """Request only some seasons or episodes of a series."""
+        if episodes or not self.seerr:
+            # Seerr cannot request single episodes: talk to Sonarr directly.
+            if self.sonarr is None:
+                raise RuntimeError("Le téléchargement à l'épisode nécessite Sonarr")
+            if quality_profile_id is None or not root_folder:
+                defaults = await self.sonarr_defaults()
+                quality_profile_id = quality_profile_id or defaults["quality_profile_id"]
+                root_folder = root_folder or defaults["root_folder"]
+                language_profile_id = language_profile_id or defaults["language_profile_id"]
+            series = await self.sonarr.ensure_series(
+                media.tmdb_id, quality_profile_id, language_profile_id, root_folder,
+            )
+            if episodes:
+                await self.sonarr.search_episodes(series, episodes)
+            for season_number in seasons or []:
+                await self.sonarr.search_season(series, season_number)
+            return series
+        try:
+            return await self.seerr.request_media(
+                tmdb_id=media.tmdb_id, media_type=media.type,
+                quality_profile_id=quality_profile_id, root_folder=root_folder,
+                language_profile_id=language_profile_id, monitor="all", seasons=seasons,
+            )
+        except SeerrDuplicateRequest:
+            return {}
+
     async def add(
         self, media, quality_profile_id: Optional[int], root_folder: Optional[str],
         language_profile_id: Optional[int], monitor: str,
+        seasons: Optional[list[int]] = None, episodes: Optional[list[tuple[int, int]]] = None,
     ) -> Availability:
         if not media.tmdb_id:
             raise ValueError("Associe d'abord ce film à TMDB")
         provider = "sonarr" if media.type == "Série" else "radarr"
+        if media.type == "Série" and (seasons or episodes):
+            remote = await self._add_series_parts(
+                media, quality_profile_id, root_folder, language_profile_id, seasons, episodes,
+            )
+            current = await self.store.get_availability(media.id)
+            if current and (current.jellyfin_id or current.state in {"searching", "downloading", "imported"}):
+                # Part of the series is already there or coming: keep that state.
+                return current
+            return await self.store.upsert_availability(Availability(
+                media_id=media.id, provider=provider,
+                arr_id=None if (self.seerr and not episodes) else remote.get("id"),
+                state="requested", root_folder=root_folder,
+                quality_profile_id=quality_profile_id, language_profile_id=language_profile_id,
+                last_synced_at=datetime.now(timezone.utc),
+            ))
         if self.seerr:
             try:
                 remote = await self.seerr.request_media(
@@ -237,7 +309,47 @@ class MediaServerService:
             int(size_bytes) if size_bytes is not None else None,
         )
         await self.store.update(media.id, {"support": "Serveur"})
+        if media.type == "Série" and availability.jellyfin_id:
+            await self._release_season_rentals(media, availability.jellyfin_id, available_at)
         return saved
+
+    async def seasons_on_server(self, media, jellyfin_id: str) -> set[int]:
+        """Seasons whose every aired episode is in Jellyfin."""
+        if not self.jellyfin or not hasattr(self.jellyfin, "list_series_episodes"):
+            return set()
+        remote = await self.jellyfin.list_series_episodes(jellyfin_id)
+        present: dict[int, set[int]] = {}
+        for item in remote:
+            present.setdefault(item["ParentIndexNumber"], set()).add(item["IndexNumber"])
+        today = datetime.now(timezone.utc).date().isoformat()
+        expected: dict[int, set[int]] = {}
+        for episode in await self.store.list_episodes(media.id):
+            if episode.get("air_date") and episode["air_date"] > today:
+                continue
+            expected.setdefault(episode["season_number"], set()).add(episode["episode_number"])
+        complete = set()
+        for season_number, numbers in present.items():
+            wanted = expected.get(season_number)
+            if numbers and (not wanted or wanted <= numbers):
+                complete.add(season_number)
+        return complete
+
+    async def _release_season_rentals(self, media, jellyfin_id: str, available_at: datetime) -> None:
+        pending = [
+            rental for rental in await self.store.list_rentals_for_media(media.id)
+            if rental.rental_scope == "season" and rental.status in {"requested", "downloading"}
+        ]
+        if not pending:
+            return
+        try:
+            complete = await self.seasons_on_server(media, jellyfin_id)
+        except Exception as error:
+            logger.warning("[jellyfin-sync] Season check failed for %s: %s", media.id, error)
+            return
+        ready = sorted({rental.season_number for rental in pending if rental.season_number in complete})
+        await self.store.mark_season_rentals_available(
+            media.id, ready, available_at, available_at + timedelta(days=21),
+        )
 
     async def sync_media(
         self, media_id: str, *, jellyfin_items=None, arr_items=None, queue_items=None,

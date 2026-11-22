@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { countQueuedRentals, countRentalsInUse, isActiveRental, isQueuedRental, rentalDisplayStatus, rentalExpiryLabel, rentalStatusLabel } from '../rentals';
+import { countQueuedRentals, countRentalsInUse, isActiveRental, isQueuedRental, rentalDisplayStatus, rentalExpiryLabel, rentalStatusLabel, rentalTitle } from '../rentals';
 import useLayer from '../useLayer';
 
 const posterUrl = (path, size = 'w500') => path
@@ -151,7 +151,7 @@ const rentalTone = {
 };
 
 function RentalCard({ rental, media, isDarkMode, onOpenMedia, onKeepRental, onCancelRental }) {
-    const title = media?.title || 'Film loué';
+    const title = rentalTitle(rental, media?.title || (rental.rental_scope === 'season' ? 'Série louée' : 'Film loué'));
     const image = media?.poster;
     const expiry = rentalExpiryLabel(rental);
     const open = () => onOpenMedia({id: rental.media_id});

@@ -55,3 +55,8 @@ export const rentalExpiryLabel = (rental, now = new Date()) => {
     if (days <= 0) return 'expire aujourd’hui';
     return `expire dans ${days} j`;
 };
+
+/** « Person of Interest · Saison 2 » for a season rental, the plain title otherwise. */
+export const rentalTitle = (rental, title) => (
+    rental?.rental_scope === 'season' && rental.season_number ? `${title} · Saison ${rental.season_number}` : title
+);

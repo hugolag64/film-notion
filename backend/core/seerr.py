@@ -45,6 +45,7 @@ class SeerrClient:
     async def request_media(
         self, *, tmdb_id: int, media_type: str, quality_profile_id: Optional[int],
         root_folder: Optional[str], language_profile_id: Optional[int], monitor: str,
+        seasons: Optional[list[int]] = None,
     ) -> dict[str, Any]:
         if media_type not in {"Film", "Série"}:
             raise ValueError("Type de média non pris en charge")
@@ -61,7 +62,8 @@ class SeerrClient:
         if root_folder:
             payload["rootFolder"] = root_folder
         if media_type == "Série":
-            payload["seasons"] = "all" if monitor == "all" else []
+            # Seerr takes "all" or a list of season numbers ([] would request nothing).
+            payload["seasons"] = sorted(set(seasons)) if seasons else "all"
             if language_profile_id is not None:
                 payload["languageProfileId"] = language_profile_id
         return await self._request("POST", "/api/v1/request", json=payload)

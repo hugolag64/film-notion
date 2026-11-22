@@ -465,3 +465,87 @@ def test_tmdb_series_loader_keeps_air_dates_runtimes_and_season_facts():
                                   "poster_url": "https://image.tmdb.org/t/p/w342/s1.jpg", "air_date": "2022-02-18"}]
     assert series["info"]["tmdb_status"] == "Returning Series"
     assert series["info"]["next_air_date"] == "2027-01-10"
+
+
+class _RentService:
+    """Media server double recording granular series requests."""
+
+    def __init__(self, store, on_server=frozenset()):
+        self.store, self.on_server, self.calls = store, set(on_server), []
+
+    async def add(self, media, quality, root, language, monitor, seasons=None, episodes=None):
+        self.calls.append({"seasons": seasons, "episodes": episodes})
+        return await self.store.upsert_availability(Availability(media_id=media.id, provider="sonarr", state="requested"))
+
+    async def seasons_on_server(self, media, jellyfin_id):
+        return self.on_server
+
+    async def storage_status(self):
+        return {}
+
+
+def _poi(store):
+    return asyncio.run(store.create({"id": "poi", "title": "POI", "type": "Série", "tmdb_id": 1411}))
+
+
+def test_flatmate_rents_one_season(tmp_path):
+    from backend.api import AcquisitionRequest, _acquire_media
+
+    store = _store(tmp_path)
+    media = _poi(store)
+    service = _RentService(store)
+    user = AuthContext(user={"id": "paul", "role": "user"}, session_id="s", token="t")
+
+    result = asyncio.run(_acquire_media(media, AcquisitionRequest(seasons=[2]), user, service))
+    again = asyncio.run(_acquire_media(media, AcquisitionRequest(seasons=[2]), user, service))
+
+    assert service.calls == [{"seasons": [2], "episodes": None}]
+    assert result["rental"]["rental_scope"] == "season"
+    assert result["rental"]["season_number"] == 2
+    assert again["rental"]["id"] == result["rental"]["id"]
+
+
+def test_flatmate_cannot_rent_several_seasons_or_episodes(tmp_path):
+    from backend.api import AcquisitionRequest, EpisodeRef, _acquire_media
+
+    store = _store(tmp_path)
+    media = _poi(store)
+    user = AuthContext(user={"id": "paul", "role": "user"}, session_id="s", token="t")
+
+    for payload in (AcquisitionRequest(seasons=[1, 2]),
+                    AcquisitionRequest(episodes=[EpisodeRef(season_number=1, episode_number=1)]),
+                    AcquisitionRequest()):
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(_acquire_media(media, payload, user, _RentService(store)))
+        assert error.value.status_code == 403
+
+
+def test_flatmate_gets_no_rental_for_a_season_already_on_the_server(tmp_path):
+    from backend.api import AcquisitionRequest, _acquire_media
+
+    store = _store(tmp_path)
+    media = _poi(store)
+    asyncio.run(store.upsert_availability(Availability(media_id="poi", provider="sonarr", jellyfin_id="jf", state="available")))
+    service = _RentService(store, on_server={1})
+    user = AuthContext(user={"id": "paul", "role": "user"}, session_id="s", token="t")
+
+    result = asyncio.run(_acquire_media(media, AcquisitionRequest(seasons=[1]), user, service))
+
+    assert result["season_available"] is True
+    assert service.calls == []
+
+
+def test_admin_downloads_an_episode_without_rental(tmp_path):
+    from backend.api import AcquisitionRequest, EpisodeRef, _acquire_media
+
+    store = _store(tmp_path)
+    media = _poi(store)
+    service = _RentService(store)
+    admin = AuthContext(user={"id": "admin", "role": "admin"}, session_id="s", token="t")
+
+    result = asyncio.run(_acquire_media(
+        media, AcquisitionRequest(episodes=[EpisodeRef(season_number=3, episode_number=7)]), admin, service,
+    ))
+
+    assert service.calls == [{"seasons": None, "episodes": [(3, 7)]}]
+    assert "rental" not in result

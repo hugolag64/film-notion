@@ -107,10 +107,10 @@ const getMediaAction = (mediaType, availability, isAdmin = true) => {
     }
     return {
         label: mediaType === 'Série'
-            ? (isAdmin ? 'Demander cette série' : 'Série à demander à l’admin')
+            ? (isAdmin ? 'Demander cette série' : 'Louer une saison')
             : (isAdmin ? 'Demander ce film' : 'Louer ce film'),
         canPlay: false,
-        disabled: !isAdmin && mediaType === 'Série',
+        disabled: false,
     };
 };
 
@@ -1250,6 +1250,24 @@ export default function BackstagePrototype() {
         }, 700);
     };
 
+    /** Ask for some seasons/episodes of the open series (rental of one season for a flatmate). */
+    const requestSeriesParts = async (payload, label) => {
+        const media = selectedSeries;
+        if (!media) return false;
+        try {
+            const result = await requestAcquisition(media.id, payload);
+            if (result.availability) setMediaAvailability((current) => ({...(current || {}), availability: result.availability}));
+            if (result.season_available) showToast(`${label} de « ${media.title} » est déjà sur le serveur : bonne séance !`, 'success');
+            else if (result.rental) showToast(`${label} de « ${media.title} » est louée : tu seras prévenu dès qu’elle sera disponible.`, 'success');
+            else showToast(`Téléchargement demandé : ${label} de « ${media.title} ».`, 'success');
+            if (!isAdmin) await loadRentals();
+            return true;
+        } catch (error) {
+            showToast(error.message || 'Demande impossible.', 'error');
+            return false;
+        }
+    };
+
     const setSeasonWatched = async (seasonNumber, watched) => {
         const mediaId = selectedSeriesId.current;
         if (!mediaId) return;
@@ -1675,8 +1693,8 @@ export default function BackstagePrototype() {
                     /> : <>
                     {collection === 'Séries' && !isAdmin && (
                         <div role="note" className={`mb-5 rounded-xl border px-4 py-3 text-sm ${isDarkMode ? 'border-[#635bff]/30 bg-[#635bff]/10 text-white/85' : 'border-[#635bff]/25 bg-[#635bff]/5 text-[#0a2540]'}`}>
-                            <strong className="font-semibold">Envie d’une série qui n’est pas ici ?</strong>{' '}
-                            Les séries sont ajoutées par l’administrateur : demande-lui directement. Pour un film, utilise « Louer ».
+                            <strong className="font-semibold">Envie d’une saison ?</strong>{' '}
+                            Ouvre une série pour louer une saison, ou demande-la à l’administrateur.
                         </div>
                     )}
                     {/* Header Section */}
@@ -1866,6 +1884,8 @@ export default function BackstagePrototype() {
                     onRefresh={refreshSelectedSeries}
                     refreshing={seriesRefreshing}
                     onUseOriginalTitle={useOriginalSeriesTitle}
+                    seasonRentals={rentals.filter((rental) => rental.media_id === selectedSeries.id && rental.rental_scope === 'season')}
+                    onRequestParts={requestSeriesParts}
                     rentalPanel={selectedRental && (
                         <div className="rounded-xl border border-[#635bff]/30 bg-[#635bff]/5 p-4 text-xs">
                             <div>Location : <strong>{rentalStatusLabel(selectedRental)}</strong></div>

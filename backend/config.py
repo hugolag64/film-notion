@@ -23,6 +23,8 @@ class Config:
     RADARR_DEFAULT_ROOT_FOLDER = os.getenv("RADARR_DEFAULT_ROOT_FOLDER") or None
     SONARR_URL = os.getenv("SONARR_URL", "http://127.0.0.1:8989")
     SONARR_API_KEY = os.getenv("SONARR_API_KEY")
+    SONARR_DEFAULT_QUALITY_PROFILE_NAME = os.getenv("SONARR_DEFAULT_QUALITY_PROFILE_NAME") or None
+    SONARR_DEFAULT_ROOT_FOLDER = os.getenv("SONARR_DEFAULT_ROOT_FOLDER") or None
     SEERR_URL = os.getenv("SEERR_URL", "http://127.0.0.1:5055")
     SEERR_API_KEY = os.getenv("SEERR_API_KEY")
     JELLYFIN_URL = os.getenv("JELLYFIN_URL", "http://127.0.0.1:8096")

@@ -879,3 +879,108 @@ def test_sonarr_series_with_only_tvdb_id_is_matched_by_tmdb(tmp_path, monkeypatc
 
     assert summary == {"linked": 1, "created": 0}
     assert asyncio.run(store.get_availability("poi")).arr_id == 9
+
+
+class _PartsSonarr:
+    def __init__(self):
+        self.seasons, self.episodes = [], []
+
+    async def list_options(self):
+        return {"quality_profiles": [{"id": 4, "name": "HD"}], "root_folders": [{"path": "/tv"}], "language_profiles": []}
+
+    async def ensure_series(self, tmdb_id, quality_profile_id, language_profile_id, root_folder):
+        self.ensure_args = (tmdb_id, quality_profile_id, language_profile_id, root_folder)
+        return {"id": 9}
+
+    async def search_season(self, series, season_number):
+        self.seasons.append(season_number)
+
+    async def search_episodes(self, series, refs):
+        self.episodes.extend(refs)
+
+
+def _series_store(tmp_path):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    asyncio.run(store.create({"id": "poi", "title": "Person of Interest", "type": "Série", "tmdb_id": 1411}))
+    return store
+
+
+def test_add_seasons_goes_through_seerr_with_the_season_list(tmp_path):
+    store = _series_store(tmp_path)
+    seerr = FakeSeerr()
+    service = MediaServerService(store, seerr=seerr)
+    media = asyncio.run(store.fetch_one("poi"))
+
+    availability = asyncio.run(service.add(media, None, None, None, "all", seasons=[2]))
+
+    assert seerr.calls[0]["seasons"] == [2]
+    assert availability.state == "requested"
+
+
+def test_add_single_episode_uses_sonarr_with_its_defaults_even_with_seerr(tmp_path):
+    store = _series_store(tmp_path)
+    sonarr, seerr = _PartsSonarr(), FakeSeerr()
+    service = MediaServerService(store, sonarr=sonarr, seerr=seerr)
+    media = asyncio.run(store.fetch_one("poi"))
+
+    asyncio.run(service.add(media, None, None, None, "all", episodes=[(2, 5)]))
+
+    assert sonarr.ensure_args == (1411, 4, None, "/tv")
+    assert sonarr.episodes == [(2, 5)]
+    assert seerr.calls == []
+
+
+def test_add_season_without_seerr_runs_a_sonarr_season_search(tmp_path):
+    store = _series_store(tmp_path)
+    sonarr = _PartsSonarr()
+    service = MediaServerService(store, sonarr=sonarr)
+    media = asyncio.run(store.fetch_one("poi"))
+
+    asyncio.run(service.add(media, None, None, None, "all", seasons=[1, 3]))
+
+    assert sonarr.seasons == [1, 3]
+
+
+def test_requesting_a_season_keeps_an_already_available_series_playable(tmp_path):
+    store = _series_store(tmp_path)
+    asyncio.run(store.upsert_availability(Availability(
+        media_id="poi", provider="sonarr", jellyfin_id="jf-poi", state="available",
+    )))
+    service = MediaServerService(store, sonarr=_PartsSonarr())
+    media = asyncio.run(store.fetch_one("poi"))
+
+    availability = asyncio.run(service.add(media, None, None, None, "all", seasons=[5]))
+
+    assert availability.state == "available"
+    assert asyncio.run(store.get_availability("poi")).jellyfin_id == "jf-poi"
+
+
+def test_season_rental_becomes_available_only_when_its_season_is_complete(tmp_path):
+    store = _series_store(tmp_path)
+    asyncio.run(store.create_episodes("poi", [
+        {"season_number": 1, "episode_number": 1, "title": "A"},
+        {"season_number": 1, "episode_number": 2, "title": "B"},
+        {"season_number": 2, "episode_number": 1, "title": "C"},
+        {"season_number": 2, "episode_number": 2, "title": "D"},
+    ]))
+    now = datetime.now(timezone.utc)
+    for rental_id, season in (("r1", 1), ("r2", 2)):
+        asyncio.run(store.create_rental(Rental(
+            id=rental_id, media_id="poi", backstage_user_id="u", status="requested",
+            rental_scope="season", season_number=season, requested_at=now, created_at=now, updated_at=now,
+        )))
+
+    class Jellyfin(FakeJellyfinLibrary):
+        async def list_series_episodes(self, series_id):
+            return [{"ParentIndexNumber": 1, "IndexNumber": 1, "Id": "a"},
+                    {"ParentIndexNumber": 1, "IndexNumber": 2, "Id": "b"},
+                    {"ParentIndexNumber": 2, "IndexNumber": 1, "Id": "c"}]
+
+    jellyfin = Jellyfin([{"jellyfin_id": "jf-poi", "tmdb_id": 1411, "media_type": "Série", "title": "POI"}])
+    service = MediaServerService(store, jellyfin=jellyfin)
+
+    asyncio.run(service.sync_media("poi"))
+
+    assert asyncio.run(store.get_rental("r1")).status == "available"
+    assert asyncio.run(store.get_rental("r2")).status == "requested"
