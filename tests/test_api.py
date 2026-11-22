@@ -233,6 +233,21 @@ def test_tmdb_rating_resolves_an_unlinked_library_media(monkeypatch):
     assert store.media.tmdb_id == 693134
 
 
+def test_tmdb_rating_also_returns_the_real_runtime(monkeypatch):
+    store = FakeStore()
+    store.media = Media(id="1", title="Interstellar", type="Film", tmdb_id=157336)
+
+    class FakeTMDB:
+        async def get_movie_details(self, tmdb_id):
+            return {"vote_average": 8.5, "runtime": 169}
+
+    monkeypatch.setattr(api, "TMDBClient", FakeTMDB)
+
+    result = asyncio.run(api.get_tmdb_rating("1", store))
+
+    assert result == {"rating": 8.5, "runtime": 169}
+
+
 def test_tmdb_rating_is_null_when_media_has_no_tmdb_id(monkeypatch):
     store = FakeStore()
     store.media = Media(id="1", title="Dune", type="Film", tmdb_id=None)
@@ -299,3 +314,77 @@ def test_tmdb_rating_returns_404_for_unknown_media():
         asyncio.run(api.get_tmdb_rating("missing", MissingStore()))
 
     assert error.value.status_code == 404
+
+
+def test_media_list_merges_personal_states_with_a_single_query(tmp_path, monkeypatch):
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film"}))
+    asyncio.run(store.create({"id": "alien", "title": "Alien", "type": "Film"}))
+    current = AuthContext(user={"id": "hugo", "role": "user"}, session_id="session", token="token")
+    asyncio.run(update_personal_media(
+        "dune", UpdatePersonalMediaRequest(is_favorite=True, is_watchlist=True), current, store,
+    ))
+
+    async def one_query_per_media(*args, **kwargs):
+        raise AssertionError("list_medias must not query the state of each media separately")
+
+    monkeypatch.setattr(store, "get_user_media_state", one_query_per_media)
+
+    result = {media.id: media for media in asyncio.run(api.list_medias(current, store))}
+
+    assert "Favoris" in result["dune"].tags
+    assert result["dune"].is_watchlist is True
+    assert result["alien"].is_watchlist is False
+    assert result["alien"].status is None
+
+
+class _NoStateStore:
+    async def get_user_media_state(self, user_id, media_id):
+        return None
+
+
+def test_only_the_catalogue_owner_inherits_catalogue_ratings():
+    from backend.api import _media_for_user
+
+    media = Media(id="1", title="Dune", status="Terminé", rating="5", tags=["Favoris"])
+    owner = AuthContext(user={"id": "hugo", "role": "admin"}, session_id="s", token="t")
+    second_admin = AuthContext(user={"id": "lea", "role": "admin"}, session_id="s", token="t")
+
+    inherited = asyncio.run(_media_for_user(media, owner, _NoStateStore(), catalogue_owner_id="hugo"))
+    blank = asyncio.run(_media_for_user(media, second_admin, _NoStateStore(), catalogue_owner_id="hugo"))
+
+    assert inherited.rating == "5"
+    assert blank.rating is None
+    assert blank.status is None
+    assert "Favoris" not in blank.tags
+
+
+class _CountingJellyfin:
+    def __init__(self, answers):
+        self.answers = list(answers)
+        self.calls = 0
+
+    async def ping(self):
+        self.calls += 1
+        return self.answers.pop(0)
+
+
+def test_playback_health_is_cached_for_a_few_seconds(monkeypatch):
+    from backend import api
+
+    monkeypatch.setattr(api, "_playback_health_cache", {"checked_at": 0.0, "online": None})
+    jellyfin = _CountingJellyfin([False, True])
+
+    assert asyncio.run(api.playback_server_online(jellyfin, now=100.0)) is False
+    assert asyncio.run(api.playback_server_online(jellyfin, now=110.0)) is False
+    assert jellyfin.calls == 1
+    assert asyncio.run(api.playback_server_online(jellyfin, now=200.0)) is True
+    assert jellyfin.calls == 2
+
+
+def test_playback_health_is_disabled_without_jellyfin(monkeypatch):
+    from backend import api
+
+    monkeypatch.setattr(api.Config, "jellyfin_enabled", staticmethod(lambda: False))
+    assert asyncio.run(api.media_server_health()) == {"playback": "disabled"}

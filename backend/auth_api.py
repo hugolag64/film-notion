@@ -127,12 +127,20 @@ def _rate_limit_key(request: Request, identity: str) -> str:
     return f"{client_host}:{identity.strip().casefold()}"
 
 
+def _retry_delay_label(seconds: int) -> str:
+    """Say the wait in words a roommate can act on ("15 minutes", not 900)."""
+    if seconds < 60:
+        return "quelques secondes" if seconds > 1 else "une seconde"
+    minutes = -(-seconds // 60)
+    return "1 minute" if minutes == 1 else f"{minutes} minutes"
+
+
 def _check_rate_limit(limiter: RateLimiter, key: str) -> None:
     decision = limiter.check(key)
     if not decision.allowed:
         raise HTTPException(
             status_code=429,
-            detail="Trop de tentatives. Réessayez plus tard.",
+            detail=f"Trop de tentatives. Réessaie dans {_retry_delay_label(decision.retry_after_seconds)}.",
             headers={"Retry-After": str(decision.retry_after_seconds)},
         )
 
@@ -151,7 +159,7 @@ async def get_current_user(
         "/api/auth/me", "/api/auth/change-initial-password",
     }
     if user["must_change_password"] and request.url.path not in allowed_during_forced_change:
-        raise HTTPException(status_code=403, detail="Vous devez définir votre mot de passe personnel avant de continuer")
+        raise HTTPException(status_code=403, detail="Choisis ton mot de passe personnel avant de continuer")
     return AuthContext(user=user, session_id=session_id, token=token)
 
 
@@ -161,18 +169,39 @@ async def require_admin(user: AuthContext = Depends(get_current_user)) -> AuthCo
     return user
 
 
+# The store speaks English to the code; people get French.
+_STORE_ERROR_MESSAGES = {
+    "user not found": "Ce compte n'existe pas.",
+    "administrator already exists": "Un compte administrateur existe déjà.",
+    "email already exists": "Cette adresse e-mail est déjà utilisée.",
+    "last administrator cannot be removed": "Il faut garder au moins un administrateur.",
+    "jellyfin user already linked": "Ce compte Jellyfin est déjà associé à un autre utilisateur.",
+    "invalid current password": "Le mot de passe actuel est incorrect.",
+    "invalid credentials": "Identifiants invalides",
+    "invalid role": "Rôle inconnu.",
+    "initial password change is not required": "Ton mot de passe a déjà été choisi.",
+    "invalid or expired reset token": "Ce lien a expiré ou a déjà servi. Demande un nouveau lien.",
+    "new password must differ from the temporary one": "Choisis un mot de passe différent du mot de passe provisoire.",
+}
+
+
+def _store_error_message(message: str) -> str:
+    return _STORE_ERROR_MESSAGES.get(message, message)
+
+
 def _handle_store_error(error: ValueError) -> HTTPException:
     message = str(error)
+    detail = _store_error_message(message)
     if message == "user not found":
-        return HTTPException(status_code=404, detail=message)
+        return HTTPException(status_code=404, detail=detail)
     if message in {
         "administrator already exists",
         "email already exists",
         "last administrator cannot be removed",
         "jellyfin user already linked",
     }:
-        return HTTPException(status_code=409, detail=message)
-    return HTTPException(status_code=422, detail=message)
+        return HTTPException(status_code=409, detail=detail)
+    return HTTPException(status_code=422, detail=detail)
 
 
 @auth_router.get("/status")
@@ -322,6 +351,16 @@ async def forgot_password(
     store: AuthStore = Depends(get_auth_store),
 ):
     _check_rate_limit(RESET_RATE_LIMITER, _rate_limit_key(request, payload.email))
+    if not EmailSender.is_configured():
+        # Server-wide setting, identical for every address: reveals nothing
+        # about which accounts exist, but tells the user what to do instead.
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "La réinitialisation par e-mail n'est pas disponible. "
+                "Demande à l'administrateur de te donner un mot de passe provisoire."
+            ),
+        )
     reset = store.create_password_reset_token(payload.email)
     if reset is not None:
         token, _ = reset
@@ -346,7 +385,7 @@ async def reset_password(
         store.reset_password(payload.token, payload.new_password)
     except ValueError as error:
         if str(error) == "invalid or expired reset token":
-            raise HTTPException(status_code=400, detail=str(error)) from error
+            raise HTTPException(status_code=400, detail=_store_error_message(str(error))) from error
         raise _handle_store_error(error) from error
     return {"message": "Mot de passe réinitialisé"}
 

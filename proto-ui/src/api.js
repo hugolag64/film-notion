@@ -2,6 +2,44 @@
 
 const API_BASE_URL = '/api';
 
+export const SESSION_EXPIRED_EVENT = 'backstage:session-expired';
+
+// A 401 on these endpoints is an expected answer (wrong password, not signed
+// in yet), not the loss of an existing session.
+const AUTH_PATHS_WITHOUT_SESSION = [
+    '/auth/login', '/auth/setup', '/auth/status', '/auth/me',
+    '/auth/forgot-password', '/auth/reset-password',
+];
+
+/** fetch() for the Backstage API: same-origin cookies, and a global signal
+ *  when the session has expired so the app can return to the login screen
+ *  instead of failing silently. */
+async function apiFetch(input, init = {}) {
+    const response = await fetch(input, {credentials: 'same-origin', ...init});
+    if (response.status === 401) {
+        const path = String(input).replace(API_BASE_URL, '').split('?')[0];
+        const isPlainMeRead = path === '/auth/me' && (!init.method || init.method === 'GET');
+        if (!AUTH_PATHS_WITHOUT_SESSION.includes(path) || (path === '/auth/me' && !isPlainMeRead)) {
+            window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
+        }
+    }
+    return response;
+}
+
+/** FastAPI returns `detail` as a string, or as a list of validation errors. */
+function errorDetail(body, fallback) {
+    const detail = body?.detail;
+    if (typeof detail === 'string' && detail) return detail;
+    if (Array.isArray(detail) && detail.length) {
+        const first = detail[0];
+        const field = Array.isArray(first?.loc) ? first.loc[first.loc.length - 1] : '';
+        if (first?.type === 'string_too_short' && field === 'password') return 'Le mot de passe doit contenir au moins 8 caractères.';
+        if (first?.type === 'string_too_short' && field === 'new_password') return 'Le mot de passe doit contenir au moins 8 caractères.';
+        return 'Certains champs sont invalides. Vérifie ta saisie.';
+    }
+    return fallback;
+}
+
 async function readResponseBody(response) {
     const text = await response.text();
     if (!text) return null;
@@ -13,7 +51,7 @@ async function readResponseBody(response) {
 }
 
 async function authRequest(path, options = {}) {
-    const response = await fetch(`${API_BASE_URL}/auth${path}`, {
+    const response = await apiFetch(`${API_BASE_URL}/auth${path}`, {
         ...options,
         credentials: 'same-origin',
         headers: {
@@ -26,7 +64,7 @@ async function authRequest(path, options = {}) {
         body = await response.json().catch(() => null);
     }
     if (!response.ok) {
-        const error = new Error(body?.detail || 'Erreur d’authentification');
+        const error = new Error(errorDetail(body, 'Erreur d’authentification'));
         error.status = response.status;
         throw error;
     }
@@ -34,7 +72,7 @@ async function authRequest(path, options = {}) {
 }
 
 async function recommendationRequest(path, options = {}) {
-    const response = await fetch(`${API_BASE_URL}${path}`, {
+    const response = await apiFetch(`${API_BASE_URL}${path}`, {
         ...options,
         credentials: 'same-origin',
         headers: {
@@ -44,7 +82,7 @@ async function recommendationRequest(path, options = {}) {
     });
     const body = await response.json().catch(() => null);
     if (!response.ok) {
-        const error = new Error(body?.detail || 'Erreur de recommandation');
+        const error = new Error(errorDetail(body, 'Erreur de recommandation'));
         error.status = response.status;
         throw error;
     }
@@ -83,12 +121,12 @@ export async function completeInitialPasswordChange(payload) {
 }
 
 export async function uploadMyAvatar(file) {
-    const response = await fetch(`${API_BASE_URL}/auth/me/avatar`, {
+    const response = await apiFetch(`${API_BASE_URL}/auth/me/avatar`, {
         method: 'PUT', credentials: 'same-origin',
         headers: file.type ? {'Content-Type': file.type} : {}, body: file,
     });
     const body = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(body?.detail || 'Impossible d’enregistrer la photo');
+    if (!response.ok) throw new Error(errorDetail(body, 'Impossible d’enregistrer la photo'));
     return body.user;
 }
 
@@ -182,9 +220,9 @@ export function recordRecommendationEvent(payload) {
  */
 export async function fetchMedias() {
     try {
-        const response = await fetch(`${API_BASE_URL}/medias`);
+        const response = await apiFetch(`${API_BASE_URL}/medias`);
         if (!response.ok) {
-            throw new Error(`Failed to fetch medias: ${response.statusText}`);
+            throw new Error(`Impossible de charger la bibliothèque (erreur ${response.status}).`);
         }
         return await response.json();
     } catch (error) {
@@ -194,13 +232,13 @@ export async function fetchMedias() {
 }
 
 export async function fetchTMDBRating(mediaId) {
-    const response = await fetch(`${API_BASE_URL}/medias/${encodeURIComponent(mediaId)}/tmdb-rating`);
+    const response = await apiFetch(`${API_BASE_URL}/medias/${encodeURIComponent(mediaId)}/tmdb-rating`);
     if (!response.ok) throw new Error(`Failed to fetch TMDB rating: ${response.statusText}`);
     return response.json();
 }
 
 export async function fetchTMDBMovieDetails(tmdbId) {
-    const response = await fetch(`${API_BASE_URL}/tmdb/movies/${encodeURIComponent(tmdbId)}`);
+    const response = await apiFetch(`${API_BASE_URL}/tmdb/movies/${encodeURIComponent(tmdbId)}`);
     if (!response.ok) throw new Error(`Failed to fetch TMDB movie details: ${response.statusText}`);
     return response.json();
 }
@@ -210,7 +248,7 @@ export async function fetchTMDBMovieDetails(tmdbId) {
  */
 export async function updateMedia(mediaId, payload) {
     try {
-        const response = await fetch(`${API_BASE_URL}/medias/${mediaId}`, {
+        const response = await apiFetch(`${API_BASE_URL}/medias/${mediaId}`, {
             method: 'PATCH',
             headers: {
                 'Content-Type': 'application/json',
@@ -218,7 +256,7 @@ export async function updateMedia(mediaId, payload) {
             body: JSON.stringify(payload),
         });
         if (!response.ok) {
-            throw new Error(`Failed to update media: ${response.statusText}`);
+            throw new Error(`La modification n’a pas pu être enregistrée (erreur ${response.status}).`);
         }
         return await response.json();
     } catch (error) {
@@ -228,20 +266,20 @@ export async function updateMedia(mediaId, payload) {
 }
 
 export async function updatePersonalMedia(mediaId, payload) {
-    const response = await fetch(`${API_BASE_URL}/medias/${encodeURIComponent(mediaId)}/personal`, {
+    const response = await apiFetch(`${API_BASE_URL}/medias/${encodeURIComponent(mediaId)}/personal`, {
         method: 'PATCH',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(payload),
     });
     if (!response.ok) {
         const detail = await response.json().catch(() => ({}));
-        throw new Error(detail.detail || `Failed to update personal media: ${response.statusText}`);
+        throw new Error(errorDetail(detail, `La modification n’a pas pu être enregistrée (erreur ${response.status}).`));
     }
     return response.json();
 }
 
 export async function fetchAvailability(mediaId) {
-    const response = await fetch(`${API_BASE_URL}/medias/${mediaId}/availability`);
+    const response = await apiFetch(`${API_BASE_URL}/medias/${mediaId}/availability`);
     if (!response.ok) throw new Error(`Disponibilité impossible: ${response.statusText}`);
     return response.json();
 }
@@ -266,81 +304,95 @@ export async function fetchPlaybackOptions(mediaId, seasonNumber, episodeNumber)
         params.set('season_number', seasonNumber);
         params.set('episode_number', episodeNumber);
     }
-    const response = await fetch(params.size ? `${path}?${params}` : path);
-    if (!response.ok) throw new Error((await response.json()).detail || 'Pistes Jellyfin indisponibles');
+    const response = await apiFetch(params.size ? `${path}?${params}` : path);
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Pistes Jellyfin indisponibles'));
     return response.json();
 }
 
-export async function fetchJellyfinPlaybackTarget(mediaId, seasonNumber, episodeNumber) {
+export async function fetchJellyfinPlaybackTarget(mediaId, seasonNumber, episodeNumber, {timeoutMs} = {}) {
     const path = `${API_BASE_URL}/medias/${encodeURIComponent(mediaId)}/playback/jellyfin-target`;
     const params = new URLSearchParams();
     if (seasonNumber !== undefined && episodeNumber !== undefined) {
         params.set('season_number', seasonNumber);
         params.set('episode_number', episodeNumber);
     }
-    const response = await fetch(params.size ? `${path}?${params}` : path, {
-        credentials: 'same-origin',
-    });
+    const controller = timeoutMs ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    let response;
+    try {
+        response = await apiFetch(params.size ? `${path}?${params}` : path, {
+            credentials: 'same-origin',
+            signal: controller?.signal,
+        });
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
     const body = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(body?.detail || 'Ouverture de Jellyfin impossible');
+    if (!response.ok) throw new Error(errorDetail(body, 'Ouverture de Jellyfin impossible'));
     if (!body?.url || !body?.item_id) throw new Error('La cible de lecture Jellyfin est invalide');
     return body;
 }
 
 export async function fetchMediaServerOptions(mediaType) {
-    const response = await fetch(`${API_BASE_URL}/media-server/options?media_type=${encodeURIComponent(mediaType)}`);
-    if (!response.ok) throw new Error((await response.json()).detail || 'Service non configuré');
+    const response = await apiFetch(`${API_BASE_URL}/media-server/options?media_type=${encodeURIComponent(mediaType)}`);
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Service non configuré'));
     return response.json();
 }
 
 export async function requestAcquisition(mediaId, payload) {
-    const response = await fetch(`${API_BASE_URL}/medias/${mediaId}/acquisition`, {
+    const response = await apiFetch(`${API_BASE_URL}/medias/${mediaId}/acquisition`, {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload),
     });
-    if (!response.ok) throw new Error((await response.json()).detail || 'Demande impossible');
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Demande impossible'));
     return response.json();
 }
 
 export async function fetchRentals() {
-    const response = await fetch(`${API_BASE_URL}/rentals`);
-    if (!response.ok) throw new Error((await response.json()).detail || 'Locations indisponibles');
+    const response = await apiFetch(`${API_BASE_URL}/rentals`);
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Locations indisponibles'));
     return response.json();
 }
 
 export async function requestRentalKeep(rentalId) {
-    const response = await fetch(`${API_BASE_URL}/rentals/${rentalId}/keep`, {method: 'POST'});
-    if (!response.ok) throw new Error((await response.json()).detail || 'Demande de conservation impossible');
+    const response = await apiFetch(`${API_BASE_URL}/rentals/${rentalId}/keep`, {method: 'POST'});
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Demande de conservation impossible'));
     return response.json();
 }
 
 export async function cancelRental(rentalId) {
-    const response = await fetch(`${API_BASE_URL}/rentals/${rentalId}/cancel`, {method: 'POST'});
-    if (!response.ok) throw new Error((await response.json()).detail || 'Annulation impossible');
+    const response = await apiFetch(`${API_BASE_URL}/rentals/${rentalId}/cancel`, {method: 'POST'});
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Annulation impossible'));
     return response.json();
 }
 
 export async function fetchKeepRequests() {
-    const response = await fetch(`${API_BASE_URL}/admin/rentals/keep-requests`);
-    if (!response.ok) throw new Error((await response.json()).detail || 'Demandes indisponibles');
+    const response = await apiFetch(`${API_BASE_URL}/admin/rentals/keep-requests`);
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Demandes indisponibles'));
     return (await response.json()).requests;
 }
 
+export async function fetchAdminRentals() {
+    const response = await apiFetch(`${API_BASE_URL}/admin/rentals`);
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Locations indisponibles'));
+    return (await response.json()).rentals || [];
+}
+
 export async function fetchCleanupPreview() {
-    const response = await fetch(`${API_BASE_URL}/admin/rentals/cleanup-preview`);
-    if (!response.ok) throw new Error((await response.json()).detail || 'Simulation indisponible');
+    const response = await apiFetch(`${API_BASE_URL}/admin/rentals/cleanup-preview`);
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Simulation indisponible'));
     return response.json();
 }
 
 export async function fetchStorageStatus() {
-    const response = await fetch(`${API_BASE_URL}/admin/storage/status`);
-    if (!response.ok) throw new Error((await response.json()).detail || 'Stockage indisponible');
+    const response = await apiFetch(`${API_BASE_URL}/admin/storage/status`);
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Stockage indisponible'));
     return response.json();
 }
 
 export async function fetchStorageOverview() {
-    const response = await fetch(`${API_BASE_URL}/admin/storage/candidates`);
+    const response = await apiFetch(`${API_BASE_URL}/admin/storage/candidates`);
     const body = await readResponseBody(response);
-    if (!response.ok) throw new Error(body?.detail || 'Candidats de stockage indisponibles');
+    if (!response.ok) throw new Error(errorDetail(body, 'Candidats de stockage indisponibles'));
     return body || {candidates: [], history: []};
 }
 
@@ -353,163 +405,181 @@ export async function fetchStorageCleanupHistory() {
 }
 
 export async function setStorageProtection(mediaId, protectedValue) {
-    const response = await fetch(`${API_BASE_URL}/admin/storage/candidates/${encodeURIComponent(mediaId)}/protection`, {
+    const response = await apiFetch(`${API_BASE_URL}/admin/storage/candidates/${encodeURIComponent(mediaId)}/protection`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({protected: protectedValue}),
     });
     const body = await readResponseBody(response);
-    if (!response.ok) throw new Error(body?.detail || 'Protection impossible');
+    if (!response.ok) throw new Error(errorDetail(body, 'Protection impossible'));
     return body;
 }
 
 export async function deleteExpiredRentals() {
-    const response = await fetch(`${API_BASE_URL}/admin/storage/expired/delete`, {method: 'POST'});
+    const response = await apiFetch(`${API_BASE_URL}/admin/storage/expired/delete`, {method: 'POST'});
     const body = await readResponseBody(response);
-    if (!response.ok) throw new Error(body?.detail || 'Suppression impossible');
+    if (!response.ok) throw new Error(errorDetail(body, 'Suppression impossible'));
     return body;
 }
 
 export async function fetchAvailableMediaIds() {
-    const response = await fetch(`${API_BASE_URL}/library/available`);
+    const response = await apiFetch(`${API_BASE_URL}/library/available`);
     if (!response.ok) throw new Error('Disponibilités indisponibles');
     return (await response.json()).media_ids || [];
 }
 
 export async function deleteMedia(mediaId, { deleteFiles = false } = {}) {
     const query = deleteFiles ? '?delete_files=true' : '';
-    const response = await fetch(`${API_BASE_URL}/medias/${encodeURIComponent(mediaId)}${query}`, {method: 'DELETE'});
+    const response = await apiFetch(`${API_BASE_URL}/medias/${encodeURIComponent(mediaId)}${query}`, {method: 'DELETE'});
     const body = await readResponseBody(response);
-    if (!response.ok) throw new Error(body?.detail || 'Suppression impossible');
+    if (!response.ok) throw new Error(errorDetail(body, 'Suppression impossible'));
     return body;
 }
 
 export async function deleteStorageCandidate(mediaId) {
-    const response = await fetch(`${API_BASE_URL}/admin/storage/candidates/${encodeURIComponent(mediaId)}`, {method: 'DELETE'});
+    const response = await apiFetch(`${API_BASE_URL}/admin/storage/candidates/${encodeURIComponent(mediaId)}`, {method: 'DELETE'});
     const body = await readResponseBody(response);
-    if (!response.ok) throw new Error(body?.detail || 'Suppression impossible');
+    if (!response.ok) throw new Error(errorDetail(body, 'Suppression impossible'));
     return body;
 }
 
 export async function fetchAdminDashboard() {
-    const response = await fetch(`${API_BASE_URL}/admin/dashboard`);
-    if (!response.ok) throw new Error((await response.json()).detail || 'Tableau de bord indisponible');
+    const response = await apiFetch(`${API_BASE_URL}/admin/dashboard`);
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Tableau de bord indisponible'));
     return response.json();
 }
 
 export async function fetchBackupStatus() {
-    const response = await fetch(`${API_BASE_URL}/admin/system/backup`);
-    if (!response.ok) throw new Error((await response.json()).detail || 'Sauvegarde indisponible');
+    const response = await apiFetch(`${API_BASE_URL}/admin/system/backup`);
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Sauvegarde indisponible'));
     return response.json();
 }
 
 export async function createBackup() {
-    const response = await fetch(`${API_BASE_URL}/admin/system/backup`, {method: 'POST'});
-    if (!response.ok) throw new Error((await response.json()).detail || 'Sauvegarde impossible');
+    const response = await apiFetch(`${API_BASE_URL}/admin/system/backup`, {method: 'POST'});
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Sauvegarde impossible'));
     return response.json();
 }
 
 export async function verifyBackup() {
-    const response = await fetch(`${API_BASE_URL}/admin/system/backup/verify`, {method: 'POST'});
-    if (!response.ok) throw new Error((await response.json()).detail || 'Vérification impossible');
+    const response = await apiFetch(`${API_BASE_URL}/admin/system/backup/verify`, {method: 'POST'});
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Vérification impossible'));
     return response.json();
 }
 
 async function rentalDecision(rentalId, action) {
-    const response = await fetch(`${API_BASE_URL}/admin/rentals/${rentalId}/${action}`, {method: 'POST'});
-    if (!response.ok) throw new Error((await response.json()).detail || 'Action impossible');
+    const response = await apiFetch(`${API_BASE_URL}/admin/rentals/${rentalId}/${action}`, {method: 'POST'});
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Action impossible'));
     return response.json();
 }
 
 export const acceptKeepRequest = (rentalId) => rentalDecision(rentalId, 'keep');
 export const refuseKeepRequest = (rentalId) => rentalDecision(rentalId, 'refuse');
 export const extendRental = (rentalId) => rentalDecision(rentalId, 'extend');
+export const revokeRental = (rentalId) => rentalDecision(rentalId, 'revoke');
 
 export async function fetchNotifications() {
-    const response = await fetch(`${API_BASE_URL}/notifications`);
-    if (!response.ok) throw new Error((await response.json()).detail || 'Notifications indisponibles');
+    const response = await apiFetch(`${API_BASE_URL}/notifications`);
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Notifications indisponibles'));
     return (await response.json()).notifications;
 }
 
 export async function markNotificationRead(notificationId) {
-    const response = await fetch(`${API_BASE_URL}/notifications/${notificationId}/read`, {method: 'POST'});
-    if (!response.ok) throw new Error((await response.json()).detail || 'Notification indisponible');
+    const response = await apiFetch(`${API_BASE_URL}/notifications/${notificationId}/read`, {method: 'POST'});
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Notification indisponible'));
+    return response.json();
+}
+
+export async function fetchChatMessages(afterId = null) {
+    const query = afterId ? `?after=${encodeURIComponent(afterId)}` : '';
+    const response = await apiFetch(`${API_BASE_URL}/chat/messages${query}`);
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Salon indisponible'));
+    return (await response.json()).messages;
+}
+
+export async function postChatMessage(body) {
+    const response = await apiFetch(`${API_BASE_URL}/chat/messages`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({body}),
+    });
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Message non envoyé'));
     return response.json();
 }
 
 export async function fetchMediaServerStatus() {
-    const response = await fetch(`${API_BASE_URL}/media-server/status`);
+    const response = await apiFetch(`${API_BASE_URL}/media-server/status`);
     if (!response.ok) throw new Error('État des services indisponible');
     return response.json();
 }
 
 export async function syncMediaServer() {
-    const response = await fetch(`${API_BASE_URL}/media-server/sync`, {method: 'POST'});
+    const response = await apiFetch(`${API_BASE_URL}/media-server/sync`, {method: 'POST'});
     const body = await readResponseBody(response);
-    if (!response.ok) throw new Error(body?.detail || 'Synchronisation impossible');
+    if (!response.ok) throw new Error(errorDetail(body, 'Synchronisation impossible'));
     return body;
 }
 
 export async function importMediaServerLibrary() {
-    const response = await fetch(`${API_BASE_URL}/media-server/import`, {method: 'POST'});
+    const response = await apiFetch(`${API_BASE_URL}/media-server/import`, {method: 'POST'});
     const body = await readResponseBody(response);
-    if (!response.ok) throw new Error(body?.detail || 'Import impossible');
+    if (!response.ok) throw new Error(errorDetail(body, 'Import impossible'));
     return body;
 }
 
 export async function fetchMediaServerActivity() {
-    const response = await fetch(`${API_BASE_URL}/media-server/activity`);
+    const response = await apiFetch(`${API_BASE_URL}/media-server/activity`);
     const body = await readResponseBody(response);
-    if (!response.ok) throw new Error(body?.detail || 'Activité indisponible');
+    if (!response.ok) throw new Error(errorDetail(body, 'Activité indisponible'));
     return body;
 }
 
 export async function syncPlayback() {
-    const response = await fetch(`${API_BASE_URL}/playback/sync`, {method: 'POST'});
-    if (!response.ok) throw new Error((await response.json()).detail || 'Progression indisponible');
+    const response = await apiFetch(`${API_BASE_URL}/playback/sync`, {method: 'POST'});
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Progression indisponible'));
     return response.json();
 }
 
 export async function fetchPlaybackSummary() {
-    const response = await fetch(`${API_BASE_URL}/playback/summary`);
-    if (!response.ok) throw new Error((await response.json()).detail || 'Progression indisponible');
+    const response = await apiFetch(`${API_BASE_URL}/playback/summary`);
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Progression indisponible'));
     return response.json();
 }
 
 export async function fetchDashboard() {
-    const response = await fetch(`${API_BASE_URL}/dashboard`, {credentials: 'same-origin'});
+    const response = await apiFetch(`${API_BASE_URL}/dashboard`, {credentials: 'same-origin'});
     const body = await readResponseBody(response);
-    if (!response.ok) throw new Error(body?.detail || body?.message || 'Dashboard indisponible');
+    if (!response.ok) throw new Error(errorDetail(body, body?.message || 'Dashboard indisponible'));
     return body;
 }
 
 export async function addRecommendationToWatchlist(tmdbId) {
-    const response = await fetch(`${API_BASE_URL}/recommendations/watchlist`, {
+    const response = await apiFetch(`${API_BASE_URL}/recommendations/watchlist`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({tmdb_id: tmdbId}),
     });
-    if (!response.ok) throw new Error((await response.json()).detail || 'Ajout à la watchlist impossible');
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Ajout à la watchlist impossible'));
     return response.json();
 }
 
 export async function createSeerrRequest(tmdbId, mediaType = 'movie', options = {}) {
-    const response = await fetch(`${API_BASE_URL}/seerr/requests`, {
+    const response = await apiFetch(`${API_BASE_URL}/seerr/requests`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({tmdb_id: tmdbId, media_type: mediaType, ...options}),
     });
-    if (!response.ok) throw new Error((await response.json()).detail || 'Demande Seerr impossible');
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Demande Seerr impossible'));
     return response.json();
 }
 
 export async function cancelSeerrRequest(requestId) {
-    const response = await fetch(`${API_BASE_URL}/seerr/requests/${encodeURIComponent(requestId)}`, {
+    const response = await apiFetch(`${API_BASE_URL}/seerr/requests/${encodeURIComponent(requestId)}`, {
         method: 'DELETE',
         credentials: 'same-origin',
     });
-    if (!response.ok) throw new Error((await response.json()).detail || 'Annulation impossible');
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Annulation impossible'));
     return response.json();
 }
 
@@ -518,7 +588,7 @@ export async function cancelSeerrRequest(requestId) {
  */
 export async function searchTMDB(query) {
     try {
-        const response = await fetch(`${API_BASE_URL}/tmdb/search?query=${encodeURIComponent(query)}`);
+        const response = await apiFetch(`${API_BASE_URL}/tmdb/search?query=${encodeURIComponent(query)}`);
         if (!response.ok) {
             throw new Error(`Failed to search TMDB: ${response.statusText}`);
         }
@@ -534,7 +604,7 @@ export async function searchTMDB(query) {
  */
 export async function relinkTMDB(mediaId, tmdbId) {
     try {
-        const response = await fetch(`${API_BASE_URL}/medias/${mediaId}/relink_tmdb`, {
+        const response = await apiFetch(`${API_BASE_URL}/medias/${mediaId}/relink_tmdb`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -552,7 +622,7 @@ export async function relinkTMDB(mediaId, tmdbId) {
 }
 
 export async function createMediaFromTMDB(tmdbId) {
-    const response = await fetch(`${API_BASE_URL}/medias/from_tmdb`, {
+    const response = await apiFetch(`${API_BASE_URL}/medias/from_tmdb`, {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({tmdb_id: tmdbId}),
     });
     if (!response.ok) throw new Error(`Failed to create media: ${response.statusText}`);
@@ -560,19 +630,19 @@ export async function createMediaFromTMDB(tmdbId) {
 }
 
 export async function searchTMDBTV(query) {
-    const response = await fetch(`${API_BASE_URL}/tmdb/search/tv?query=${encodeURIComponent(query)}`);
+    const response = await apiFetch(`${API_BASE_URL}/tmdb/search/tv?query=${encodeURIComponent(query)}`);
     if (!response.ok) throw new Error(`Failed to search TV: ${response.statusText}`);
     return response.json();
 }
 
 export async function searchTMDBPerson(query) {
-    const response = await fetch(`${API_BASE_URL}/tmdb/search/person?query=${encodeURIComponent(query)}`);
+    const response = await apiFetch(`${API_BASE_URL}/tmdb/search/person?query=${encodeURIComponent(query)}`);
     if (!response.ok) throw new Error(`Failed to search TMDB people: ${response.statusText}`);
     return response.json();
 }
 
 export async function createSeriesFromTMDB(tmdbId) {
-    const response = await fetch(`${API_BASE_URL}/series/from_tmdb`, {
+    const response = await apiFetch(`${API_BASE_URL}/series/from_tmdb`, {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({tmdb_id: tmdbId}),
     });
     if (!response.ok) throw new Error(`Failed to create series: ${response.statusText}`);
@@ -580,21 +650,28 @@ export async function createSeriesFromTMDB(tmdbId) {
 }
 
 export async function fetchSeriesEpisodes(mediaId) {
-    const response = await fetch(`${API_BASE_URL}/medias/${mediaId}/episodes`);
+    const response = await apiFetch(`${API_BASE_URL}/medias/${mediaId}/episodes`);
     if (!response.ok) throw new Error(`Failed to fetch series episodes: ${response.statusText}`);
     return response.json();
 }
 
 export async function updateEpisode(episodeId, watched) {
-    const response = await fetch(`${API_BASE_URL}/episodes/${episodeId}`, {
+    const response = await apiFetch(`${API_BASE_URL}/episodes/${episodeId}`, {
         method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({watched}),
     });
-    if (!response.ok) throw new Error(`Failed to update episode: ${response.statusText}`);
+    if (!response.ok) throw new Error(`L’épisode n’a pas pu être mis à jour (erreur ${response.status}).`);
     return response.json();
 }
 
 export async function refreshSeriesFromTMDB(mediaId) {
-    const response = await fetch(`${API_BASE_URL}/series/${mediaId}/refresh`, { method: 'POST' });
+    const response = await apiFetch(`${API_BASE_URL}/series/${mediaId}/refresh`, { method: 'POST' });
     if (!response.ok) throw new Error(`Failed to refresh series: ${response.statusText}`);
     return response.json();
+}
+
+export async function fetchPlaybackHealth() {
+    const response = await apiFetch(`${API_BASE_URL}/media-server/health`);
+    if (!response.ok) return 'unknown';
+    const body = await readResponseBody(response);
+    return body?.playback || 'unknown';
 }

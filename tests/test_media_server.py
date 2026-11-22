@@ -39,7 +39,7 @@ class OptionsRadarr(FakeRadarr):
         return {
             "quality_profiles": [
                 {"id": 4, "name": "720p"},
-                {"id": 9, "name": "1080p FR - max 10 Go"},
+                {"id": 9, "name": "4K léger - MULTI"},
             ],
             "root_folders": [{"path": "D:/Films"}, {"path": "E:/Films"}],
         }
@@ -312,7 +312,7 @@ def test_admin_defaults_resolve_quality_profile_by_name_and_first_root(tmp_path,
     store = MediaStore(str(tmp_path / "test.db"))
     store.init_schema()
     media = asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
-    monkeypatch.setattr(Config, "RADARR_DEFAULT_QUALITY_PROFILE_NAME", "1080p FR - max 10 Go")
+    monkeypatch.setattr(Config, "RADARR_DEFAULT_QUALITY_PROFILE_NAME", "4K léger - MULTI")
     monkeypatch.setattr(Config, "RADARR_DEFAULT_ROOT_FOLDER", None)
     service = MediaServerService(store, radarr=OptionsRadarr())
 

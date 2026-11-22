@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { changePassword, fetchDevices, fetchNotifications, markNotificationRead, removeMyAvatar, revokeDevice, revokeOtherDevices, updateUser, uploadMyAvatar } from './api';
 import { useAuth } from './auth-context';
+import useLayer from './useLayer';
 
 export default function AccountPanel({isDarkMode, onClose}) {
+    const layerRef = useLayer(true, onClose);
     const {user, setUser, logout} = useAuth();
     const [devices, setDevices] = useState([]);
     const [notifications, setNotifications] = useState([]);
@@ -92,7 +94,7 @@ export default function AccountPanel({isDarkMode, onClose}) {
 
     return (
         <div className="fixed inset-0 z-[80] bg-black/50 p-4 sm:p-8" onClick={onClose}>
-            <section className={`mx-auto max-h-full max-w-3xl overflow-y-auto rounded-2xl border p-6 shadow-2xl ${panel} ${text}`} onClick={(event) => event.stopPropagation()}>
+            <section ref={layerRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Mon compte" className={`mx-auto max-h-full max-w-3xl overflow-y-auto rounded-2xl border p-6 shadow-2xl outline-none ${panel} ${text}`} onClick={(event) => event.stopPropagation()}>
                 <div className="mb-6 flex items-start justify-between gap-4">
                     <div>
                         <p className="text-xs font-mono uppercase tracking-widest text-[#635bff]">Mon compte</p>
@@ -120,7 +122,7 @@ export default function AccountPanel({isDarkMode, onClose}) {
                         <h3 className="mb-3 font-semibold">Mes notifications</h3>
                         <div className="space-y-2">
                             {notifications.map((notification) => (
-                                <button key={notification.id} type="button" onClick={async () => { if (!notification.read_at) { await markNotificationRead(notification.id); await refresh(); } }} className={`block w-full rounded-lg border p-3 text-left text-sm ${notification.read_at ? 'opacity-60' : 'border-[#635bff]'}`}>
+                                <button key={notification.id} type="button" onClick={async () => { if (!notification.read_at) { await markNotificationRead(notification.id); await refresh(); } }} className={`block w-full rounded-lg border p-3 text-left text-sm ${notification.read_at ? 'opacity-75' : 'border-[#635bff]'}`}>
                                     <p>{notification.message}</p>
                                     <p className={`mt-1 text-xs ${muted}`}>{new Date(notification.created_at).toLocaleString()}</p>
                                 </button>
@@ -139,9 +141,9 @@ export default function AccountPanel({isDarkMode, onClose}) {
 
                 <form className="mb-8 grid gap-2 sm:grid-cols-3" onSubmit={handlePasswordChange}>
                     <h3 className="sm:col-span-3 font-semibold">Changer mon mot de passe</h3>
-                    <input required type="password" autoComplete="current-password" placeholder="Mot de passe actuel" value={passwordForm.current_password} onChange={(event) => setPasswordForm({...passwordForm, current_password: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
-                    <input required minLength="8" type="password" autoComplete="new-password" placeholder="Nouveau mot de passe (8 min.)" value={passwordForm.new_password} onChange={(event) => setPasswordForm({...passwordForm, new_password: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
-                    <input required minLength="8" type="password" autoComplete="new-password" placeholder="Confirmer le nouveau mot de passe" value={passwordForm.password_confirmation} onChange={(event) => setPasswordForm({...passwordForm, password_confirmation: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
+                    <input required type="password" autoComplete="current-password" aria-label="Mot de passe actuel" placeholder="Mot de passe actuel" value={passwordForm.current_password} onChange={(event) => setPasswordForm({...passwordForm, current_password: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
+                    <input required minLength="8" type="password" autoComplete="new-password" aria-label="Nouveau mot de passe" placeholder="Nouveau mot de passe (8 min.)" value={passwordForm.new_password} onChange={(event) => setPasswordForm({...passwordForm, new_password: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
+                    <input required minLength="8" type="password" autoComplete="new-password" aria-label="Confirmer le nouveau mot de passe" placeholder="Confirmer le nouveau mot de passe" value={passwordForm.password_confirmation} onChange={(event) => setPasswordForm({...passwordForm, password_confirmation: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
                     <button className="rounded bg-[#635bff] px-3 py-2 text-sm font-semibold text-white sm:col-span-3" type="submit">Modifier mon mot de passe</button>
                 </form>
 

@@ -183,13 +183,15 @@
   }
 }
 
+/* Same tokens as the app (Tailwind classes in BackstagePrototype) so that
+   signing in does not feel like landing on another site. */
 .auth-shell {
   min-height: 100vh;
   display: grid;
   place-items: center;
   padding: 24px;
-  background: #f7f3eb;
-  color: #2f2a24;
+  background: #f6f9fc;
+  color: #0a2540;
   box-sizing: border-box;
 }
 
@@ -198,10 +200,10 @@
   display: grid;
   gap: 16px;
   padding: 36px;
-  border: 1px solid #ded6c9;
+  border: 1px solid #e3e8ee;
   border-radius: 18px;
-  background: #fffdf9;
-  box-shadow: 0 18px 50px rgba(72, 59, 44, 0.12);
+  background: #ffffff;
+  box-shadow: 0 18px 50px rgba(10, 37, 64, 0.08);
 }
 
 .auth-card h1,
@@ -209,22 +211,41 @@
   margin: 0;
 }
 
+.auth-card h1 {
+  font-family: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
 .auth-kicker {
-  color: #9a6b35;
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.16em;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #0a2540;
+  font-family: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  font-size: 20px;
+  font-style: italic;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+
+.auth-kicker img {
+  height: 36px;
+  width: auto;
+  object-fit: contain;
 }
 
 .auth-subtitle {
-  color: #71685d;
+  color: #425466;
   line-height: 1.5;
 }
 
 .auth-card label {
   display: grid;
   gap: 7px;
-  color: #4f473e;
+  color: #0a2540;
   font-size: 14px;
   font-weight: 650;
 }
@@ -233,15 +254,15 @@
   width: 100%;
   box-sizing: border-box;
   padding: 11px 12px;
-  border: 1px solid #cfc5b6;
+  border: 1px solid #e3e8ee;
   border-radius: 9px;
-  background: #ffffff;
-  color: #2f2a24;
+  background: #f6f9fc;
+  color: #0a2540;
   font: inherit;
 }
 
 .auth-card input:focus-visible {
-  outline: 2px solid #b47b3d;
+  outline: 3px solid #635bff;
   outline-offset: 2px;
 }
 
@@ -253,12 +274,16 @@
   font-weight: 500 !important;
 }
 
+.auth-checkbox input {
+  accent-color: #635bff;
+}
+
 .auth-submit {
   margin-top: 4px;
   padding: 12px 16px;
   border: 0;
   border-radius: 9px;
-  background: #3f6f9f;
+  background: #635bff;
   color: white;
   font: inherit;
   font-weight: 750;
@@ -271,13 +296,13 @@
 }
 
 .auth-error {
-  color: #a53d32;
+  color: #be123c;
   font-size: 14px;
 }
 
 .auth-link,
 .auth-link-button {
-  color: #3f6f9f;
+  color: #635bff;
   font: inherit;
   font-size: 14px;
   text-align: center;

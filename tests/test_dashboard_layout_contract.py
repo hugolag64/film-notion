@@ -15,11 +15,16 @@ def test_header_uses_compact_primary_navigation_and_right_aligned_utilities():
     assert '+ Ajouter un film' not in source
     assert 'Ajouter un film' in source
     assert source.index('title="Changer de thème"') > source.index('title="Ouvrir le compte"')
-    # Flex header: the search box shrinks so the nav (incl. Séries) is never covered.
-    assert 'mx-auto flex h-16 items-center' in source
-    assert '<nav className="flex flex-1 justify-center"' in source
-    assert 'relative w-56 min-w-[7rem] shrink' in source
+    # Desktop (lg+): side columns sized to their content so the right-hand
+    # buttons never spill over the search field.
+    assert 'lg:grid-cols-[auto_minmax(0,1fr)_auto]' in source
+    assert 'lg:grid-cols-[1fr_auto_1fr]' not in source
     assert 'absolute left-1/2' not in source
+    # Phones/tablets: the top nav is hidden, a bottom tab bar replaces it and
+    # the search opens on its own row, so nothing overlaps.
+    assert '<nav className="hidden shrink-0 lg:block" aria-label="Navigation principale">' in source
+    assert 'fixed inset-x-0 bottom-0 z-40' in source
+    assert "aria-label={mobileSearchOpen ? 'Fermer la recherche' : 'Rechercher'}" in source
 
 
 def test_dashboard_exposes_seerr_request_queue_and_tmdb_request_action():
@@ -57,7 +62,7 @@ def test_library_and_movie_detail_use_clean_catalogue_experience():
 def test_dashboard_api_client_handles_plain_text_server_errors():
     source = (ROOT / "proto-ui/src/api.js").read_text(encoding="utf-8")
     assert "const text = await response.text();" in source
-    assert "body?.detail || body?.message || 'Dashboard indisponible'" in source
+    assert "errorDetail(body, body?.message || 'Dashboard indisponible')" in source
 
 
 def test_requests_manager_modal_does_not_blur_the_dashboard():

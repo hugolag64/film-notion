@@ -282,3 +282,30 @@ def test_requests_use_the_mediabrowser_authorization_header():
 def test_auth_header_values_cannot_break_out_of_their_quotes():
     header = JellyfinClient("http://127.0.0.1:8096", 'bad"key\r\nX: y')._auth_headers()["Authorization"]
     assert 'Token="badkeyX: y"' in header
+
+
+def _ping_with(handler):
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            client = JellyfinClient("http://127.0.0.1:8096", "secret", http_client)
+            return await client.ping()
+    return asyncio.run(run())
+
+
+def test_ping_is_true_when_jellyfin_answers():
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        return httpx.Response(200, text="Jellyfin Server")
+
+    assert _ping_with(handler) is True
+    assert seen == ["/System/Ping"]
+
+
+def test_ping_is_false_when_jellyfin_is_unreachable_or_failing():
+    def unreachable(request):
+        raise httpx.ConnectError("refused", request=request)
+
+    assert _ping_with(unreachable) is False
+    assert _ping_with(lambda request: httpx.Response(503)) is False

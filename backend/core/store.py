@@ -165,6 +165,18 @@ class MediaStore:
                 "CREATE INDEX IF NOT EXISTS idx_notifications_user_created "
                 "ON notifications(backstage_user_id, created_at DESC)"
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    author_id TEXT NOT NULL,
+                    author_name TEXT NOT NULL,
+                    author_avatar_url TEXT,
+                    body TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
             notification_columns = {row[1] for row in conn.execute("PRAGMA table_info(notifications)").fetchall()}
             if "dedupe_key" not in notification_columns:
                 conn.execute("ALTER TABLE notifications ADD COLUMN dedupe_key TEXT")
@@ -1277,8 +1289,10 @@ class MediaStore:
             row = conn.execute("SELECT status FROM media_rentals WHERE id = ?", (rental_id,)).fetchone()
             if not row:
                 return None
-            if row[0] != "keep_requested":
+            if decision == "refused" and row[0] != "keep_requested":
                 raise ValueError("rental is not awaiting a conservation decision")
+            if decision == "accepted" and row[0] not in {"available", "keep_requested"}:
+                raise ValueError("rental is not available for permanent retention")
             if decision == "accepted":
                 conn.execute(
                     "UPDATE media_rentals SET status = 'kept', storage_policy = 'permanent', "
@@ -1293,6 +1307,20 @@ class MediaStore:
                     "decided_at = ?, updated_at = ? WHERE id = ?",
                     (admin_id, decided_at.isoformat(), decided_at.isoformat(), rental_id),
                 )
+        return self._get_rental_sync(rental_id)
+
+    def _revoke_rental_sync(self, rental_id: str, admin_id: str, decided_at: datetime) -> Optional[Rental]:
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute("SELECT status FROM media_rentals WHERE id = ?", (rental_id,)).fetchone()
+            if not row:
+                return None
+            if row[0] not in _ACTIVE_RENTAL_STATES:
+                raise ValueError("rental is no longer active")
+            conn.execute(
+                "UPDATE media_rentals SET status = 'expired', keep_decision = 'refused', "
+                "keep_requested_at = NULL, decided_by = ?, decided_at = ?, updated_at = ? WHERE id = ?",
+                (admin_id, decided_at.isoformat(), decided_at.isoformat(), rental_id),
+            )
         return self._get_rental_sync(rental_id)
 
     def _extend_rental_sync(self, rental_id: str, now: datetime) -> Optional[Rental]:
@@ -1338,6 +1366,57 @@ class MediaStore:
                 (user_id,),
             ).fetchall()
         return [self._row_to_notification(row) for row in rows]
+
+    @staticmethod
+    def _row_to_chat_message(row: sqlite3.Row) -> Dict[str, Any]:
+        return {
+            "id": row["id"],
+            "author": {
+                "id": row["author_id"],
+                "display_name": row["author_name"],
+                "avatar_url": row["author_avatar_url"],
+            },
+            "body": row["body"],
+            "created_at": row["created_at"],
+        }
+
+    def _create_chat_message_sync(
+        self, author_id: str, author_name: str, author_avatar_url: Optional[str], body: str,
+    ) -> Dict[str, Any]:
+        created_at = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                "INSERT INTO chat_messages (author_id, author_name, author_avatar_url, body, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (author_id, author_name, author_avatar_url, body, created_at),
+            )
+            row = conn.execute("SELECT * FROM chat_messages WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        return self._row_to_chat_message(row)
+
+    def _list_chat_messages_sync(self, after_id: Optional[int], limit: int) -> List[Dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            if after_id is None:
+                rows = conn.execute(
+                    "SELECT * FROM chat_messages ORDER BY id DESC LIMIT ?", (limit,),
+                ).fetchall()
+                rows.reverse()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM chat_messages WHERE id > ? ORDER BY id ASC LIMIT ?", (after_id, limit),
+                ).fetchall()
+        return [self._row_to_chat_message(row) for row in rows]
+
+    async def create_chat_message(
+        self, author_id: str, author_name: str, author_avatar_url: Optional[str], body: str,
+    ) -> Dict[str, Any]:
+        return await asyncio.to_thread(
+            self._create_chat_message_sync, author_id, author_name, author_avatar_url, body,
+        )
+
+    async def list_chat_messages(self, after_id: Optional[int] = None, limit: int = 50) -> List[Dict[str, Any]]:
+        return await asyncio.to_thread(self._list_chat_messages_sync, after_id, limit)
 
     def _mark_notification_read_sync(self, notification_id: str, user_id: str, read_at: datetime) -> bool:
         with sqlite3.connect(self.db_path) as conn:
@@ -1725,6 +1804,9 @@ class MediaStore:
         self, rental_id: str, decision: str, admin_id: str, decided_at: datetime,
     ) -> Optional[Rental]:
         return await asyncio.to_thread(self._decide_rental_sync, rental_id, decision, admin_id, decided_at)
+
+    async def revoke_rental(self, rental_id: str, admin_id: str, decided_at: datetime) -> Optional[Rental]:
+        return await asyncio.to_thread(self._revoke_rental_sync, rental_id, admin_id, decided_at)
 
     async def expire_rentals(self, now: datetime) -> int:
         return await asyncio.to_thread(self._expire_rentals_sync, now)

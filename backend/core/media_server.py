@@ -68,7 +68,7 @@ class MediaServerService:
         language_profile_id: Optional[int], monitor: str,
     ) -> Availability:
         if not media.tmdb_id:
-            raise ValueError("Associez d'abord ce média à TMDB")
+            raise ValueError("Associe d'abord ce film à TMDB")
         provider = "sonarr" if media.type == "Série" else "radarr"
         if self.seerr:
             try:
@@ -530,6 +530,24 @@ class MediaServerService:
     async def set_storage_protection(self, media_id: str, protected: bool) -> bool:
         return await self.store.set_storage_protection(media_id, protected)
 
+    async def cancel_pending_movie(self, media_id: str) -> bool:
+        """Remove a queued Radarr movie after its last rental has been revoked."""
+        availability = await self.store.get_availability(media_id)
+        if not availability or availability.provider != "radarr" or not availability.arr_id or not self.radarr:
+            return False
+        await self.radarr.delete_movie(availability.arr_id, delete_files=True)
+        await self.store.upsert_availability(availability.model_copy(update={
+            "arr_id": None, "jellyfin_id": None, "state": "error", "progress_percent": None,
+            "last_error": "Demande de location révoquée par l'administrateur",
+            "last_synced_at": datetime.now(timezone.utc),
+        }))
+        try:
+            await self.sync_media(media_id, jellyfin_items=[])
+        except Exception:
+            # Radarr has already removed the request; the next server sync can repair Jellyfin metadata.
+            pass
+        return True
+
     async def delete_expired_rentals(self, admin_user_id: str) -> dict[str, Any]:
         """Delete every unprotected film whose only rentals have expired."""
         targets = [
@@ -547,12 +565,14 @@ class MediaServerService:
             freed_bytes += int(result.get("freed_bytes") or candidate.size_bytes)
         return {"deleted": deleted, "failed": failed, "freed_bytes": freed_bytes}
 
-    async def delete_storage_candidate(self, media_id: str, admin_user_id: str) -> dict[str, Any]:
+    async def delete_storage_candidate(
+        self, media_id: str, admin_user_id: str, *, allow_protected: bool = False,
+    ) -> dict[str, Any]:
         candidates = await self.storage_candidates()
         candidate = next((item for item in candidates if item.media_id == media_id), None)
         if candidate is None:
             raise LookupError("Film absent de Radarr ou non éligible à la suppression")
-        if candidate.protected:
+        if candidate.protected and not allow_protected:
             raise PermissionError("Ce film est protégé et ne peut pas être supprimé")
         if self.radarr is None:
             raise RuntimeError("Radarr n'est pas configuré")

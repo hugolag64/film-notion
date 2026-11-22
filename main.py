@@ -48,6 +48,15 @@ if os.path.exists(DIST_DIR):
     @ui.page("/reset-password")
     def serve_reset_password():
         return serve_react_index()
+
+    # Liens partageables vers une fiche : l'app React ouvre la fiche au chargement.
+    @ui.page("/film/{media_id}")
+    def serve_film_link(media_id: str):
+        return serve_react_index()
+
+    @ui.page("/serie/{media_id}")
+    def serve_series_link(media_id: str):
+        return serve_react_index()
 else:
     raise RuntimeError("Le frontend React compilé (proto-ui/dist) est requis.")
 

@@ -44,6 +44,15 @@ class JellyfinClient:
         value = ", ".join(f'{key}="{_quote_auth_value(item)}"' for key, item in fields.items())
         return {"Authorization": f"MediaBrowser {value}"}
 
+    async def ping(self, timeout: float = 3.0) -> bool:
+        """True when the server answers; never raises."""
+        client = self.client or http.get_client()
+        try:
+            response = await client.get(f"{self.base_url}/System/Ping", timeout=timeout)
+        except httpx.HTTPError:
+            return False
+        return response.is_success
+
     async def list_users(self) -> list[dict[str, Any]]:
         client = self.client or http.get_client()
         response = await client.get(

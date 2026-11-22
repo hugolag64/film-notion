@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { acceptKeepRequest, createBackup, deleteExpiredRentals, deleteStorageCandidate, extendRental, fetchAdminDashboard, fetchBackupStatus, fetchCleanupPreview, fetchKeepRequests, fetchMediaServerActivity, fetchMediaServerStatus, fetchStorageOverview, fetchStorageStatus, fetchUsers, refuseKeepRequest, setStorageProtection, verifyBackup, importMediaServerLibrary, syncMediaServer } from '../api';
+import useLayer from '../useLayer';
+import { acceptKeepRequest, createBackup, deleteExpiredRentals, deleteStorageCandidate, extendRental, fetchAdminDashboard, fetchAdminRentals, fetchBackupStatus, fetchCleanupPreview, fetchKeepRequests, fetchMediaServerActivity, fetchMediaServerStatus, fetchStorageOverview, fetchStorageStatus, fetchUsers, refuseKeepRequest, revokeRental, setStorageProtection, verifyBackup, importMediaServerLibrary, syncMediaServer } from '../api';
 import { useAuth } from '../auth-context';
 import UserManagement from './UserManagement';
 
@@ -8,7 +9,7 @@ const SECTIONS = [
     ['activity', 'Activité serveur'],
     ['requests', 'Demandes'],
     ['users', 'Utilisateurs'],
-    ['storage', 'Stockage'],
+    ['storage', 'Stockage et locations'],
     ['services', 'Services'],
     ['settings', 'Paramètres'],
 ];
@@ -20,7 +21,7 @@ function formatDate(value) {
 
 function availabilityLabel(state) {
     return {
-        requested: 'Demandé',
+        requested: 'Demande enregistrée',
         searching: 'Recherche',
         downloading: 'Téléchargement',
         imported: 'Téléchargé — Jellyfin non confirmé',
@@ -110,11 +111,13 @@ function StorageCleanup({candidates, history, card, muted, onChanged, onError, o
 }
 
 export default function AdminCenter({isDarkMode, onClose, onMediaChanged}) {
+    const layerRef = useLayer(true, onClose);
     const {user} = useAuth();
     const [section, setSection] = useState('overview');
     const [dashboard, setDashboard] = useState(null);
     const [activity, setActivity] = useState(null);
     const [keepRequests, setKeepRequests] = useState([]);
+    const [adminRentals, setAdminRentals] = useState([]);
     const [users, setUsers] = useState([]);
     const [storage, setStorage] = useState(null);
     const [storageCandidates, setStorageCandidates] = useState([]);
@@ -133,10 +136,11 @@ export default function AdminCenter({isDarkMode, onClose, onMediaChanged}) {
     const load = useCallback(async () => {
         try {
             setError('');
-            const [nextDashboard, nextActivity, nextKeepRequests, nextUsers, nextStorage, nextServices, nextBackup, nextStorageOverview] = await Promise.all([
+            const [nextDashboard, nextActivity, nextKeepRequests, nextAdminRentals, nextUsers, nextStorage, nextServices, nextBackup, nextStorageOverview] = await Promise.all([
                 fetchAdminDashboard(),
                 fetchMediaServerActivity(),
                 fetchKeepRequests(),
+                fetchAdminRentals(),
                 fetchUsers(),
                 fetchStorageStatus(),
                 fetchMediaServerStatus(),
@@ -146,6 +150,7 @@ export default function AdminCenter({isDarkMode, onClose, onMediaChanged}) {
             setDashboard(nextDashboard);
             setActivity(nextActivity);
             setKeepRequests(nextKeepRequests);
+            setAdminRentals(nextAdminRentals);
             setUsers(nextUsers);
             setStorage(nextStorage);
             setServices(nextServices);
@@ -204,6 +209,26 @@ export default function AdminCenter({isDarkMode, onClose, onMediaChanged}) {
         }
     };
 
+    const handleRevokeRental = async (item) => {
+        const confirmed = window.confirm(`Révoquer maintenant l'accès de ${item.requester_name} à « ${item.media_title} » ?\n\nSi aucune autre location ne dépend de ce film, il sera également retiré de Jellyfin et supprimé du disque.`);
+        if (!confirmed) return;
+        try {
+            setError('');
+            const result = await revokeRental(item.rental.id);
+            setNotice(result.removed_from_library
+                ? `Location de « ${item.media_title} » révoquée ; le film a été retiré de la bibliothèque et du disque.`
+                : result.retained_for_other_rentals
+                    ? `Accès de ${item.requester_name} révoqué. Le film reste dans la bibliothèque pour une autre location active ou permanente.`
+                    : result.warning
+                        ? `Accès révoqué. Retrait du film impossible : ${result.warning}`
+                        : `Accès de ${item.requester_name} révoqué. Le film n'était pas présent sur le disque.`);
+            await load();
+            if (result.removed_from_library) await onMediaChanged?.();
+        } catch (requestError) {
+            setError(requestError.message);
+        }
+    };
+
     const handleBackup = async () => {
         try {
             setBackupLoading(true);
@@ -251,10 +276,10 @@ export default function AdminCenter({isDarkMode, onClose, onMediaChanged}) {
 
     return (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 p-3 backdrop-blur-md sm:p-6" onClick={onClose}>
-            <section className={`flex h-[min(94vh,900px)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border shadow-2xl ${panel} ${text}`} onClick={(event) => event.stopPropagation()}>
+            <section className={`flex h-[min(94vh,900px)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border shadow-2xl ${panel} ${text}`} onClick={(event) => event.stopPropagation()} ref={layerRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Centre d’administration">
                 <header className="flex flex-wrap items-center justify-between gap-3 border-b border-inherit px-5 py-4 sm:px-7">
                     <div>
-                        <p className="text-[10px] font-mono uppercase tracking-[0.24em] text-[#635bff]">Backstage / Admin</p>
+                        <p className="text-xs font-mono uppercase tracking-[0.24em] text-[#635bff]">Backstage / Admin</p>
                         <h2 className="mt-1 text-2xl font-semibold">Centre d’administration</h2>
                     </div>
                     <div className="flex items-center gap-2">
@@ -286,13 +311,13 @@ export default function AdminCenter({isDarkMode, onClose, onMediaChanged}) {
                                     </div>
                                 </div>}
 
-                                {section === 'activity' && <div className="space-y-4"><div className="flex flex-wrap gap-2"><button type="button" className="rounded-lg bg-[#635bff] px-3 py-2 text-xs font-semibold text-white" onClick={syncAndRefresh} disabled={refreshing}>Synchroniser les services</button><button type="button" className="rounded-lg border px-3 py-2 text-xs font-semibold" onClick={importAndRefresh} disabled={refreshing}>Importer la bibliothèque</button></div><div className="space-y-2">{(activity?.items || []).length === 0 && <p className={muted}>Aucune activité serveur.</p>}{(activity?.items || []).map((item) => <div key={`${item.provider}-${item.media_id}`} className={`rounded-xl border p-4 ${card}`}><div className="flex flex-wrap items-center justify-between gap-2"><strong>{item.title || item.media_id}</strong><span className={`text-xs font-semibold ${item.state === 'error' ? 'text-rose-500' : 'text-[#635bff]'}`}>{availabilityLabel(item.state)}</span></div><p className={`mt-1 text-xs ${muted}`}>{item.media_type || 'Média'} · {item.provider}{item.progress_percent != null ? ` · ${item.progress_percent}%` : ''}{item.last_synced_at ? ` · ${formatDate(item.last_synced_at)}` : ''}</p>{item.last_error && <p className="mt-2 text-xs text-rose-500">{item.last_error}</p>}</div>)}</div></div>}
+                                {section === 'activity' && <div className="space-y-4"><div className="flex flex-wrap gap-2"><button type="button" className="rounded-lg bg-[#635bff] px-3 py-2 text-xs font-semibold text-white" onClick={syncAndRefresh} disabled={refreshing}>Synchroniser les services</button><button type="button" className="rounded-lg border px-3 py-2 text-xs font-semibold" onClick={importAndRefresh} disabled={refreshing}>Importer la bibliothèque</button></div><div className="space-y-2">{(activity?.items || []).length === 0 && <p className={muted}>Aucune activité serveur.</p>}{(activity?.items || []).map((item) => <div key={`${item.provider}-${item.media_id}`} className={`rounded-xl border p-4 ${card}`}><div className="flex flex-wrap items-center justify-between gap-2"><strong>{item.title || item.media_id}</strong><span className={`text-xs font-semibold ${item.state === 'error' ? 'text-rose-500' : 'text-[#635bff]'}`}>{availabilityLabel(item.state)}</span></div><p className={`mt-1 text-xs ${muted}`}>{item.media_type || 'Média'} · {item.provider}{item.progress_percent != null ? ` · ${item.progress_percent}%` : ''}{item.last_synced_at ? ` · ${formatDate(item.last_synced_at)}` : ''}</p>{item.state === 'requested' && <p className={`mt-2 text-xs ${muted}`}>Demande enregistrée. Le film n'est pas encore disponible dans la bibliothèque Jellyfin.</p>}{item.last_error && <p className="mt-2 text-xs text-rose-500">{item.last_error}</p>}</div>)}</div></div>}
 
                                 {section === 'requests' && <div className="space-y-3"><h3 className="text-lg font-semibold">Demandes de conservation</h3>{keepRequests.length === 0 && <p className={`rounded-lg border p-3 text-sm ${muted}`}>Aucune demande en attente.</p>}{keepRequests.map((item) => <div key={item.rental.id} className={`rounded-xl border p-4 ${card}`}><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-semibold">{item.media_title}</p><p className={`mt-1 text-xs ${muted}`}>{item.requester_name} · expire le {formatDate(item.rental.expires_at)}</p></div><div className="flex flex-wrap gap-2"><button type="button" className="rounded bg-emerald-600 px-2 py-1 text-xs font-semibold text-white" onClick={() => handleRetentionAction(item.rental.id, acceptKeepRequest, 'Film conservé définitivement.')}>Conserver</button><button type="button" className="rounded border border-rose-500 px-2 py-1 text-xs text-rose-500" onClick={() => handleRetentionAction(item.rental.id, refuseKeepRequest, 'Demande refusée.')}>Refuser</button><button type="button" className="rounded border border-[#635bff] px-2 py-1 text-xs text-[#635bff]" onClick={() => handleRetentionAction(item.rental.id, extendRental, 'Location prolongée de 7 jours.')}>Prolonger</button></div></div></div>)}</div>}
 
                                 {section === 'users' && <UserManagement isDarkMode={isDarkMode} currentUser={user} onError={setError} onNotice={setNotice} onChanged={load} />}
 
-                                {section === 'storage' && <div className="space-y-4"><h3 className="text-lg font-semibold">Stockage et quotas</h3><div className={`rounded-xl border p-4 ${card}`}>{storage ? <><p className="text-sm">Espace temporaire : {storage.temporary_gb} Go / {storage.temporary_max_gb} Go</p><p className={`mt-1 text-sm ${muted}`}>Espace libre : {storage.min_free_gb ?? '—'} Go · seuil : {storage.min_free_threshold_gb ?? '—'} Go</p></> : <p className={muted}>État du stockage indisponible.</p>}</div>{(dashboard?.quotas || []).map((quota) => <div key={quota.user_id} className={`rounded-xl border p-4 ${card}`}><p className="font-semibold">{quota.display_name}</p><p className={`mt-1 text-xs ${muted}`}>{quota.active_rentals}/{quota.max_active_rentals} locations · {quota.queued_rentals || 0} en attente · {quota.temporary_bytes} octets temporaires</p></div>)}<StorageCleanup candidates={storageCandidates} history={storageCleanupHistory} card={card} muted={muted} onChanged={load} onError={setError} onNotice={setNotice} /></div>}
+                                {section === 'storage' && <div className="space-y-4"><h3 className="text-lg font-semibold">Stockage et quotas</h3><div className={`rounded-xl border p-4 ${card}`}>{storage ? <><p className="text-sm">Espace temporaire : {storage.temporary_gb} Go / {storage.temporary_max_gb} Go</p><p className={`mt-1 text-sm ${muted}`}>Espace libre : {storage.min_free_gb ?? '—'} Go · seuil : {storage.min_free_threshold_gb ?? '—'} Go</p></> : <p className={muted}>État du stockage indisponible.</p>}</div><section className={`rounded-xl border p-4 ${card}`}><div><h3 className="text-lg font-semibold">Locations en cours</h3><p className={`mt-1 text-sm ${muted}`}>Gère ici les locations temporaires : tu peux conserver un film dans la bibliothèque ou révoquer un accès avant son échéance.</p></div>{adminRentals.length === 0 ? <p className={`mt-3 rounded-lg border p-3 text-sm ${muted}`}>Aucune location en cours.</p> : <div className="mt-3 space-y-2">{adminRentals.map((item) => { const active = item.rental.status !== 'kept'; const mayKeep = ['available', 'keep_requested'].includes(item.rental.status); return <div key={item.rental.id} className="rounded-lg border p-3"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-semibold">{item.media_title}</p><p className={`mt-1 text-xs ${muted}`}>{item.requester_name} · {item.rental.status === 'kept' ? 'Conservé définitivement' : item.rental.expires_at ? `Expire le ${formatDate(item.rental.expires_at)}` : item.rental.status === 'requested' || item.rental.status === 'downloading' ? 'En attente de disponibilité' : 'Location active'}</p></div>{active && <div className="flex flex-wrap gap-2"><button type="button" className="rounded bg-emerald-600 px-2 py-1 text-xs font-semibold text-white disabled:opacity-40" disabled={!mayKeep} title={!mayKeep ? 'Disponible uniquement lorsque le film est prêt' : ''} onClick={() => handleRetentionAction(item.rental.id, acceptKeepRequest, `« ${item.media_title} » restera définitivement dans la bibliothèque.`)}>Conserver définitivement</button><button type="button" className="rounded border border-rose-500 px-2 py-1 text-xs text-rose-500" onClick={() => handleRevokeRental(item)}>Révoquer avant l’échéance</button></div>}</div></div>; })}</div>}</section>{(dashboard?.quotas || []).map((quota) => <div key={quota.user_id} className={`rounded-xl border p-4 ${card}`}><p className="font-semibold">{quota.display_name}</p><p className={`mt-1 text-xs ${muted}`}>{quota.active_rentals}/{quota.max_active_rentals} locations · {quota.queued_rentals || 0} en attente · {quota.temporary_bytes} octets temporaires</p></div>)}<StorageCleanup candidates={storageCandidates} history={storageCleanupHistory} card={card} muted={muted} onChanged={load} onError={setError} onNotice={setNotice} /></div>}
 
                                 {section === 'services' && <div className="grid gap-3 sm:grid-cols-2">{Object.entries(services || {}).map(([name, status]) => <div key={name} className={`rounded-xl border p-4 ${card}`}><p className="font-semibold capitalize">{name}</p><p className={`mt-2 text-sm ${status.configured ? 'text-emerald-500' : muted}`}>{status.configured ? 'Configuré' : 'Non configuré'}</p></div>)}</div>}
 

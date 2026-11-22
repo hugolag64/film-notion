@@ -94,6 +94,81 @@ def _finish(sentence: str) -> str:
     return sentence if sentence.endswith((".", "!", "?")) else f"{sentence}."
 
 
+def is_readable_title(title: str | None) -> bool:
+    """False for titles with no Latin letter at all (Arabic, CJK, Cyrillic…):
+    TMDB sometimes has no French title and falls back to the original one,
+    which a French-speaking household cannot read."""
+    import unicodedata
+
+    return any(
+        char.isalpha() and "LATIN" in unicodedata.name(char, "")
+        for char in (title or "")
+    )
+
+
+_MOOD_LABELS = {
+    "light": "léger ou drôle",
+    "intense": "prenant",
+    "moving": "émouvant",
+    "thoughtful": "qui fait réfléchir",
+}
+
+# Genres that really prove a mood in the sentence.  The candidate pool uses
+# wider MOOD_GENRES (Animation counts as "light"), but an animated horror film
+# must not be described as light or funny.
+_MOOD_PROOF = {
+    "light": ("Comédie", "Familial"),
+}
+
+
+def _french_number(value: Any) -> str | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f"{number:.1f}".replace(".", ",") if number > 0 else None
+
+
+def build_guided_explanation(candidate: dict[str, Any], preferences: dict[str, Any]) -> str:
+    """Explain a guided pick from the user's own answers, mentioning only the
+    criteria the film really matches (used when the LLM gives no reason)."""
+    from backend.core.guided_recommendations import MOOD_GENRES, _REFINEMENTS
+    from backend.core.recommendations import TMDB_GENRE_NAMES
+
+    title = candidate.get("title") or "Ce film"
+    year = str(candidate.get("release_date") or "")[:4]
+    genres = {TMDB_GENRE_NAMES.get(genre_id) for genre_id in candidate.get("genre_ids") or []} - {None}
+
+    matched: list[str] = []
+    for genre in preferences.get("genres") or []:
+        if genre in genres:
+            matched.append(genre.lower())
+    refinement = preferences.get("refinement")
+    if refinement and refinement in genres:
+        # Same value, different label per genre ("Mystère" = "Une énigme" for
+        # science-fiction, "Une enquête" for thriller): use the asked genre.
+        label = next(
+            (choice_label for genre in preferences.get("genres") or [] if genre in _REFINEMENTS
+             for value, choice_label in _REFINEMENTS[genre][1] if value == refinement),
+            refinement,
+        )
+        matched.append(label[0].lower() + label[1:])
+    mood = preferences.get("mood")
+    if mood in _MOOD_LABELS and genres.intersection(_MOOD_PROOF.get(mood) or MOOD_GENRES.get(mood, ())):
+        matched.append(_MOOD_LABELS[mood])
+
+    named = f"{title} ({year})" if year.isdigit() else title
+    rating = _french_number(candidate.get("vote_average"))
+    rating_sentence = f" Le public le note {rating}/10." if rating else ""
+    if matched:
+        criteria = ", ".join(matched[:-1]) + (" et " if len(matched) > 1 else "") + matched[-1]
+        return f"Tu cherchais : {criteria}. {named} coche ces cases.{rating_sentence}"
+    return (
+        f"Petit écart volontaire : {named} change un peu de tes critères, "
+        f"pour ne pas te proposer toujours la même chose.{rating_sentence}"
+    )
+
+
 def build_recommendation_explanation(
     candidate: dict[str, Any], profile: Any, session_preferences: dict[str, Any],
 ) -> str:

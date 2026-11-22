@@ -4,6 +4,7 @@ import asyncio
 import logging
 import random
 import sqlite3
+import time
 import uuid
 from random import Random
 from typing import Any, Dict, List, Optional
@@ -29,6 +30,7 @@ from backend.core.jellyfin import JellyfinClient
 from backend.core.media_server import Availability, MediaServerService
 from backend.core.dashboard import build_dashboard_payload
 from backend.core.backup import create_backup, get_backup_health, get_backup_status, verify_backup
+from backend.core.recommendation_explanations import build_guided_explanation, is_readable_title
 from backend.core.recommendations import (
     GENRE_IDS, RecommendationCandidate, TasteProfile, apply_session_genre_delta, build_local_question,
     build_taste_profile, choose_from_top, record_compare_choice, score_candidate,
@@ -518,9 +520,27 @@ async def relink_tmdb(
     return refreshed
 
 
-async def _media_for_user(media: Media, current: AuthContext, store: MediaStore) -> Media:
-    state = await store.get_user_media_state(current.user["id"], media.id)
-    if state is None and current.user["role"] == "admin":
+_STATE_NOT_LOADED = object()
+
+
+def get_catalogue_owner_id(auth_store: AuthStore = Depends(get_auth_store)) -> str | None:
+    """The first administrator: the person whose ratings were saved on the
+    catalogue itself before personal states existed."""
+    for user in auth_store.list_users():
+        if user["role"] == "admin":
+            return user["id"]
+    return None
+
+
+async def _media_for_user(
+    media: Media, current: AuthContext, store: MediaStore, state: Any = _STATE_NOT_LOADED,
+    catalogue_owner_id: str | None = None,
+) -> Media:
+    if state is _STATE_NOT_LOADED:
+        state = await store.get_user_media_state(current.user["id"], media.id)
+    # Only the catalogue's original owner inherits the ratings stored on the
+    # media; a second admin starts with a blank slate like everyone else.
+    if state is None and current.user["role"] == "admin" and current.user["id"] == catalogue_owner_id:
         if media.rating and str(media.rating).strip():
             return media.model_copy(update={"status": "Terminé", "is_watchlist": False})
         return media
@@ -546,9 +566,17 @@ async def _media_for_user(media: Media, current: AuthContext, store: MediaStore)
 async def list_medias(
     current: AuthContext = Depends(get_current_user),
     store: MediaStore = Depends(get_store),
+    catalogue_owner_id: str | None = Depends(get_catalogue_owner_id),
 ):
-    medias = await store.fetch_all()
-    return [await _media_for_user(media, current, store) for media in medias]
+    medias, states = await asyncio.gather(
+        store.fetch_all(), store.list_user_media_states(current.user["id"]),
+    )
+    # One query for every personal state instead of one per media.
+    state_by_media = {state.media_id: state for state in states}
+    return [
+        await _media_for_user(media, current, store, state_by_media.get(media.id), catalogue_owner_id)
+        for media in medias
+    ]
 
 
 @router.get("/library/available")
@@ -606,7 +634,7 @@ async def create_seerr_request(
     service: MediaServerService = Depends(get_media_server_service),
 ):
     if not service.seerr:
-        raise HTTPException(status_code=503, detail="Seerr n'est pas configuré")
+        raise HTTPException(status_code=503, detail="Les demandes de films sont indisponibles pour le moment (service de demandes non configuré). Préviens l'administrateur.")
     if payload.media_type not in {"movie", "tv"}:
         raise HTTPException(status_code=422, detail="Type de média Seerr invalide")
     if payload.media_type == "movie":
@@ -627,7 +655,7 @@ async def create_seerr_request(
                 await service.store.delete(media.id)
             raise
     if current.user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Demandez cette série à l'administrateur")
+        raise HTTPException(status_code=403, detail="Demande cette série à l'administrateur")
     try:
         return await service.seerr.request_media(
             tmdb_id=payload.tmdb_id,
@@ -649,7 +677,7 @@ async def cancel_seerr_request(
     service: MediaServerService = Depends(get_media_server_service),
 ):
     if not service.seerr:
-        raise HTTPException(status_code=503, detail="Seerr n'est pas configuré")
+        raise HTTPException(status_code=503, detail="Les demandes de films sont indisponibles pour le moment (service de demandes non configuré). Préviens l'administrateur.")
     try:
         await service.seerr.cancel_request(request_id)
     except (MediaServerError, RuntimeError, ValueError) as error:
@@ -662,6 +690,7 @@ async def add_recommendation_to_watchlist(
     payload: RecommendationWatchlistRequest,
     current: AuthContext = Depends(get_current_user),
     store: MediaStore = Depends(get_store),
+    catalogue_owner_id: str | None = Depends(get_catalogue_owner_id),
 ):
     media = next(
         (item for item in await store.fetch_all() if item.type == "Film" and item.tmdb_id == payload.tmdb_id),
@@ -685,7 +714,7 @@ async def add_recommendation_to_watchlist(
     await store.upsert_user_media_state(current.user["id"], media.id, {
         "status": "À regarder", "is_watchlist": True,
     })
-    return await _media_for_user(media, current, store)
+    return await _media_for_user(media, current, store, catalogue_owner_id=catalogue_owner_id)
 
 
 @router.get("/medias/{media_id}", response_model=Media)
@@ -693,11 +722,12 @@ async def get_media(
     media_id: str,
     current: AuthContext = Depends(get_current_user),
     store: MediaStore = Depends(get_store),
+    catalogue_owner_id: str | None = Depends(get_catalogue_owner_id),
 ):
     media = await store.fetch_one(media_id)
     if not media:
         raise HTTPException(status_code=404, detail="Média non trouvé")
-    return await _media_for_user(media, current, store)
+    return await _media_for_user(media, current, store, catalogue_owner_id=catalogue_owner_id)
 
 
 @router.get("/medias/{media_id}/tmdb-rating")
@@ -728,7 +758,12 @@ async def get_tmdb_rating(media_id: str, store: MediaStore = Depends(get_store))
         rating = float(raw_rating) if raw_rating is not None else None
     except (TypeError, ValueError):
         rating = None
-    return {"rating": rating, **({"tmdb_id": tmdb_id} if was_unlinked and tmdb_id else {})}
+    runtime = details.get("runtime") if details else None
+    return {
+        "rating": rating,
+        **({"runtime": runtime} if isinstance(runtime, int) and runtime > 0 else {}),
+        **({"tmdb_id": tmdb_id} if was_unlinked and tmdb_id else {}),
+    }
 
 
 @router.patch("/medias/{media_id}/personal", response_model=Media)
@@ -737,6 +772,7 @@ async def update_personal_media(
     payload: UpdatePersonalMediaRequest,
     current: AuthContext = Depends(get_current_user),
     store: MediaStore = Depends(get_store),
+    catalogue_owner_id: str | None = Depends(get_catalogue_owner_id),
 ):
     media = await store.fetch_one(media_id)
     if not media:
@@ -752,7 +788,7 @@ async def update_personal_media(
     elif fields.get("status") == "À regarder":
         fields["rating"] = None
     await store.upsert_user_media_state(current.user["id"], media_id, fields)
-    return await _media_for_user(media, current, store)
+    return await _media_for_user(media, current, store, catalogue_owner_id=catalogue_owner_id)
 
 
 _POOL_SORT_OPTIONS = ("popularity.desc", "vote_average.desc", "vote_count.desc")
@@ -995,7 +1031,9 @@ async def _recommendation_pool(
     if recent_shown_tmdb_ids and sum(item.score >= 0 for item in scored) < (6 if guided else 2):
         # A cooldown is a soft memory, never a reason to show an empty screen.
         scored = score_pool(hard_seen_tmdb_ids)
-    return scored
+    # A title the household cannot read (no French title on TMDB) is not a
+    # usable suggestion, whatever its score.
+    return [item for item in scored if is_readable_title(item.title)]
 
 
 def _serialize_recommendation(candidate: RecommendationCandidate | None) -> dict[str, Any] | None:
@@ -1038,8 +1076,13 @@ async def _guided_results(
                 action = "play"
         elif availability and availability.state in IN_PROGRESS_STATES:
             action = "pending"
-        result = {**_serialize_recommendation(item), "media_id": media_id, "action": action}
-        if action == "play":
+        # Already on the server: playable now, or after an instant rental.
+        on_server = bool(availability and availability.jellyfin_id) and action in {"play", "rent"}
+        result = {
+            **_serialize_recommendation(item), "media_id": media_id, "action": action,
+            "ready_tonight": on_server,
+        }
+        if on_server:
             ready.append(result)
         elif len(other) < 15:
             other.append(result)
@@ -1061,13 +1104,18 @@ async def _guided_results(
     for item in pool:
         if reason := reasons.get(item["tmdb_id"]):
             item["explanation"] = reason
+        else:
+            # No LLM reason: explain from the user's own answers rather than
+            # with a generic sentence.
+            item["explanation"] = build_guided_explanation(item, preferences)
     pool.sort(key=lambda item: (
-        item["action"] != "play", model_positions.get(item["tmdb_id"], len(model_positions)),
+        item["action"] != "play", not item["ready_tonight"],
+        model_positions.get(item["tmdb_id"], len(model_positions)),
     ))
     # At most two immediate picks at the top. Offer some contrasting options
     # before listing the rest of a large local library.
-    ready = [item for item in pool if item["action"] == "play"]
-    other = [item for item in pool if item["action"] != "play"]
+    ready = [item for item in pool if item["ready_tonight"]]
+    other = [item for item in pool if not item["ready_tonight"]]
     return ready[:2] + other[:4] + ready[2:] + other[4:]
 
 
@@ -1781,6 +1829,31 @@ async def media_server_status():
     }
 
 
+_PLAYBACK_HEALTH_TTL_SEC = 30
+_playback_health_cache: dict[str, Any] = {"checked_at": 0.0, "online": None}
+
+
+async def playback_server_online(jellyfin: Optional[JellyfinClient] = None, *, now: Optional[float] = None) -> Optional[bool]:
+    """None when no playback server is configured; cached for a few seconds."""
+    if jellyfin is None:
+        if not Config.jellyfin_enabled():
+            return None
+        jellyfin = JellyfinClient(Config.JELLYFIN_URL, Config.JELLYFIN_API_KEY)
+    now = time.monotonic() if now is None else now
+    cached = _playback_health_cache
+    if cached["online"] is not None and now - cached["checked_at"] < _PLAYBACK_HEALTH_TTL_SEC:
+        return cached["online"]
+    online = await jellyfin.ping()
+    cached.update(checked_at=now, online=online)
+    return online
+
+
+@router.get("/media-server/health")
+async def media_server_health():
+    online = await playback_server_online()
+    return {"playback": "disabled" if online is None else "online" if online else "offline"}
+
+
 _PLAYBACK_RENTAL_STATES = {"available", "keep_requested", "kept"}
 
 
@@ -1789,7 +1862,7 @@ async def _ensure_playback_access(
 ) -> Optional[Rental]:
     media = await store.fetch_one(media_id)
     if not media:
-        raise HTTPException(status_code=404, detail="MÃ©dia non trouvÃ©")
+        raise HTTPException(status_code=404, detail="Média non trouvé")
     if current.user.get("role") == "admin":
         return None
 
@@ -1807,7 +1880,7 @@ async def _ensure_playback_access(
     if any(rental.status == "kept" or rental.storage_policy == "permanent" for rental in all_rentals):
         # A rental the admin decided to keep joins the shared library.
         return None
-    raise HTTPException(status_code=403, detail="Vous n'avez pas accès à ce contenu")
+    raise HTTPException(status_code=403, detail="Tu n'as pas accès à ce contenu")
 
 
 @router.get("/medias/{media_id}/availability")
@@ -1999,11 +2072,11 @@ async def _acquire_media(
     """Download a media: permanent for the admin, a temporary rental for everyone else."""
     media_id = media.id
     if not media.tmdb_id:
-        raise HTTPException(status_code=409, detail="Associez d'abord ce média à TMDB")
+        raise HTTPException(status_code=409, detail="Associe d'abord ce film à TMDB")
     is_admin = current.user.get("role") == "admin"
     owner_id = current.user["id"]
     if not is_admin and media.type == "Série":
-        raise HTTPException(status_code=403, detail="Demandez cette série à l'administrateur")
+        raise HTTPException(status_code=403, detail="Demande cette série à l'administrateur")
     if not is_admin:
         now = datetime.now(timezone.utc)
         await service.store.expire_rentals(now)
@@ -2202,6 +2275,24 @@ async def list_keep_requests(
     return {"requests": requests}
 
 
+@router.get("/admin/rentals")
+async def list_admin_rentals(
+    _: AuthContext = Depends(require_admin),
+    store: MediaStore = Depends(get_store),
+    auth_store: AuthStore = Depends(get_auth_store),
+):
+    users = {user["id"]: user["display_name"] for user in auth_store.list_users()}
+    rentals = []
+    for item in await store.list_admin_rentals():
+        rental = item["rental"]
+        rentals.append({
+            "media_title": item["media_title"],
+            "requester_name": users.get(rental.backstage_user_id, "Compte supprimé"),
+            "rental": _serialize_rental(rental),
+        })
+    return {"rentals": rentals}
+
+
 @router.get("/admin/rentals/cleanup-preview")
 async def cleanup_preview(
     _: AuthContext = Depends(require_admin),
@@ -2216,7 +2307,7 @@ async def cleanup_preview(
 
 async def _extension_message(store: MediaStore, rental: Rental) -> str:
     media = await store.fetch_one(rental.media_id)
-    title = f"La location de « {media.title} »" if media else "Votre location"
+    title = f"La location de « {media.title} »" if media else "Ta location"
     ends = f", jusqu'au {rental.expires_at.astimezone().strftime('%d/%m/%Y')}" if rental.expires_at else ""
     return f"{title} a été prolongée de 7 jours{ends}."
 
@@ -2235,7 +2326,7 @@ async def _apply_rental_decision(
     if not rental:
         raise HTTPException(status_code=404, detail="Location non trouvée")
     media = await store.fetch_one(rental.media_id)
-    title = f"« {media.title} »" if media else "Votre film"
+    title = f"« {media.title} »" if media else "Ton film"
     if decision == "accepted":
         kind, message = "retention_accepted", f"{title} est conservé définitivement : il reste dans la bibliothèque commune."
     else:
@@ -2287,6 +2378,61 @@ async def extend_rental(
     return {"rental": _serialize_rental(rental)}
 
 
+@router.post("/admin/rentals/{rental_id}/revoke")
+async def revoke_rental_access(
+    rental_id: str,
+    current: AuthContext = Depends(require_admin),
+    store: MediaStore = Depends(get_store),
+    service: MediaServerService = Depends(get_media_server_service),
+):
+    now = datetime.now(timezone.utc)
+    previous_rental = await store.get_rental(rental_id)
+    was_pending = bool(previous_rental and previous_rental.status in {"requested", "downloading"})
+    try:
+        rental = await store.revoke_rental(rental_id, current.user["id"], now)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if not rental:
+        raise HTTPException(status_code=404, detail="Location non trouvée")
+
+    media = await store.fetch_one(rental.media_id)
+    other_rentals = await store.list_rentals_for_media(rental.media_id)
+    still_in_use = any(
+        other.id != rental.id and (other.status in {"requested", "downloading", "available", "keep_requested", "kept"}
+                                   or other.storage_policy == "permanent")
+        for other in other_rentals
+    )
+    removed = False
+    warning = None
+    if media and media.type == "Film" and not still_in_use:
+        try:
+            if was_pending:
+                removed = await service.cancel_pending_movie(media.id)
+            else:
+                await service.delete_storage_candidate(media.id, current.user["id"], allow_protected=True)
+                removed = True
+        except LookupError:
+            # The download may not have arrived yet; the rental is still revoked.
+            pass
+        except (PermissionError, RuntimeError, MediaServerError) as error:
+            warning = str(error)
+    elif media and media.type == "Série" and not still_in_use:
+        warning = "L'accès de location est révoqué, mais la série reste dans Sonarr/Jellyfin."
+
+    title = f"« {media.title} »" if media else "Ton film"
+    message = f"{title} : l'accès à la location a été révoqué par l'administrateur."
+    await store.create_notification(Notification(
+        id=str(uuid.uuid4()), backstage_user_id=rental.backstage_user_id,
+        kind="rental_revoked", message=message, created_at=now,
+    ))
+    return {
+        "rental": _serialize_rental(rental),
+        "removed_from_library": removed,
+        "retained_for_other_rentals": still_in_use,
+        "warning": warning,
+    }
+
+
 @router.get("/notifications")
 async def list_notifications(
     current: AuthContext = Depends(get_current_user),
@@ -2307,6 +2453,39 @@ async def mark_notification_read(
     return {"ok": True}
 
 
+CHAT_MESSAGE_MAX_LENGTH = 500
+
+
+class PostChatMessageRequest(BaseModel):
+    body: str
+
+
+@router.get("/chat/messages")
+async def list_chat_messages(
+    after: Optional[int] = None,
+    current: AuthContext = Depends(get_current_user),
+    store: MediaStore = Depends(get_store),
+):
+    return {"messages": await store.list_chat_messages(after)}
+
+
+@router.post("/chat/messages")
+async def post_chat_message(
+    payload: PostChatMessageRequest,
+    current: AuthContext = Depends(get_current_user),
+    store: MediaStore = Depends(get_store),
+):
+    body = payload.body.strip()
+    if not body:
+        raise HTTPException(status_code=400, detail="Le message est vide.")
+    if len(body) > CHAT_MESSAGE_MAX_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Message trop long ({CHAT_MESSAGE_MAX_LENGTH} caractères max).")
+    user = current.user
+    return await store.create_chat_message(
+        user["id"], user.get("display_name") or "Anonyme", user.get("avatar_url"), body,
+    )
+
+
 @router.get("/media-server/options")
 async def media_server_options(
     media_type: str,
@@ -2315,7 +2494,7 @@ async def media_server_options(
 ):
     client = service.sonarr if media_type == "Série" else service.radarr
     if not client:
-        raise HTTPException(status_code=503, detail="Service non configuré")
+        raise HTTPException(status_code=503, detail="Les demandes sont indisponibles pour le moment (service de téléchargement non configuré). Préviens l'administrateur.")
     options = await client.list_options()
     if media_type == "Film":
         profile_name = Config.RADARR_DEFAULT_QUALITY_PROFILE_NAME

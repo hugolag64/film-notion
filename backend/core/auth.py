@@ -378,6 +378,8 @@ class AuthStore:
             ).fetchone()
             if not row or not row["must_change_password"]:
                 raise ValueError("initial password change is not required")
+            if verify_password(new_password, row["password_hash"]):
+                raise ValueError("new password must differ from the temporary one")
             now = self._now().isoformat()
             connection.execute(
                 "UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ? WHERE id = ?",

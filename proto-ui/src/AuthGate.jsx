@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { completeInitialPasswordChange, fetchAuthStatus, fetchCurrentUser, login, logout, requestPasswordReset, setupAdmin } from './api';
+import { SESSION_EXPIRED_EVENT, completeInitialPasswordChange, fetchAuthStatus, fetchCurrentUser, login, logout, requestPasswordReset, setupAdmin } from './api';
 import { AuthContext } from './auth-context';
 import PasswordResetPage from './PasswordResetPage';
 
@@ -25,29 +25,29 @@ function AuthForm({setupRequired, onSubmit, onForgotPassword, error, loading}) {
     return (
         <main className="auth-shell">
             <form className="auth-card" onSubmit={submit}>
-                <p className="auth-kicker">BACKSTAGE</p>
-                <h1>{setupRequired ? 'Créer votre compte administrateur' : 'Bienvenue'}</h1>
+                <p className="auth-kicker"><img src="/static/Logo.png" alt="" />BACKSTAGE</p>
+                <h1>{setupRequired ? 'Crée ton compte administrateur' : 'Bienvenue'}</h1>
                 <p className="auth-subtitle">
-                    {setupRequired ? 'Configurez le premier compte de votre bibliothèque.' : 'Connectez-vous pour accéder à votre bibliothèque.'}
+                    {setupRequired ? 'Configure le premier compte de ta bibliothèque.' : 'Connecte-toi pour accéder à ta bibliothèque.'}
                 </p>
                 {setupRequired && (
                     <label>
                         Nom affiché
-                        <input required value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
+                        <input required aria-label="Nom affiché" value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
                     </label>
                 )}
                 <label>
                     Email
-                    <input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+                    <input required aria-label="Email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} />
                 </label>
                 <label>
                     Mot de passe
-                    <input required minLength={8} type="password" autoComplete={setupRequired ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} />
+                    <input required aria-label="Mot de passe" minLength={8} type="password" autoComplete={setupRequired ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} />
                 </label>
                 {setupRequired && (
                     <label>
                         Confirmer le mot de passe
-                        <input required type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} />
+                        <input required aria-label="Confirmer le mot de passe" type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} />
                     </label>
                 )}
                 {!setupRequired && (
@@ -89,16 +89,20 @@ function ForgotPasswordForm({onBack}) {
     return (
         <main className="auth-shell">
             <form className="auth-card" onSubmit={submit}>
-                <p className="auth-kicker">BACKSTAGE</p>
+                <p className="auth-kicker"><img src="/static/Logo.png" alt="" />BACKSTAGE</p>
                 <h1>Mot de passe oublié</h1>
                 {sent ? (
-                    <p className="auth-subtitle">Si un compte correspond, un e-mail vient d’être envoyé.</p>
+                    <>
+                        <p className="auth-subtitle">Si un compte correspond, un e-mail vient d’être envoyé.</p>
+                        <p className="auth-subtitle">Rien reçu d’ici quelques minutes ? Regarde dans tes spams, ou demande à l’administrateur de te donner un mot de passe provisoire.</p>
+                    </>
+
                 ) : (
                     <>
-                        <p className="auth-subtitle">Saisissez l’adresse e-mail enregistrée par l’administrateur.</p>
+                        <p className="auth-subtitle">Saisis l’adresse e-mail enregistrée par l’administrateur.</p>
                         <label>
                             Email
-                            <input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+                            <input required aria-label="Email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} />
                         </label>
                         {error && <p className="auth-error" role="alert">{error}</p>}
                         <button className="auth-submit" type="submit" disabled={loading}>
@@ -112,25 +116,26 @@ function ForgotPasswordForm({onBack}) {
     );
 }
 
-function FirstLoginPasswordForm({onSubmit, error, loading}) {
+function FirstLoginPasswordForm({onSubmit, onSignOut, error, loading}) {
     const [newPassword, setNewPassword] = useState('');
     const [confirmation, setConfirmation] = useState('');
     return (
         <main className="auth-shell">
             <form className="auth-card" onSubmit={(event) => { event.preventDefault(); onSubmit({new_password: newPassword, password_confirmation: confirmation}); }}>
-                <p className="auth-kicker">BACKSTAGE</p>
-                <h1>Choisissez votre mot de passe</h1>
-                <p className="auth-subtitle">Votre administrateur vous a donné un mot de passe provisoire. Créez maintenant votre mot de passe personnel pour continuer.</p>
+                <p className="auth-kicker"><img src="/static/Logo.png" alt="" />BACKSTAGE</p>
+                <h1>Choisis ton mot de passe</h1>
+                <p className="auth-subtitle">Ton administrateur t’a donné un mot de passe provisoire. Crée maintenant ton mot de passe personnel pour continuer.</p>
                 <label>
                     Nouveau mot de passe
-                    <input required minLength={8} type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />
+                    <input required aria-label="Nouveau mot de passe" minLength={8} type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />
                 </label>
                 <label>
                     Confirmer le nouveau mot de passe
-                    <input required minLength={8} type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} />
+                    <input required aria-label="Confirmer le nouveau mot de passe" minLength={8} type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} />
                 </label>
                 {error && <p className="auth-error" role="alert">{error}</p>}
                 <button className="auth-submit" type="submit" disabled={loading}>{loading ? 'Enregistrement…' : 'Enregistrer et continuer'}</button>
+                <button className="auth-link-button" type="button" onClick={onSignOut}>Se déconnecter</button>
             </form>
         </main>
     );
@@ -164,6 +169,21 @@ function AuthenticatedGate({children}) {
             }
         })();
         return () => { active = false; };
+    }, []);
+
+    useEffect(() => {
+        const onSessionExpired = () => {
+            setUser(null);
+            setState((current) => {
+                if (current === 'authenticated' || current === 'force-password-change') {
+                    setError('Ta session a expiré. Reconnecte-toi pour continuer.');
+                    return 'login';
+                }
+                return current;
+            });
+        };
+        window.addEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
+        return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
     }, []);
 
     const submit = async (payload) => {
@@ -206,7 +226,7 @@ function AuthenticatedGate({children}) {
         return <ForgotPasswordForm onBack={() => { setError(''); setState('login'); }} />;
     }
     if (state === 'force-password-change') {
-        return <FirstLoginPasswordForm onSubmit={submitInitialPassword} error={error} loading={loading} />;
+        return <FirstLoginPasswordForm onSubmit={submitInitialPassword} onSignOut={() => { setError(''); signOut(); }} error={error} loading={loading} />;
     }
     if (state === 'setup' || state === 'login') {
         return <AuthForm

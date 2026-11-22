@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { answerRecommendation, confirmRecommendation, recordRecommendationEvent, startRecommendationSession } from '../api';
+import useLayer from '../useLayer';
 
 const primaryButton = 'rounded-lg bg-[#635bff] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50';
 const secondaryButton = 'rounded-lg border border-current/20 px-4 py-2 text-sm font-semibold disabled:opacity-50';
@@ -15,16 +16,17 @@ function FilmCard({ film, isDarkMode, onRequest, confirming, busy, requested, er
                     {image && <img src={image} alt="" loading="lazy" className="h-full w-full object-cover" />}
                 </div>
                 <div className="min-w-0">
+                    {film.ready_tonight && <p className="mb-1 inline-block rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold text-emerald-600">À regarder ce soir · déjà sur le serveur</p>}
                     <h4 className="break-words font-semibold leading-snug">{film.title}</h4>
                     <p className="mt-1 text-xs opacity-70">
-                        {[film.release_date?.slice(0, 4), film.vote_average > 0 ? `TMDB ${film.vote_average.toFixed(1)}/10` : null].filter(Boolean).join(' · ')}
+                        {[film.release_date?.slice(0, 4), film.vote_average > 0 ? `★ ${film.vote_average.toFixed(1)}/10` : null].filter(Boolean).join(' · ')}
                     </p>
                     <p className="mt-2 text-sm opacity-85">{film.explanation || film.overview}</p>
                 </div>
             </div>
             <div className="px-3 pb-3">
                 {film.action === 'play' && (
-                    <button type="button" onClick={() => { onPick(film); onPlay(film.media_id); }} className={primaryButton}>Lire dans Jellyfin</button>
+                    <button type="button" onClick={() => { onPick(film); onPlay(film.media_id); }} className={primaryButton}>Regarder maintenant</button>
                 )}
                 {film.action === 'pending' && <p className="text-sm opacity-75">{requested ? 'Demande envoyée' : 'Demande en cours'}</p>}
                 {(film.action === 'request' || film.action === 'rent') && (ask ? (
@@ -38,7 +40,7 @@ function FilmCard({ film, isDarkMode, onRequest, confirming, busy, requested, er
                     </div>
                 ) : (
                     <button type="button" disabled={busy} className={secondaryButton} onClick={() => setAsk(true)}>
-                        {film.action === 'rent' ? 'Louer pour regarder' : 'Demander via Seerr'}
+                        {film.action === 'rent' ? (film.ready_tonight ? 'Louer et regarder tout de suite' : 'Louer pour regarder') : 'Demander ce film'}
                     </button>
                 ))}
                 {error && <p role="alert" className="mt-2 text-sm text-rose-500">{error}</p>}
@@ -48,6 +50,7 @@ function FilmCard({ film, isDarkMode, onRequest, confirming, busy, requested, er
 }
 
 export default function RecommendationFlow({ isDarkMode, onClose, onPlay }) {
+    const layerRef = useLayer(true, onClose);
     const [sessionId, setSessionId] = useState(null);
     const [state, setState] = useState('loading');
     const [question, setQuestion] = useState(null);
@@ -152,7 +155,7 @@ export default function RecommendationFlow({ isDarkMode, onClose, onPlay }) {
 
     return (
         <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/80 p-3 backdrop-blur-md sm:p-6" onClick={onClose}>
-            <section role="dialog" aria-modal="true" aria-labelledby="pick-film-title"
+            <section ref={layerRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="pick-film-title"
                 className={`flex max-h-[94vh] min-h-[min(65vh,520px)] w-full max-w-5xl flex-col overflow-y-auto rounded-2xl border shadow-2xl ${panel} ${text}`}
                 onClick={event => event.stopPropagation()}>
                 <header className="flex items-center justify-between gap-4 border-b border-inherit px-5 py-4 sm:px-8">

@@ -6,6 +6,7 @@ export default function UserManagement({isDarkMode, currentUser, onError, onNoti
     const [jellyfinUsers, setJellyfinUsers] = useState([]);
     const [expandedUserId, setExpandedUserId] = useState(null);
     const [jellyfinLoading, setJellyfinLoading] = useState(false);
+    const [jellyfinUnavailable, setJellyfinUnavailable] = useState('');
     const [jellyfinSaving, setJellyfinSaving] = useState({});
     const [adminPasswords, setAdminPasswords] = useState({});
     const [newUser, setNewUser] = useState({display_name: '', email: '', password: ''});
@@ -14,7 +15,13 @@ export default function UserManagement({isDarkMode, currentUser, onError, onNoti
         setJellyfinLoading(true);
         try {
             setUsers(await fetchUsers());
-            setJellyfinUsers(await fetchJellyfinUsers());
+            try {
+                setJellyfinUsers(await fetchJellyfinUsers());
+                setJellyfinUnavailable('');
+            } catch (jellyfinError) {
+                // Not blocking: accounts still work, the link can be made later.
+                setJellyfinUnavailable(jellyfinError.message);
+            }
             await onChanged?.();
         } catch (requestError) {
             onError?.(requestError.message);
@@ -107,6 +114,7 @@ export default function UserManagement({isDarkMode, currentUser, onError, onNoti
             <div>
                 <h3 className="text-lg font-semibold">Utilisateurs et droits</h3>
                 <p className={`mt-1 text-sm ${muted}`}>Clique sur un compte pour afficher ses actions d’administration.</p>
+                {jellyfinUnavailable && <p role="status" className="mt-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">Le serveur Jellyfin ne répond pas. Tu peux créer et gérer les comptes normalement ; l’association Jellyfin, nécessaire pour la lecture, pourra être faite plus tard depuis la fiche du compte.</p>}
             </div>
 
             <div className="space-y-3">
@@ -120,7 +128,7 @@ export default function UserManagement({isDarkMode, currentUser, onError, onNoti
                                     <span className={`block text-xs ${muted}`}>{target.email}</span>
                                 </span>
                                 <span className="flex items-center gap-2">
-                                    <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider ${target.is_active ? '' : 'text-rose-500'}`}>{target.role}</span>
+                                    <span className={`rounded-full border px-2 py-1 text-xs font-semibold uppercase tracking-wider ${target.is_active ? '' : 'text-rose-500'}`}>{target.role}</span>
                                     <span className={`text-xs ${muted}`}>{expanded ? 'Masquer' : 'Gérer'}</span>
                                 </span>
                             </button>
@@ -144,7 +152,7 @@ export default function UserManagement({isDarkMode, currentUser, onError, onNoti
                                         </label>
                                         <label className="grid gap-1 text-xs">
                                             Rôle
-                                            <select value={target.role} onChange={(event) => handleUserUpdate(target, {role: event.target.value})} className="rounded border bg-transparent px-2 py-2">
+                                            <select aria-label={`Rôle de ${target.email}`} value={target.role} onChange={(event) => handleUserUpdate(target, {role: event.target.value})} className="rounded border bg-transparent px-2 py-2">
                                                 <option value="user">Utilisateur</option>
                                                 <option value="admin">Administrateur</option>
                                             </select>
@@ -168,9 +176,9 @@ export default function UserManagement({isDarkMode, currentUser, onError, onNoti
             <form className={`grid gap-2 rounded-xl border p-4 ${card} sm:grid-cols-3`} onSubmit={handleCreateUser}>
                 <h4 className="font-semibold sm:col-span-3">Créer un utilisateur</h4>
                 <p className={`text-xs sm:col-span-3 ${muted}`}>Le mot de passe saisi est provisoire. L’utilisateur devra le remplacer à sa première connexion.</p>
-                <input required placeholder="Nom" value={newUser.display_name} onChange={(event) => setNewUser({...newUser, display_name: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
-                <input required type="email" placeholder="Email" value={newUser.email} onChange={(event) => setNewUser({...newUser, email: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
-                <input required minLength="8" type="password" placeholder="Mot de passe provisoire (8 caractères min.)" value={newUser.password} onChange={(event) => setNewUser({...newUser, password: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
+                <input required aria-label="Nom" placeholder="Nom" value={newUser.display_name} onChange={(event) => setNewUser({...newUser, display_name: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
+                <input required aria-label="Email" type="email" placeholder="Email" value={newUser.email} onChange={(event) => setNewUser({...newUser, email: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
+                <input required aria-label="Mot de passe provisoire" minLength="8" type="password" placeholder="Mot de passe provisoire (8 caractères min.)" value={newUser.password} onChange={(event) => setNewUser({...newUser, password: event.target.value})} className="rounded border bg-transparent px-2 py-2 text-sm" />
                 <button className="rounded bg-[#635bff] px-3 py-2 text-sm font-semibold text-white sm:col-span-3" type="submit">Créer un utilisateur</button>
             </form>
         </div>

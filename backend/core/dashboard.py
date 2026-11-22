@@ -1,7 +1,7 @@
 """Pure data shaping for the authenticated home dashboard."""
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 from backend.core.media_server import Availability
 from backend.core.models import Media, Notification, Rental, UserMediaState
@@ -48,10 +48,24 @@ def _availability_state_label(state: str) -> str:
         "available": "Disponible",
         "downloading": "Téléchargement",
         "error": "Erreur",
-        "requested": "Demande en cours",
+        "requested": "Demande envoyée — pas encore disponible sur Jellyfin",
         "searching": "Recherche en cours",
         "imported": "Indexation en cours",
     }.get(state, "Demande possible")
+
+
+_FRIENDLY_ERRORS = {
+    "Jellyfin indisponible": "Serveur de lecture hors ligne pour le moment",
+    "Synchronisation indisponible": "Suivi momentanément indisponible",
+    "Demande absente de Radarr et Jellyfin": "Demande introuvable — redemande-la à l'admin",
+}
+
+
+def _friendly_error(message: Optional[str]) -> Optional[str]:
+    """Roommates see plain words; the admin center keeps the technical message."""
+    if not message:
+        return message
+    return _FRIENDLY_ERRORS.get(message, message)
 
 
 def _request_status(request: dict[str, Any]) -> tuple[str, str]:
@@ -225,7 +239,7 @@ def build_dashboard_payload(
             "state": item.state,
             "status_label": _availability_state_label(item.state),
             "progress_percent": item.progress_percent,
-            "last_error": item.last_error,
+            "last_error": _friendly_error(item.last_error),
             "updated_at": _iso(item.last_synced_at),
         })
 

@@ -99,7 +99,56 @@
     to { opacity: 1; transform: translateY(0); }
 }
 
+/* Mouse cursor: the house cat. His head everywhere (it points with the tip of
+   his left ear), his white paw on anything clickable, the normal text cursor
+   where you type. */
+html,
+body {
+    cursor: url('./assets/cursors/cat-head.svg') 4 2, auto;
+}
+
+a[href],
+button:not(:disabled),
+[role="button"],
+label[for],
+select,
+summary,
+.cursor-pointer,
+input[type="checkbox"],
+input[type="radio"],
+input[type="range"] {
+    cursor: url('./assets/cursors/cat-paw.svg') 16 3, pointer;
+}
+
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+textarea,
+[contenteditable="true"] {
+    cursor: text;
+}
+
+/* Chat dock */
+@keyframes chatPanelIn {
+    from { opacity: 0; transform: translateY(12px) scale(0.97); }
+    to { opacity: 1; transform: none; }
+}
+
+@keyframes chatPop {
+    from { opacity: 0; transform: translateY(4px) scale(0.96); }
+    to { opacity: 1; transform: none; }
+}
+
+.chat-panel {
+    transform-origin: bottom right;
+    animation: chatPanelIn 180ms ease-out;
+}
+
+.chat-pop {
+    animation: chatPop 160ms ease-out;
+}
+
 @media (prefers-reduced-motion: reduce) {
+    .chat-panel,
+    .chat-pop,
     .series-progress-fill,
     .season-content,
     .series-portal,
@@ -110,4 +159,27 @@
         animation: none !important;
         transition: none !important;
     }
+}
+
+/* Keyboard / TV-remote focus: thick and visible on every control (UX-27). */
+:where(a, button, input, select, textarea, summary, [role="button"], [tabindex]:not([tabindex="-1"])):focus-visible {
+    outline: 3px solid #635bff !important;
+    outline-offset: 2px !important;
+}
+
+.skip-link {
+    position: fixed;
+    left: 1rem;
+    top: -4rem;
+    z-index: 200;
+    border-radius: 0.5rem;
+    background: #635bff;
+    color: #fff;
+    padding: 0.75rem 1rem;
+    font-weight: 600;
+    transition: top 0.15s;
+}
+
+.skip-link:focus {
+    top: 1rem;
 }

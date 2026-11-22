@@ -126,17 +126,41 @@ def test_login_is_rate_limited_after_repeated_failures(tmp_path, monkeypatch):
     assert first.status_code == 401
     assert second.status_code == 429
     assert second.headers["retry-after"] == "30"
+    assert second.json()["detail"] == "Trop de tentatives. Réessaie dans quelques secondes."
+
+
+def test_retry_delay_is_said_in_minutes():
+    assert auth_module._retry_delay_label(900) == "15 minutes"
+    assert auth_module._retry_delay_label(61) == "2 minutes"
+    assert auth_module._retry_delay_label(60) == "1 minute"
 
 
 def test_forgot_password_is_rate_limited(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     monkeypatch.setattr(auth_module, "RESET_RATE_LIMITER", RateLimiter(1, 60, 30))
+    monkeypatch.setattr(auth_module, "EmailSender", FakeEmailSender)
 
     first = client.post("/api/auth/forgot-password", json={"email": "unknown@example.com"})
     second = client.post("/api/auth/forgot-password", json={"email": "unknown@example.com"})
 
     assert first.status_code == 202
     assert second.status_code == 429
+
+
+def test_forgot_password_explains_fallback_when_email_is_not_configured(tmp_path, monkeypatch):
+    monkeypatch.setattr(Config, "SMTP_USERNAME", None)
+    monkeypatch.setattr(Config, "SMTP_PASSWORD", None)
+    monkeypatch.setattr(Config, "SMTP_FROM", None)
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+
+    known = client.post("/api/auth/forgot-password", json={"email": "hugo@example.com"})
+    unknown = client.post("/api/auth/forgot-password", json={"email": "missing@example.com"})
+
+    # Server-wide condition: same answer whether or not the account exists.
+    assert known.status_code == 503
+    assert known.json() == unknown.json()
+    assert "administrateur" in known.json()["detail"]
 
 
 def test_regular_user_cannot_list_users(tmp_path, monkeypatch):
@@ -446,7 +470,7 @@ def test_non_admin_acquisition_rejects_a_non_default_quality_profile(tmp_path, m
     })
 
     assert response.status_code == 422
-    assert "1080p FR - max 10 Go" in response.json()["detail"]
+    assert "4K léger - MULTI" in response.json()["detail"]
     assert service.add_calls == []
 
 
@@ -1026,6 +1050,10 @@ def test_change_password_rejects_wrong_current_password_and_confirmation(tmp_pat
 
 class FakeEmailSender:
     deliveries = []
+
+    @staticmethod
+    def is_configured():
+        return True
 
     def send_password_reset(self, recipient, reset_url):
         self.__class__.deliveries.append((recipient, reset_url))

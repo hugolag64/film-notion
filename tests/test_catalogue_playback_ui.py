@@ -11,7 +11,7 @@ API_SOURCE = ROOT / "proto-ui" / "src" / "api.js"
 
 def test_resume_section_is_not_rendered_in_catalogue_but_detail_keeps_playback_action():
     source = UI_SOURCE.read_text(encoding="utf-8")
-    catalogue = source[source.index('<main key={collection}'):source.index('{selectedMovie && (')]
+    catalogue = source[source.index('<main id="contenu"'):source.index('{selectedMovie && (')]
     detail = source[source.index('{selectedMovie && ('):]
 
     assert "Reprendre la lecture" not in catalogue
@@ -42,7 +42,7 @@ def test_media_server_errors_accept_plain_text_backend_responses():
         end = source.find("\nexport ", start + 1)
         block = source[start:] if end == -1 else source[start:end]
         assert "const body = await readResponseBody(response);" in block
-        assert "body?.detail" in block
+        assert "errorDetail(body, " in block
 
 
 def test_retention_admin_controls_and_notifications_are_present():

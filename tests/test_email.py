@@ -49,7 +49,7 @@ def test_password_reset_email_uses_configured_gmail_smtp(monkeypatch):
     assert smtp.credentials == ("sender@gmail.com", "google-app-password")
     assert message["From"] == "sender@gmail.com"
     assert message["To"] == "user@example.com"
-    assert message["Subject"] == "Réinitialisation de votre mot de passe Backstage"
+    assert message["Subject"] == "Réinitialisation de ton mot de passe Backstage"
     assert "https://backstage.home.arpa/reset-password?token=abc" in message.get_content()
 
 

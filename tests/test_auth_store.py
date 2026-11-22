@@ -236,3 +236,20 @@ def test_jellyfin_user_link_rejects_duplicates_and_missing_users(tmp_path):
         store.set_jellyfin_user_id(second["id"], "jf-shared")
     with pytest.raises(ValueError, match="user not found"):
         store.set_jellyfin_user_id("missing", "jf-missing")
+
+
+def test_initial_password_change_refuses_the_temporary_password(tmp_path):
+    db = tmp_path / "backstage.db"
+    store = AuthStore(str(db))
+    store.init_schema()
+    store.create_admin("Hugo", "hugo@example.com", "Correct Horse Battery Staple")
+    user = store.create_user("Paul", "paul@example.com", "provisoire")
+    assert user["must_change_password"]
+    _, token, _ = store.authenticate("paul@example.com", "provisoire", False, "Laptop")
+    _, session_id = store.user_from_token(token)
+
+    with pytest.raises(ValueError, match="differ from the temporary"):
+        store.complete_initial_password_change(user["id"], "provisoire", session_id)
+
+    changed = store.complete_initial_password_change(user["id"], "mon-vrai-mdp", session_id)
+    assert not changed["must_change_password"]

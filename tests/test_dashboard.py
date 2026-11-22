@@ -152,3 +152,11 @@ def test_dashboard_marks_future_release_requests_as_pending():
 
     assert payload["requests"][0]["status"] == "pending"
     assert payload["requests"][0]["status_label"] == "En attente"
+
+
+def test_dashboard_errors_are_said_in_plain_words():
+    from backend.core.dashboard import _friendly_error
+
+    assert _friendly_error("Jellyfin indisponible") == "Serveur de lecture hors ligne pour le moment"
+    assert _friendly_error(None) is None
+    assert _friendly_error("Disque plein") == "Disque plein"
