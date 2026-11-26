@@ -11,6 +11,7 @@ from backend.core.store import MediaStore
 from backend.core.auth import AuthStore
 from backend.api import health_router, router as api_router
 from backend.auth_api import auth_router
+from backend.journal_api import journal_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 app.include_router(health_router)
 app.include_router(api_router)
 app.include_router(auth_router)
+app.include_router(journal_router)
 
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "Logo.png")
 
