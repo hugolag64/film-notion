@@ -515,6 +515,13 @@ class MediaServerService:
             tmdb = None
         linked = 0
         created = 0
+        # Doublons possibles (même TMDB) : on garde la fiche déjà liée à l'élément Radarr/Sonarr,
+        # sinon l'unicité (provider, arr_id) casse et bloque toute la synchro.
+        linked_by_arr = {
+            (availability.provider, availability.arr_id): availability.media_id
+            for availability in await self.store.list_availabilities()
+            if availability.arr_id is not None
+        }
         for provider, client, media_type in (
             ("radarr", self.radarr, "Film"),
             ("sonarr", self.sonarr, "Série"),
@@ -525,22 +532,30 @@ class MediaServerService:
                 tmdb_id = remote.get("tmdbId")
                 if not tmdb_id:
                     continue
-                media = next((item for item in medias if item.type == media_type and item.tmdb_id == tmdb_id), None)
-                if not media:
-                    title = remote.get("title") or remote.get("sortTitle") or "Sans titre"
-                    media = await self.store.create({
-                        "title": title, "type": media_type, "tmdb_id": tmdb_id,
-                        "tmdb_ok": bool(tmdb_id), "status": "À regarder",
-                    })
-                    medias.append(media)
-                    created += 1
-                media = await self._enrich_media(media, media_type, tmdb)
-                await ensure_series_episodes(self.store, tmdb, media)
-                await self.store.upsert_availability(Availability(
-                    media_id=media.id, provider=provider, arr_id=remote.get("id"),
-                    state="imported" if remote.get("hasFile") else "requested",
-                    last_synced_at=datetime.now(timezone.utc),
-                ))
+                owner_id = linked_by_arr.get((provider, remote.get("id")))
+                media = next((item for item in medias if item.id == owner_id), None) or next(
+                    (item for item in medias if item.type == media_type and item.tmdb_id == tmdb_id), None,
+                )
+                try:
+                    if not media:
+                        title = remote.get("title") or remote.get("sortTitle") or "Sans titre"
+                        media = await self.store.create({
+                            "title": title, "type": media_type, "tmdb_id": tmdb_id,
+                            "tmdb_ok": bool(tmdb_id), "status": "À regarder",
+                        })
+                        medias.append(media)
+                        created += 1
+                    media = await self._enrich_media(media, media_type, tmdb)
+                    await ensure_series_episodes(self.store, tmdb, media)
+                    await self.store.upsert_availability(Availability(
+                        media_id=media.id, provider=provider, arr_id=remote.get("id"),
+                        state="imported" if remote.get("hasFile") else "requested",
+                        last_synced_at=datetime.now(timezone.utc),
+                    ))
+                except Exception:
+                    # Un élément en erreur ne doit pas empêcher les autres (ni l'étape Jellyfin) de se synchroniser.
+                    logger.exception("[media-sync] Import impossible pour %s %s", provider, remote.get("id"))
+                    continue
                 linked += 1
         if self.jellyfin and hasattr(self.jellyfin, "list_library"):
             try:

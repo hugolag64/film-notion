@@ -984,3 +984,33 @@ def test_season_rental_becomes_available_only_when_its_season_is_complete(tmp_pa
 
     assert asyncio.run(store.get_rental("r1")).status == "available"
     assert asyncio.run(store.get_rental("r2")).status == "requested"
+
+
+def test_one_duplicated_film_does_not_block_the_whole_sync(tmp_path):
+    # Production, 25/11 : « Dans la ligne de mire » en double (même TMDB). Lier le premier
+    # doublon au film Radarr 15 déjà pris par l'autre violait l'unicité (provider, arr_id),
+    # la synchro s'arrêtait et plus aucun film ne passait « disponible » via Jellyfin.
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    first = asyncio.run(store.create({"id": "ligne-a", "title": "Dans la ligne de mire", "type": "Film", "tmdb_id": 9386}))
+    asyncio.run(store.create({"id": "ligne-b", "title": "Dans la ligne de mire", "type": "Film", "tmdb_id": 9386}))
+    asyncio.run(store.create({"id": "inter", "title": "Interstellar", "type": "Film", "tmdb_id": 157336}))
+    now = datetime.now(timezone.utc)
+    asyncio.run(store.upsert_availability(Availability(media_id=first.id, provider="radarr", state="available", last_synced_at=now)))
+    asyncio.run(store.upsert_availability(Availability(media_id="ligne-b", provider="radarr", arr_id=15, state="available", last_synced_at=now)))
+    radarr = FakeRadarr()
+    radarr.list_library = lambda: _async_result([
+        {"id": 15, "tmdbId": 9386, "title": "In the Line of Fire", "hasFile": True},
+        {"id": 1, "tmdbId": 157336, "title": "Interstellar", "hasFile": True},
+    ])
+    jellyfin = FakeJellyfinLibrary([
+        {"jellyfin_id": "jelly-ligne", "tmdb_id": 9386, "media_type": "Film", "title": "Dans la ligne de mire"},
+        {"jellyfin_id": "jelly-inter", "tmdb_id": 157336, "media_type": "Film", "title": "Interstellar"},
+    ])
+    service = MediaServerService(store, radarr=radarr, jellyfin=jellyfin)
+
+    asyncio.run(service.sync_all())
+
+    interstellar = asyncio.run(store.get_availability("inter"))
+    assert interstellar.state == "available"
+    assert interstellar.jellyfin_id == "jelly-inter"
