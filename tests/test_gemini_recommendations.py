@@ -76,3 +76,23 @@ def test_max_output_tokens_is_configured():
     gateway.select_final({}, [], candidates())
     assert gateway.max_output_tokens == 256
     assert client.models.calls[0]["config"].max_output_tokens == 256
+
+
+def test_select_group_returns_three_distinct_valid_ids():
+    gateway = GeminiRecommendationGateway(
+        api_key="secret",
+        client=FakeClient(
+            '{"picks":[{"tmdb_id":42,"reason":"Pour rire"},{"tmdb_id":7,"reason":"inconnu"},'
+            '{"tmdb_id":42,"reason":"doublon"},{"tmdb_id":99,"reason":"Du fond"},{"tmdb_id":5,"reason":"Court"}]}'
+        ),
+    )
+    pool = candidates() + [{"tmdb_id": 5, "title": "Court", "overview": "", "genre_ids": []}]
+
+    result = gateway.select_group({"confidence": 0.5}, {"mood": "light"}, pool)
+
+    assert [(p["tmdb_id"], p["reason"]) for p in result.picks] == [(42, "Pour rire"), (99, "Du fond"), (5, "Court")]
+    assert result.usage["input_tokens"] == 120
+
+
+def test_select_group_disabled_returns_none():
+    assert GeminiRecommendationGateway(api_key=None).select_group({}, {}, candidates()) is None
