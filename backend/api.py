@@ -416,19 +416,14 @@ async def _hydrate_seerr_requests(requests: list[dict[str, Any]]) -> list[dict[s
 
 
 async def _prune_available_seerr_requests(seerr: SeerrClient, requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Remove completed requests from Seerr and return only active queue items."""
+    """Hide completed requests without mutating Seerr on a dashboard GET."""
     active = []
     for request in requests:
         media = request.get("media") if isinstance(request.get("media"), dict) else {}
         status = media.get("status")
         available = status == 5 or str(status).lower() in {"available", "completed"}
-        if available and request.get("id") is not None:
-            try:
-                await seerr.cancel_request(request["id"])
-            except (MediaServerError, RuntimeError, ValueError) as error:
-                logger.warning("Suppression de la demande Seerr %s impossible: %s", request["id"], error)
-            continue
-        active.append(request)
+        if not available:
+            active.append(request)
     return active
 
 

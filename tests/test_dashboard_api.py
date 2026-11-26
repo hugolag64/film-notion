@@ -111,3 +111,28 @@ def test_dashboard_recommendation_can_be_added_to_current_users_watchlist(tmp_pa
     assert payload.is_watchlist is True
     state = asyncio.run(store.get_user_media_state("hugo", "m1"))
     assert state.is_watchlist is True
+
+
+def test_dashboard_never_deletes_completed_seerr_requests(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    deleted = []
+
+    class Seerr:
+        async def list_requests(self, **kwargs):
+            return [{"id": 12, "media": {"status": 5, "title": "Completed"}}]
+
+        async def cancel_request(self, request_id):
+            deleted.append(request_id)
+
+    class Service:
+        seerr = Seerr()
+
+    async def pool(*args):
+        return []
+
+    monkeypatch.setattr(api, "get_media_server_service", lambda _: Service())
+    monkeypatch.setattr(api, "_recommendation_pool", pool)
+    admin = AuthContext(user={"id": "hugo", "role": "admin"}, session_id="s", token="t")
+    payload = asyncio.run(api.dashboard_home(admin, store))
+    assert deleted == [], "Reading the dashboard must never delete Seerr requests"
+    assert payload["requests"] == []

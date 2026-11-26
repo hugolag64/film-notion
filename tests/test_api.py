@@ -137,7 +137,7 @@ def test_seerr_request_cards_are_hydrated_with_tmdb_metadata(monkeypatch):
     assert hydrated[0]["media"]["releaseDate"] == "2099-01-01"
 
 
-def test_available_seerr_requests_are_removed_from_the_active_queue():
+def test_available_seerr_requests_are_hidden_without_deleting_them():
     class FakeSeerr:
         def __init__(self):
             self.cancelled = []
@@ -154,7 +154,7 @@ def test_available_seerr_requests_are_removed_from_the_active_queue():
     active = asyncio.run(api._prune_available_seerr_requests(seerr, requests))
 
     assert [item["id"] for item in active] == [9]
-    assert seerr.cancelled == [8]
+    assert seerr.cancelled == []
 
 
 def test_tmdb_movie_preview_returns_complete_film_metadata(monkeypatch):
