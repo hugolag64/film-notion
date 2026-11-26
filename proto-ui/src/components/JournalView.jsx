@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { createJournalEntry, deleteJournalEntry, fetchJournal, searchTMDB, updateJournalEntry } from '../api';
-import { formatStars, groupDiaryByMonth } from '../journal';
+import { formatStars, groupDiaryByMonth, journalFilmTarget } from '../journal';
 import SeenDialog from './SeenDialog';
 import TMDBSearchBox from './TMDBSearchBox';
 
 const shortDate = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}` : null);
 
 /** Private « Vu » journal of the signed-in user. */
-export default function JournalView({ isDarkMode, onOpenLibraryFilm, onChanged, showToast }) {
+export default function JournalView({ isDarkMode, onOpenLibraryFilm, onOpenFilm, onChanged, showToast }) {
     const [entries, setEntries] = useState(null);
     const [error, setError] = useState(null);
     const [dialog, setDialog] = useState(null);
@@ -49,6 +49,12 @@ export default function JournalView({ isDarkMode, onOpenLibraryFilm, onChanged, 
     };
 
     const muted = isDarkMode ? 'text-white/60' : 'text-[#425466]';
+    const openFilm = (entry) => {
+        const target = journalFilmTarget(entry);
+        if (target.kind === 'library') onOpenLibraryFilm(target.mediaId);
+        else onOpenFilm(target.film);
+    };
+
     return <section aria-labelledby="journal-title">
         <div className={`mb-6 border-b pb-4 ${isDarkMode ? 'border-white/10' : 'border-[#e3e8ee]'}`}>
             <span className="text-xs font-mono font-bold uppercase tracking-widest text-[#635bff]">Rien que pour toi</span>
@@ -72,14 +78,14 @@ export default function JournalView({ isDarkMode, onOpenLibraryFilm, onChanged, 
             <h2 className="text-xs font-mono font-bold uppercase tracking-widest text-[#635bff]">{group.label}</h2>
             <ul className="mt-3 divide-y divide-black/5 dark:divide-white/10">
                 {group.entries.map((entry) => <li key={entry.id} className="flex items-start gap-3 py-3">
-                    {entry.movie.poster_url
-                        ? <img src={entry.movie.poster_url} alt="" className="h-20 w-14 shrink-0 rounded object-cover" loading="lazy" />
-                        : <div className="h-20 w-14 shrink-0 rounded bg-black/10 dark:bg-white/10" />}
+                    <button type="button" onClick={() => openFilm(entry)} className="shrink-0 rounded transition hover:opacity-80 hover:ring-2 hover:ring-[#635bff]" aria-label={`Ouvrir la fiche de ${entry.movie.title}`}>
+                        {entry.movie.poster_url
+                            ? <img src={entry.movie.poster_url} alt="" className="h-20 w-14 rounded object-cover" loading="lazy" />
+                            : <div className="h-20 w-14 rounded bg-black/10 dark:bg-white/10" />}
+                    </button>
                     <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-baseline gap-x-2">
-                            {entry.media_id
-                                ? <button type="button" onClick={() => onOpenLibraryFilm(entry.media_id)} className={`text-left font-semibold hover:text-[#635bff] ${isDarkMode ? 'text-white' : 'text-[#0a2540]'}`}>{entry.movie.title}</button>
-                                : <span className={`font-semibold ${isDarkMode ? 'text-white' : 'text-[#0a2540]'}`}>{entry.movie.title}</span>}
+                            <button type="button" onClick={() => openFilm(entry)} className={`text-left font-semibold hover:text-[#635bff] ${isDarkMode ? 'text-white' : 'text-[#0a2540]'}`}>{entry.movie.title}</button>
                             {entry.movie.year && <span className={`text-xs ${muted}`}>{entry.movie.year}</span>}
                         </div>
                         <div className={`mt-0.5 flex flex-wrap items-center gap-x-2 text-sm ${muted}`}>

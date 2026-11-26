@@ -1745,6 +1745,7 @@ export default function BackstagePrototype() {
                         {activeView === 'journal' ? <JournalView
                             isDarkMode={isDarkMode}
                             onOpenLibraryFilm={openLibraryFilmById}
+                            onOpenFilm={openTMDBPreview}
                             onChanged={loadRealMedias}
                             showToast={showToast}
                         /> : <ListsView

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { formatStars, groupDiaryByMonth, listItemBadge, shouldOfferSeerrRequest, todayIsoDate } from './journal.js';
+import { formatStars, journalFilmTarget, groupDiaryByMonth, listItemBadge, shouldOfferSeerrRequest, todayIsoDate } from './journal.js';
 
 const NOW = new Date(2026, 10, 26);
 
@@ -55,4 +55,15 @@ test('seerr offer: only for films neither on the server nor requested', () => {
 
 test('today as a local ISO date', () => {
     assert.equal(todayIsoDate(new Date(2026, 0, 5, 23, 30)), '2026-01-05');
+});
+
+test('a journal film opens its library sheet when on the server, the TMDB sheet otherwise', () => {
+    assert.deepEqual(
+        journalFilmTarget({ tmdb_id: 857, media_id: 'm1', movie: { title: 'Ryan' } }),
+        { kind: 'library', mediaId: 'm1' },
+    );
+    assert.deepEqual(
+        journalFilmTarget({ tmdb_id: 389, media_id: null, movie: { title: 'Douze hommes en colère' } }),
+        { kind: 'tmdb', film: { tmdb_id: 389, title: 'Douze hommes en colère' } },
+    );
 });

@@ -64,3 +64,9 @@ const pad2 = (value) => String(value).padStart(2, '0');
 export function todayIsoDate(now = new Date()) {
     return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
 }
+
+// Clic sur l'affiche ou le titre d'un film du journal : sa fiche bibliothèque
+// s'il est sur le serveur, sinon la fiche TMDB (d'où on peut le demander).
+export const journalFilmTarget = (entry) => (entry.media_id
+    ? { kind: 'library', mediaId: entry.media_id }
+    : { kind: 'tmdb', film: { tmdb_id: entry.tmdb_id, title: entry.movie.title } });
