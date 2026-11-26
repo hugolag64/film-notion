@@ -117,3 +117,30 @@ class RecommendationSession(BaseModel):
     status: Literal["active", "completed", "cancelled"] = "active"
     created_at: datetime
     completed_at: Optional[datetime] = None
+
+
+class DiaryEntry(BaseModel):
+    id: str
+    backstage_user_id: str
+    tmdb_id: int
+    watched_on: Optional[date] = None
+    rating: Optional[float] = None
+    review: Optional[str] = None
+    in_cinema: bool = False
+    source: Literal["manual", "library", "recommendation", "backfill"] = "manual"
+    created_at: datetime
+    updated_at: datetime
+
+
+class FilmList(BaseModel):
+    id: str
+    name: str
+    created_by: str
+    created_at: datetime
+
+
+class FilmListItem(BaseModel):
+    list_id: str
+    tmdb_id: int
+    added_by: str
+    added_at: datetime

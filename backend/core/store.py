@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from backend.core.models import (
+    DiaryEntry, FilmList, FilmListItem,
     Media, Notification, RecommendationEvent, RecommendationSession,
     Rental, UserEpisodeState, UserMediaState,
 )
@@ -412,6 +413,61 @@ class MediaStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_storage_cleanup_log_deleted_at "
                 "ON storage_cleanup_log(deleted_at DESC)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS tmdb_movie_cache (
+                    tmdb_id INTEGER PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    year INTEGER,
+                    release_date TEXT,
+                    poster_url TEXT,
+                    genres TEXT NOT NULL DEFAULT '[]',
+                    fetched_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS diary_entries (
+                    id TEXT PRIMARY KEY,
+                    backstage_user_id TEXT NOT NULL,
+                    tmdb_id INTEGER NOT NULL,
+                    watched_on TEXT,
+                    rating REAL,
+                    review TEXT,
+                    in_cinema INTEGER NOT NULL DEFAULT 0,
+                    source TEXT NOT NULL DEFAULT 'manual',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_diary_entries_user_tmdb "
+                "ON diary_entries(backstage_user_id, tmdb_id)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS film_lists (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS film_list_items (
+                    list_id TEXT NOT NULL,
+                    tmdb_id INTEGER NOT NULL,
+                    added_by TEXT NOT NULL,
+                    added_at TEXT NOT NULL,
+                    PRIMARY KEY (list_id, tmdb_id),
+                    FOREIGN KEY (list_id) REFERENCES film_lists(id) ON DELETE CASCADE
+                )
+                """
             )
             # Migration en douceur si les colonnes n'existent pas encore
             cursor = conn.execute("PRAGMA table_info(media)")
@@ -2064,3 +2120,245 @@ class MediaStore:
 
     async def last_playback_sync(self, user_id: str) -> Optional[datetime]:
         return await asyncio.to_thread(self._last_playback_sync_sync, user_id)
+
+
+    # --- Journal « Vu », cache TMDB et listes partagées ---------------------
+
+    _DIARY_ORDER = "ORDER BY watched_on IS NULL, watched_on DESC, created_at DESC"
+
+    @staticmethod
+    def _row_to_diary_entry(row: sqlite3.Row) -> DiaryEntry:
+        data = dict(row)
+        data["in_cinema"] = bool(data["in_cinema"])
+        return DiaryEntry(**data)
+
+    @staticmethod
+    def _diary_values(fields: Dict[str, Any]) -> Dict[str, Any]:
+        values = dict(fields)
+        for key, value in list(values.items()):
+            if isinstance(value, (date, datetime)):
+                values[key] = value.isoformat()
+            elif isinstance(value, bool):
+                values[key] = int(value)
+        return values
+
+    def _upsert_tmdb_movie_sync(self, movie: Dict[str, Any]) -> Dict[str, Any]:
+        values = {
+            "tmdb_id": int(movie["tmdb_id"]),
+            "title": movie["title"],
+            "year": movie.get("year"),
+            "release_date": movie.get("release_date"),
+            "poster_url": movie.get("poster_url"),
+            "genres": json.dumps(list(movie.get("genres") or []), ensure_ascii=False),
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+        }
+        columns = list(values)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                f"INSERT OR REPLACE INTO tmdb_movie_cache ({', '.join(columns)}) "
+                f"VALUES ({', '.join('?' for _ in columns)})",
+                [values[column] for column in columns],
+            )
+        return self._get_tmdb_movies_sync([values["tmdb_id"]])[values["tmdb_id"]]
+
+    def _get_tmdb_movies_sync(self, tmdb_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+        ids = [int(tmdb_id) for tmdb_id in tmdb_ids]
+        if not ids:
+            return {}
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                f"SELECT * FROM tmdb_movie_cache WHERE tmdb_id IN ({', '.join('?' for _ in ids)})",
+                ids,
+            ).fetchall()
+        movies = {}
+        for row in rows:
+            movie = dict(row)
+            movie["genres"] = json.loads(movie["genres"] or "[]")
+            movies[movie["tmdb_id"]] = movie
+        return movies
+
+    def _create_diary_entry_sync(self, entry: DiaryEntry) -> DiaryEntry:
+        values = self._diary_values(entry.model_dump())
+        columns = list(values)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                f"INSERT INTO diary_entries ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+                [values[column] for column in columns],
+            )
+        return self._get_diary_entry_sync(entry.id)
+
+    def _get_diary_entry_sync(self, entry_id: str) -> Optional[DiaryEntry]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM diary_entries WHERE id = ?", (entry_id,)).fetchone()
+        return self._row_to_diary_entry(row) if row else None
+
+    def _list_diary_entries_sync(self, user_id: str) -> List[DiaryEntry]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                f"SELECT * FROM diary_entries WHERE backstage_user_id = ? {self._DIARY_ORDER}",
+                (user_id,),
+            ).fetchall()
+        return [self._row_to_diary_entry(row) for row in rows]
+
+    def _update_diary_entry_sync(self, entry_id: str, fields: Dict[str, Any]) -> Optional[DiaryEntry]:
+        allowed = {"watched_on", "rating", "review", "in_cinema", "source"}
+        values = self._diary_values({k: v for k, v in fields.items() if k in allowed})
+        values["updated_at"] = datetime.now(timezone.utc).isoformat()
+        assignments = ", ".join(f"{column} = ?" for column in values)
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                f"UPDATE diary_entries SET {assignments} WHERE id = ?",
+                [*values.values(), entry_id],
+            )
+        if cursor.rowcount == 0:
+            return None
+        return self._get_diary_entry_sync(entry_id)
+
+    def _delete_diary_entry_sync(self, entry_id: str) -> bool:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM diary_entries WHERE id = ?", (entry_id,))
+        return cursor.rowcount > 0
+
+    def _latest_diary_entry_sync(self, user_id: str, tmdb_id: int) -> Optional[DiaryEntry]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                f"SELECT * FROM diary_entries WHERE backstage_user_id = ? AND tmdb_id = ? "
+                f"{self._DIARY_ORDER} LIMIT 1",
+                (user_id, int(tmdb_id)),
+            ).fetchone()
+        return self._row_to_diary_entry(row) if row else None
+
+    def _list_diary_tmdb_ids_sync(self, user_id: str) -> set:
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT tmdb_id FROM diary_entries WHERE backstage_user_id = ?",
+                (user_id,),
+            ).fetchall()
+        return {int(row[0]) for row in rows}
+
+    @staticmethod
+    def _row_to_film_list(row: sqlite3.Row) -> FilmList:
+        return FilmList(**{key: row[key] for key in ("id", "name", "created_by", "created_at")})
+
+    def _create_film_list_sync(self, name: str, created_by: str) -> FilmList:
+        film_list = FilmList(
+            id=str(uuid.uuid4()), name=name, created_by=created_by,
+            created_at=datetime.now(timezone.utc),
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO film_lists (id, name, created_by, created_at) VALUES (?, ?, ?, ?)",
+                (film_list.id, film_list.name, film_list.created_by, film_list.created_at.isoformat()),
+            )
+        return film_list
+
+    def _list_film_lists_sync(self) -> List[Dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT l.*, COUNT(i.tmdb_id) AS item_count FROM film_lists l "
+                "LEFT JOIN film_list_items i ON i.list_id = l.id "
+                "GROUP BY l.id ORDER BY l.created_at"
+            ).fetchall()
+        return [
+            {**self._row_to_film_list(row).model_dump(), "item_count": row["item_count"]}
+            for row in rows
+        ]
+
+    def _get_film_list_sync(self, list_id: str) -> Optional[FilmList]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM film_lists WHERE id = ?", (list_id,)).fetchone()
+        return self._row_to_film_list(row) if row else None
+
+    def _rename_film_list_sync(self, list_id: str, name: str) -> Optional[FilmList]:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("UPDATE film_lists SET name = ? WHERE id = ?", (name, list_id))
+        return self._get_film_list_sync(list_id) if cursor.rowcount else None
+
+    def _delete_film_list_sync(self, list_id: str) -> bool:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM film_list_items WHERE list_id = ?", (list_id,))
+            cursor = conn.execute("DELETE FROM film_lists WHERE id = ?", (list_id,))
+        return cursor.rowcount > 0
+
+    def _add_film_list_item_sync(self, list_id: str, tmdb_id: int, added_by: str) -> bool:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO film_list_items (list_id, tmdb_id, added_by, added_at) "
+                "VALUES (?, ?, ?, ?)",
+                (list_id, int(tmdb_id), added_by, datetime.now(timezone.utc).isoformat()),
+            )
+        return cursor.rowcount > 0
+
+    def _remove_film_list_item_sync(self, list_id: str, tmdb_id: int) -> bool:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "DELETE FROM film_list_items WHERE list_id = ? AND tmdb_id = ?",
+                (list_id, int(tmdb_id)),
+            )
+        return cursor.rowcount > 0
+
+    def _list_film_list_items_sync(self, list_id: str) -> List[FilmListItem]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM film_list_items WHERE list_id = ? ORDER BY added_at DESC",
+                (list_id,),
+            ).fetchall()
+        return [FilmListItem(**dict(row)) for row in rows]
+
+    async def upsert_tmdb_movie(self, movie: Dict[str, Any]) -> Dict[str, Any]:
+        return await asyncio.to_thread(self._upsert_tmdb_movie_sync, movie)
+
+    async def get_tmdb_movies(self, tmdb_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+        return await asyncio.to_thread(self._get_tmdb_movies_sync, tmdb_ids)
+
+    async def create_diary_entry(self, entry: DiaryEntry) -> DiaryEntry:
+        return await asyncio.to_thread(self._create_diary_entry_sync, entry)
+
+    async def get_diary_entry(self, entry_id: str) -> Optional[DiaryEntry]:
+        return await asyncio.to_thread(self._get_diary_entry_sync, entry_id)
+
+    async def list_diary_entries(self, user_id: str) -> List[DiaryEntry]:
+        return await asyncio.to_thread(self._list_diary_entries_sync, user_id)
+
+    async def update_diary_entry(self, entry_id: str, fields: Dict[str, Any]) -> Optional[DiaryEntry]:
+        return await asyncio.to_thread(self._update_diary_entry_sync, entry_id, fields)
+
+    async def delete_diary_entry(self, entry_id: str) -> bool:
+        return await asyncio.to_thread(self._delete_diary_entry_sync, entry_id)
+
+    async def latest_diary_entry(self, user_id: str, tmdb_id: int) -> Optional[DiaryEntry]:
+        return await asyncio.to_thread(self._latest_diary_entry_sync, user_id, tmdb_id)
+
+    async def list_diary_tmdb_ids(self, user_id: str) -> set:
+        return await asyncio.to_thread(self._list_diary_tmdb_ids_sync, user_id)
+
+    async def create_film_list(self, name: str, created_by: str) -> FilmList:
+        return await asyncio.to_thread(self._create_film_list_sync, name, created_by)
+
+    async def list_film_lists(self) -> List[Dict[str, Any]]:
+        return await asyncio.to_thread(self._list_film_lists_sync)
+
+    async def get_film_list(self, list_id: str) -> Optional[FilmList]:
+        return await asyncio.to_thread(self._get_film_list_sync, list_id)
+
+    async def rename_film_list(self, list_id: str, name: str) -> Optional[FilmList]:
+        return await asyncio.to_thread(self._rename_film_list_sync, list_id, name)
+
+    async def delete_film_list(self, list_id: str) -> bool:
+        return await asyncio.to_thread(self._delete_film_list_sync, list_id)
+
+    async def add_film_list_item(self, list_id: str, tmdb_id: int, added_by: str) -> bool:
+        return await asyncio.to_thread(self._add_film_list_item_sync, list_id, tmdb_id, added_by)
+
+    async def remove_film_list_item(self, list_id: str, tmdb_id: int) -> bool:
+        return await asyncio.to_thread(self._remove_film_list_item_sync, list_id, tmdb_id)
+
+    async def list_film_list_items(self, list_id: str) -> List[FilmListItem]:
+        return await asyncio.to_thread(self._list_film_list_items_sync, list_id)
