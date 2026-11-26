@@ -116,11 +116,13 @@ class PartyStore:
 
     def _set_status_sync(self, party_id, status, at, winner_tmdb_id) -> bool:
         column = "launched_at" if status == "voting" else "closed_at"
+        # Le vote ne s'ouvre qu'une fois : deux « On lance » simultanés n'en lancent qu'un.
+        sources = ("joining", "joining") if status == "voting" else ACTIVE_STATUSES
         with self._connect() as conn:
             cursor = conn.execute(
                 f"UPDATE parties SET status = ?, {column} = ?, winner_tmdb_id = COALESCE(?, winner_tmdb_id) "
                 "WHERE id = ? AND status IN (?, ?)",
-                (status, _iso(at), winner_tmdb_id, party_id, *ACTIVE_STATUSES),
+                (status, _iso(at), winner_tmdb_id, party_id, *sources),
             )
             return cursor.rowcount == 1
 

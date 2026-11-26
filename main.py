@@ -13,6 +13,7 @@ from backend.api import health_router, router as api_router
 from backend.auth_api import auth_router
 from backend.journal_api import journal_router
 from backend.cinema_api import calendar_feed_router, cinema_router
+from backend.party_api import party_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,6 +29,7 @@ app.include_router(auth_router)
 app.include_router(journal_router)
 app.include_router(cinema_router)
 app.include_router(calendar_feed_router)
+app.include_router(party_router)
 
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "Logo.png")
 

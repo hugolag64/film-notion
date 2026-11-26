@@ -91,3 +91,11 @@ def test_proposals_round_trip_with_showtime(tmp_path):
     assert [p["title"] for p in proposals] == ["A", "B"]
     assert proposals[1]["showtime"] == showtime
     assert proposals[0]["showtime"] is None
+
+
+def test_voting_only_starts_from_joining(tmp_path):
+    parties = _party_store(tmp_path)
+    run(parties.create_party("p", "coloc", "hugo", "Hugo", T0))
+
+    assert run(parties.set_status("p", "voting", at=T0)) is True
+    assert run(parties.set_status("p", "voting", at=T0)) is False

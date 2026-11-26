@@ -44,6 +44,7 @@ from backend.core.guided_recommendations import apply_guided_answer, guided_ques
 from backend.auth_api import AuthContext, get_auth_store, get_current_user, get_jellyfin_client, require_admin
 from backend.core.auth import AuthStore
 from backend.core import cinema_bot
+from backend.core.party_service import PartyService
 from urllib.parse import quote, parse_qsl, urlencode, urlsplit, urlunsplit
 
 logger = logging.getLogger(__name__)
@@ -2701,6 +2702,10 @@ async def post_chat_message(
         await cinema_bot.handle_chat_message(body, store)
     except Exception:
         logger.exception("[cinema] Le bot n'a pas pu répondre")
+    try:
+        await PartyService(store).handle_chat_message(body, user)
+    except Exception:
+        logger.exception("[soirée] Le bot n'a pas pu répondre")
     return message
 
 
