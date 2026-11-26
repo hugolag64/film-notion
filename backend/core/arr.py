@@ -25,8 +25,8 @@ class ArrClient:
             else:
                 response = await http.get_client().request(method, f"{self.base_url}{path}", timeout=10.0, **request_kwargs)
             response.raise_for_status()
-            if response.status_code == 204:
-                return {}
+            if response.status_code == 204 or not response.content.strip():
+                return {}  # Radarr répond parfois 200 sans corps (ex. suppression).
             return response.json()
         except (httpx.HTTPError, ValueError) as error:
             raise MediaServerError("Service média inaccessible ou réponse invalide") from error

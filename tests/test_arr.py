@@ -313,3 +313,16 @@ def test_seerr_series_request_sends_chosen_seasons_or_all():
 
     assert captured[0]["seasons"] == [1, 3]
     assert captured[1]["seasons"] == "all"
+
+
+def test_radarr_delete_accepts_an_empty_200_response():
+    # Radarr réel (26/11) : DELETE /api/v3/movie/15 → 200 sans corps. La suppression avait réussi
+    # mais le client levait « réponse invalide » et l'admin voyait une erreur.
+    async def handler(request):
+        return httpx.Response(200, content=b"")
+
+    async def run():
+        async with _client(handler) as client:
+            return await RadarrClient("http://127.0.0.1:7878", "secret", client).delete_movie(15)
+
+    assert asyncio.run(run()) == {}
