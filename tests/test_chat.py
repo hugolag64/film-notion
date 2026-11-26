@@ -65,3 +65,16 @@ def test_empty_or_too_long_messages_are_rejected(tmp_path, body):
         asyncio.run(post_chat_message(PostChatMessageRequest(body=body), _user(), store))
 
     assert error.value.status_code == 400
+
+
+def test_bot_message_keeps_its_payload(tmp_path):
+    store = _store(tmp_path)
+    asyncio.run(store.create_chat_message(
+        "bot:cine", "Ciné", None, "Films", payload={"type": "cine_help", "commands": []},
+    ))
+    asyncio.run(post_chat_message(PostChatMessageRequest(body="merci"), _user(), store))
+
+    bot, human = asyncio.run(store.list_chat_messages())
+
+    assert bot["payload"] == {"type": "cine_help", "commands": []}
+    assert human["payload"] is None

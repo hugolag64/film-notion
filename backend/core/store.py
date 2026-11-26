@@ -6,6 +6,7 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+from backend.core.cinema_store import create_cinema_tables
 from backend.core.models import (
     DiaryEntry, FilmList, FilmListItem,
     Media, Notification, RecommendationEvent, RecommendationSession,
@@ -490,6 +491,13 @@ class MediaStore:
             episode_columns = [column[1] for column in conn.execute("PRAGMA table_info(episode)").fetchall()]
             if "synopsis" not in episode_columns:
                 conn.execute("ALTER TABLE episode ADD COLUMN synopsis TEXT")
+            chat_columns = {row[1] for row in conn.execute("PRAGMA table_info(chat_messages)").fetchall()}
+            if "payload" not in chat_columns:
+                conn.execute("ALTER TABLE chat_messages ADD COLUMN payload TEXT")
+            tmdb_cache_columns = {row[1] for row in conn.execute("PRAGMA table_info(tmdb_movie_cache)").fetchall()}
+            if "fr_release_date" not in tmdb_cache_columns:
+                conn.execute("ALTER TABLE tmdb_movie_cache ADD COLUMN fr_release_date TEXT")
+            create_cinema_tables(conn)
 
 
     @staticmethod
@@ -1583,18 +1591,23 @@ class MediaStore:
             },
             "body": row["body"],
             "created_at": row["created_at"],
+            "payload": json.loads(row["payload"]) if row["payload"] else None,
         }
 
     def _create_chat_message_sync(
         self, author_id: str, author_name: str, author_avatar_url: Optional[str], body: str,
+        payload: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         created_at = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
-                "INSERT INTO chat_messages (author_id, author_name, author_avatar_url, body, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (author_id, author_name, author_avatar_url, body, created_at),
+                "INSERT INTO chat_messages (author_id, author_name, author_avatar_url, body, created_at, payload) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    author_id, author_name, author_avatar_url, body, created_at,
+                    json.dumps(payload, ensure_ascii=False) if payload is not None else None,
+                ),
             )
             row = conn.execute("SELECT * FROM chat_messages WHERE id = ?", (cursor.lastrowid,)).fetchone()
         return self._row_to_chat_message(row)
@@ -1615,9 +1628,10 @@ class MediaStore:
 
     async def create_chat_message(
         self, author_id: str, author_name: str, author_avatar_url: Optional[str], body: str,
+        payload: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         return await asyncio.to_thread(
-            self._create_chat_message_sync, author_id, author_name, author_avatar_url, body,
+            self._create_chat_message_sync, author_id, author_name, author_avatar_url, body, payload,
         )
 
     async def list_chat_messages(self, after_id: Optional[int] = None, limit: int = 50) -> List[Dict[str, Any]]:
@@ -2150,6 +2164,7 @@ class MediaStore:
             "release_date": movie.get("release_date"),
             "poster_url": movie.get("poster_url"),
             "genres": json.dumps(list(movie.get("genres") or []), ensure_ascii=False),
+            "fr_release_date": movie.get("fr_release_date"),
             "fetched_at": datetime.now(timezone.utc).isoformat(),
         }
         columns = list(values)
