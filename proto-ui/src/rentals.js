@@ -50,7 +50,7 @@ export const countQueuedRentals = (rentals = []) => rentals.filter(isQueuedRenta
 /** "expire dans 3 j", "expire aujourd'hui", or null when there is no deadline yet. */
 export const rentalExpiryLabel = (rental, now = new Date()) => {
     if (!rental?.expires_at || !isActiveRental(rental)) return null;
-    const days = Math.ceil((new Date(rental.expires_at).getTime() - now.getTime()) / 86_400_000);
+    const days = Math.ceil((deadline - now.getTime()) / 86_400_000);
     if (Number.isNaN(days)) return null;
     if (days <= 0) return 'expire aujourd’hui';
     return `expire dans ${days} j`;
@@ -60,3 +60,16 @@ export const rentalExpiryLabel = (rental, now = new Date()) => {
 export const rentalTitle = (rental, title) => (
     rental?.rental_scope === 'season' && rental.season_number ? `${title} · Saison ${rental.season_number}` : title
 );
+
+/** A rental the flatmate still holds, in any stage: everything but expired or cancelled. */
+export const isOpenRental = (rental) => Boolean(rental?.status) && !['expired', 'cancelled'].includes(rental.status);
+
+/** Badge on a library card: « Ta location · J-5 », « Gardé », or null. */
+export const rentalCardBadge = (rental, now = new Date()) => {
+    if (['kept', 'keep_requested'].includes(rental?.status)) return { label: 'Gardé', tone: 'kept' };
+    if (rental?.status !== 'available') return null;
+    const deadline = new Date(rental.expires_at).getTime();
+    if (!rental.expires_at || Number.isNaN(deadline)) return { label: 'Ta location', tone: 'rental' };
+    const days = Math.max(0, Math.ceil((deadline - now.getTime()) / 86_400_000));
+    return { label: `Ta location · J-${days}`, tone: 'rental' };
+};
