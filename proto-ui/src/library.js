@@ -142,3 +142,37 @@ export function parseMediaPath(pathname) {
         return null;
     }
 }
+
+/** A requested film released less than this many days ago is shown as « Au cinéma ». */
+export const CINEMA_WINDOW_DAYS = 120;
+
+/** Films view: ready on Jellyfin (or not tracked by the server at all) → grid, otherwise « En route ». */
+export function libraryPlacement(mediaId, states) {
+    const entry = states?.[mediaId];
+    return !entry || entry.ready ? 'grid' : 'enRoute';
+}
+
+const localDay = (date) => [date.getFullYear(), date.getMonth() + 1, date.getDate()];
+const dayNumber = ([year, month, day]) => Date.UTC(year, month - 1, day) / 86_400_000;
+const pad2 = (value) => String(value).padStart(2, '0');
+
+/** The single colored badge of a film on its way to the server. */
+export function enRouteBadge(releaseDate, entry, now = new Date()) {
+    const state = entry?.state;
+    if (state === 'downloading') {
+        const progress = entry.progress_percent;
+        return { label: progress == null ? 'Téléchargement' : `Téléchargement ${progress} %`, tone: 'downloading' };
+    }
+    if (state === 'searching') return { label: 'Recherche', tone: 'searching' };
+    if (state === 'error') return { label: 'Erreur', tone: 'error' };
+    if (state === 'available' || state === 'imported') return { label: 'Bientôt prêt', tone: 'downloading' };
+
+    const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(releaseDate || '');
+    if (match) {
+        const release = [Number(match[1]), Number(match[2]), Number(match[3])];
+        const daysSince = dayNumber(localDay(now)) - dayNumber(release);
+        if (daysSince < 0) return { label: `Sort le ${pad2(release[2])}/${pad2(release[1])}`, tone: 'upcoming' };
+        if (daysSince < CINEMA_WINDOW_DAYS) return { label: 'Au cinéma', tone: 'cinema' };
+    }
+    return { label: 'Demandé', tone: 'requested' };
+}
