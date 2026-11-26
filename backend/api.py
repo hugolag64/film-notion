@@ -43,6 +43,7 @@ from backend.core.gemini_recommendations import GeminiRecommendationGateway, SUP
 from backend.core.guided_recommendations import apply_guided_answer, guided_question
 from backend.auth_api import AuthContext, get_auth_store, get_current_user, get_jellyfin_client, require_admin
 from backend.core.auth import AuthStore
+from backend.core import cinema_bot
 from urllib.parse import quote, parse_qsl, urlencode, urlsplit, urlunsplit
 
 logger = logging.getLogger(__name__)
@@ -2693,9 +2694,14 @@ async def post_chat_message(
     if len(body) > CHAT_MESSAGE_MAX_LENGTH:
         raise HTTPException(status_code=400, detail=f"Message trop long ({CHAT_MESSAGE_MAX_LENGTH} caractères max).")
     user = current.user
-    return await store.create_chat_message(
+    message = await store.create_chat_message(
         user["id"], user.get("display_name") or "Anonyme", user.get("avatar_url"), body,
     )
+    try:
+        await cinema_bot.handle_chat_message(body, store)
+    except Exception:
+        logger.exception("[cinema] Le bot n'a pas pu répondre")
+    return message
 
 
 @router.get("/media-server/options")
