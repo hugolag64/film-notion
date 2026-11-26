@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from backend.core.cinema_store import create_cinema_tables
+from backend.core.party_store import create_party_tables
 from backend.core.models import (
     DiaryEntry, FilmList, FilmListItem,
     Media, Notification, RecommendationEvent, RecommendationSession,
@@ -498,6 +499,7 @@ class MediaStore:
             if "fr_release_date" not in tmdb_cache_columns:
                 conn.execute("ALTER TABLE tmdb_movie_cache ADD COLUMN fr_release_date TEXT")
             create_cinema_tables(conn)
+            create_party_tables(conn)
 
 
     @staticmethod
