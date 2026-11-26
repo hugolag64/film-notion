@@ -224,3 +224,50 @@ def test_already_seen_answer_creates_dateless_entry(client):
     assert entries[0]["watched_on"] is None
     assert entries[0]["source"] == "recommendation"
     assert entries[0]["rating"] is None
+
+
+# --- Final review fixes -------------------------------------------------------
+
+def test_today_follows_app_timezone(client, monkeypatch):
+    from datetime import datetime, timezone
+    # 23:30 UTC on 26/11 is already 27/11 in Paris: a late screening logged
+    # after midnight must not be rejected as "in the future".
+    monkeypatch.setattr(journal_api, "_utcnow", lambda: datetime(2026, 11, 26, 23, 30, tzinfo=timezone.utc))
+
+    assert journal_api.local_today() == date(2026, 11, 27)
+    response = client.post("/api/journal", json={"tmdb_id": 550, "watched_on": "2026-11-27"})
+    assert response.status_code == 201
+    assert client.post("/api/journal", json={"tmdb_id": 550}).json()["watched_on"] == "2026-11-27"
+    assert client.post("/api/journal", json={"tmdb_id": 550, "watched_on": "2026-11-28"}).status_code == 422
+
+
+def test_library_status_change_wins_over_journal(client):
+    asyncio.run(_store().create({"id": "dune", "title": "Dune 2", "type": "Film", "tmdb_id": 550}))
+    client.post("/api/journal", json={"tmdb_id": 550, "rating": 4})
+
+    client.patch("/api/medias/dune/personal", json={"status": "watchlist"})
+
+    film = next(m for m in client.get("/api/medias").json() if m["id"] == "dune")
+    assert film["status"] == "À regarder"
+    assert client.get("/api/medias/dune").json()["status"] == "À regarder"
+
+
+def test_journal_film_does_not_mark_a_series_with_the_same_id(client):
+    asyncio.run(_store().create({"id": "show", "title": "Une série", "type": "Série", "tmdb_id": 550}))
+    client.post("/api/journal", json={"tmdb_id": 550})
+
+    series = next(m for m in client.get("/api/medias").json() if m["id"] == "show")
+
+    assert series["status"] != "Terminé"
+
+
+def test_editing_an_entry_keeps_the_library_choice(client):
+    asyncio.run(_store().create({"id": "dune", "title": "Dune 2", "type": "Film", "tmdb_id": 550}))
+    entry = client.post("/api/journal", json={"tmdb_id": 550, "rating": 4}).json()
+    client.patch("/api/medias/dune/personal", json={"status": "watchlist", "is_watchlist": True})
+
+    client.patch(f"/api/journal/{entry['id']}", json={"review": "Revu avec plaisir"})
+
+    film = client.get("/api/medias/dune").json()
+    assert film["status"] == "À regarder"
+    assert film["is_watchlist"] is True

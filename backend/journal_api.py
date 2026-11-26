@@ -7,12 +7,14 @@ bibliothèque.
 import uuid
 from datetime import date, datetime, timezone
 from typing import Any, Dict, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, field_validator
 
 from backend.api import _library_states, get_store
 from backend.auth_api import AuthContext, get_auth_store, get_current_user
+from backend.config import Config
 from backend.core.auth import AuthStore
 from backend.core.mapping import is_series
 from backend.core.models import DiaryEntry, Media
@@ -24,6 +26,20 @@ journal_router = APIRouter(prefix="/api", tags=["journal"], dependencies=[Depend
 TMDB_DOWN = "TMDB est injoignable, réessaie plus tard."
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def local_today() -> date:
+    """Today for the household (Paris by default), not the server's UTC date:
+    a film logged just after midnight belongs to the new day."""
+    try:
+        zone = ZoneInfo(getattr(Config, "RECOMMENDATION_TIMEZONE", "Europe/Paris"))
+    except ZoneInfoNotFoundError:
+        return _utcnow().astimezone().date()
+    return _utcnow().astimezone(zone).date()
+
+
 def _check_rating(value: Optional[float]) -> Optional[float]:
     if value is None:
         return None
@@ -33,7 +49,7 @@ def _check_rating(value: Optional[float]) -> Optional[float]:
 
 
 def _check_watched_on(value: Optional[date]) -> Optional[date]:
-    if value is not None and value > date.today():
+    if value is not None and value > local_today():
         raise ValueError("La date de visionnage ne peut pas être dans le futur.")
     return value
 
@@ -95,15 +111,27 @@ def _library_film(medias: list[Media], tmdb_id: int) -> Optional[Media]:
     return None
 
 
-async def sync_library_state(store: MediaStore, user_id: str, tmdb_id: int) -> None:
-    """Recopie le dernier visionnage dans l'état personnel du film de la bibliothèque."""
+async def sync_library_state(
+    store: MediaStore, user_id: str, tmdb_id: int, *, edited_entry_id: Optional[str] = None,
+) -> None:
+    """Recopie le dernier visionnage dans l'état personnel du film de la bibliothèque.
+
+    Une nouvelle entrée marque le film vu. Modifier une entrée existante ne
+    recopie que sa note, et seulement si c'est la plus récente : corriger une
+    vieille critique ne doit pas annuler un « À regarder » choisi depuis.
+    """
     media = _library_film(await store.fetch_all(), tmdb_id)
     if media is None:
         return
     latest = await store.latest_diary_entry(user_id, tmdb_id)
     if latest is None:
         return
-    fields: Dict[str, Any] = {"status": "Terminé", "is_watchlist": False}
+    if edited_entry_id is None:
+        fields: Dict[str, Any] = {"status": "Terminé", "is_watchlist": False}
+    elif latest.id == edited_entry_id and latest.rating is not None:
+        fields = {}
+    else:
+        return
     if latest.rating is not None:
         fields["rating"] = f"{latest.rating:g}"
     await store.upsert_user_media_state(user_id, media.id, fields)
@@ -179,7 +207,7 @@ async def create_journal_entry(
     current: AuthContext = Depends(get_current_user),
     store: MediaStore = Depends(get_store),
 ):
-    watched_on = payload.watched_on if "watched_on" in payload.model_fields_set else date.today()
+    watched_on = payload.watched_on if "watched_on" in payload.model_fields_set else local_today()
     entry = await add_diary_entry(
         store, current.user["id"], payload.tmdb_id, watched_on=watched_on,
         rating=payload.rating, review=payload.review, in_cinema=payload.in_cinema,
@@ -199,7 +227,8 @@ async def update_journal_entry(
     if "in_cinema" in fields and fields["in_cinema"] is None:
         fields.pop("in_cinema")
     updated = await store.update_diary_entry(entry.id, fields)
-    await sync_library_state(store, current.user["id"], entry.tmdb_id)
+    if "rating" in fields:
+        await sync_library_state(store, current.user["id"], entry.tmdb_id, edited_entry_id=entry.id)
     return (await _serialize_entries(store, [updated]))[0]
 
 

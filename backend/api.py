@@ -545,9 +545,11 @@ def get_catalogue_owner_id(auth_store: AuthStore = Depends(get_auth_store)) -> s
 
 def _seen_in_journal(media: Media, seen_tmdb_ids: set[int] | None) -> Media:
     # A film logged in the journal counts as seen, even if it reached the
-    # server after the user watched it elsewhere.
+    # server after the user watched it elsewhere. Only called when the user
+    # has no personal state for it: a status they chose in the library wins.
+    # Journal ids are TMDB *movie* ids, which overlap TV ids.
     if (
-        seen_tmdb_ids and media.tmdb_id in seen_tmdb_ids
+        seen_tmdb_ids and media.tmdb_id in seen_tmdb_ids and not is_series(media.type)
         and media.status not in {"Terminé", "Terminée"}
     ):
         return media.model_copy(update={"status": "Terminé", "is_watchlist": False})
@@ -581,7 +583,8 @@ async def _media_for_user(
         "tags": tags,
         "is_watchlist": is_watchlist,
     }
-    return _seen_in_journal(media.model_copy(update=updates), seen_tmdb_ids)
+    updated = media.model_copy(update=updates)
+    return updated if state is not None else _seen_in_journal(updated, seen_tmdb_ids)
 
 
 @router.get("/medias", response_model=List[Media])
@@ -851,7 +854,7 @@ async def _log_library_watch(store: MediaStore, user_id: str, tmdb_id: int, fiel
     Correcting a rating updates the most recent entry; only a film never
     logged before gets a new entry dated today.
     """
-    from backend.journal_api import add_diary_entry
+    from backend.journal_api import add_diary_entry, local_today
 
     changes: Dict[str, Any] = {}
     if "rating" in fields:
@@ -865,7 +868,7 @@ async def _log_library_watch(store: MediaStore, user_id: str, tmdb_id: int, fiel
         return
     try:
         await add_diary_entry(
-            store, user_id, tmdb_id, watched_on=datetime.now().date(),
+            store, user_id, tmdb_id, watched_on=local_today(),
             rating=changes.get("rating"), review=changes.get("review"), source="library",
         )
     except HTTPException as error:
