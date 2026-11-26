@@ -11,8 +11,9 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, field_validator
 
-from backend.api import get_store
-from backend.auth_api import AuthContext, get_current_user
+from backend.api import _library_states, get_store
+from backend.auth_api import AuthContext, get_auth_store, get_current_user
+from backend.core.auth import AuthStore
 from backend.core.mapping import is_series
 from backend.core.models import DiaryEntry, Media
 from backend.core.store import MediaStore
@@ -210,4 +211,153 @@ async def delete_journal_entry(
 ):
     entry = await _own_entry(store, entry_id, current)
     await store.delete_diary_entry(entry.id)
+    return Response(status_code=204)
+
+
+# --- Listes partagées -------------------------------------------------------
+
+def _check_list_name(value: str) -> str:
+    name = (value or "").strip()
+    if not 1 <= len(name) <= 60:
+        raise ValueError("Le nom d'une liste fait de 1 à 60 caractères.")
+    return name
+
+
+class FilmListPayload(BaseModel):
+    name: str
+
+    _name = field_validator("name")(_check_list_name)
+
+
+class FilmListItemPayload(BaseModel):
+    tmdb_id: int
+
+
+def _user_names(auth_store: AuthStore) -> dict[str, str]:
+    return {user["id"]: user["display_name"] for user in auth_store.list_users()}
+
+
+async def _existing_list(store: MediaStore, list_id: str):
+    film_list = await store.get_film_list(list_id)
+    if film_list is None:
+        raise HTTPException(status_code=404, detail="Liste introuvable")
+    return film_list
+
+
+class _ListContext:
+    """Everything needed to render list items for the current user, loaded once."""
+
+    def __init__(self, store: MediaStore, auth_store: AuthStore, user_id: str):
+        self.store = store
+        self.auth_store = auth_store
+        self.user_id = user_id
+
+    async def load(self, tmdb_ids: list[int]) -> "_ListContext":
+        self.names = _user_names(self.auth_store)
+        self.movies = await self.store.get_tmdb_movies(tmdb_ids)
+        self.seen = await self.store.list_diary_tmdb_ids(self.user_id)
+        states = await _library_states(self.store)
+        self.library: dict[int, dict] = {}
+        for media in await self.store.fetch_all():
+            if media.tmdb_id is None or is_series(media.type) or media.id not in states:
+                continue
+            self.library.setdefault(media.tmdb_id, {"media_id": media.id, **states[media.id]})
+        return self
+
+    def item(self, item) -> dict:
+        movie = self.movies.get(item.tmdb_id) or {}
+        return {
+            "tmdb_id": item.tmdb_id,
+            "title": movie.get("title") or "Film inconnu",
+            "year": movie.get("year"),
+            "release_date": movie.get("release_date"),
+            "poster_url": movie.get("poster_url"),
+            "added_by_name": self.names.get(item.added_by, "Un coloc"),
+            "added_by_me": item.added_by == self.user_id,
+            "added_at": item.added_at.isoformat(),
+            "seen_by_me": item.tmdb_id in self.seen,
+            "library": self.library.get(item.tmdb_id),
+        }
+
+
+@journal_router.get("/lists")
+async def list_film_lists(
+    store: MediaStore = Depends(get_store),
+    auth_store: AuthStore = Depends(get_auth_store),
+):
+    names = _user_names(auth_store)
+    lists = await store.list_film_lists()
+    return [
+        {
+            "id": film_list["id"],
+            "name": film_list["name"],
+            "created_by_name": names.get(film_list["created_by"], "Un coloc"),
+            "item_count": film_list["item_count"],
+        }
+        for film_list in reversed(lists)
+    ]
+
+
+@journal_router.post("/lists", status_code=201)
+async def create_film_list(
+    payload: FilmListPayload,
+    current: AuthContext = Depends(get_current_user),
+    store: MediaStore = Depends(get_store),
+):
+    film_list = await store.create_film_list(payload.name, current.user["id"])
+    return {"id": film_list.id, "name": film_list.name, "item_count": 0}
+
+
+@journal_router.patch("/lists/{list_id}")
+async def rename_film_list(
+    list_id: str,
+    payload: FilmListPayload,
+    store: MediaStore = Depends(get_store),
+):
+    await _existing_list(store, list_id)
+    film_list = await store.rename_film_list(list_id, payload.name)
+    return {"id": film_list.id, "name": film_list.name}
+
+
+@journal_router.delete("/lists/{list_id}", status_code=204)
+async def delete_film_list(list_id: str, store: MediaStore = Depends(get_store)):
+    await _existing_list(store, list_id)
+    await store.delete_film_list(list_id)
+    return Response(status_code=204)
+
+
+@journal_router.get("/lists/{list_id}")
+async def get_film_list(
+    list_id: str,
+    current: AuthContext = Depends(get_current_user),
+    store: MediaStore = Depends(get_store),
+    auth_store: AuthStore = Depends(get_auth_store),
+):
+    film_list = await _existing_list(store, list_id)
+    items = await store.list_film_list_items(list_id)
+    context = await _ListContext(store, auth_store, current.user["id"]).load([i.tmdb_id for i in items])
+    return {"id": film_list.id, "name": film_list.name, "items": [context.item(item) for item in items]}
+
+
+@journal_router.post("/lists/{list_id}/items")
+async def add_film_list_item(
+    list_id: str,
+    payload: FilmListItemPayload,
+    current: AuthContext = Depends(get_current_user),
+    store: MediaStore = Depends(get_store),
+    auth_store: AuthStore = Depends(get_auth_store),
+):
+    await _existing_list(store, list_id)
+    await ensure_cached_movie(store, payload.tmdb_id)
+    added = await store.add_film_list_item(list_id, payload.tmdb_id, current.user["id"])
+    item = next(i for i in await store.list_film_list_items(list_id) if i.tmdb_id == payload.tmdb_id)
+    context = await _ListContext(store, auth_store, current.user["id"]).load([payload.tmdb_id])
+    return {"added": added, "item": context.item(item)}
+
+
+@journal_router.delete("/lists/{list_id}/items/{tmdb_id}", status_code=204)
+async def remove_film_list_item(list_id: str, tmdb_id: int, store: MediaStore = Depends(get_store)):
+    await _existing_list(store, list_id)
+    if not await store.remove_film_list_item(list_id, tmdb_id):
+        raise HTTPException(status_code=404, detail="Film absent de la liste")
     return Response(status_code=204)

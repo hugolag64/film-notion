@@ -615,17 +615,26 @@ async def list_available_media(
     availabilities = await store.list_availabilities()
     return {
         "media_ids": [item.media_id for item in availabilities if item.jellyfin_id],
-        "states": {
-            item.media_id: {
-                "state": item.state,
-                "progress_percent": item.progress_percent,
-                "ready": bool(item.jellyfin_id),
-            }
-            for item in availabilities
-            # Deleted after a rental, revoked or dropped from Radarr: no longer on its way.
-            if not (item.state == "error" and item.arr_id is None and not item.jellyfin_id)
-        },
+        "states": _states_from_availabilities(availabilities),
     }
+
+
+def _states_from_availabilities(availabilities: list[Availability]) -> dict[str, dict]:
+    return {
+        item.media_id: {
+            "state": item.state,
+            "progress_percent": item.progress_percent,
+            "ready": bool(item.jellyfin_id),
+        }
+        for item in availabilities
+        # Deleted after a rental, revoked or dropped from Radarr: no longer on its way.
+        if not (item.state == "error" and item.arr_id is None and not item.jellyfin_id)
+    }
+
+
+async def _library_states(store: MediaStore) -> dict[str, dict]:
+    """Shared download/readiness state of every tracked media, keyed by media id."""
+    return _states_from_availabilities(await store.list_availabilities())
 
 
 @router.get("/dashboard")
