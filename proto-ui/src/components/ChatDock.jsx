@@ -3,7 +3,7 @@ import Icon from './Icon';
 import { fetchChatMessages, fetchFilmShowtimes, postChatMessage, startParty } from '../api';
 import { PARTY_BOT_ID, isPartyCommand, partyIdOf } from '../party';
 import PartyCard from './PartyCard';
-import { HELP_SECTIONS, filmButtons, helpCommands, isBotMessage, isCineCommand, showtimeLine } from '../cinema';
+import { HELP_SECTIONS, PRIVATE_TTL_MS, filmButtons, helpCommands, isBotMessage, isCineCommand, isClearCommand, isExpiredPrivate, showtimeLine } from '../cinema';
 import { useAuth } from '../auth-context';
 
 // A shared room for everyone on the server. Polling keeps it simple: fast
@@ -139,6 +139,17 @@ export default function ChatDock({ isDarkMode, onOpenFilm }) {
 
     useEffect(() => writeStorage(OPEN_KEY, open), [open]);
 
+    // Les échanges privés avec les bots s'effacent seuls : le serveur ne les renvoie plus, on les retire ici.
+    useEffect(() => {
+        const timer = window.setInterval(() => {
+            const now = Date.now();
+            setMessages((current) => (current.some((message) => isExpiredPrivate(message, now))
+                ? current.filter((message) => !isExpiredPrivate(message, now))
+                : current));
+        }, 30_000);
+        return () => window.clearInterval(timer);
+    }, []);
+
     const newestId = messages.at(-1)?.id ?? 0;
     useEffect(() => {
         if (!open || newestId <= lastRead) return;
@@ -165,7 +176,9 @@ export default function ChatDock({ isDarkMode, onOpenFilm }) {
         setError('');
         try {
             stickToBottom.current = true;
-            merge([await postChatMessage(body)]);
+            const result = await postChatMessage(body);
+            if (isClearCommand(body)) setMessages((current) => current.filter((message) => !message.private));
+            else merge([result]);
             setDraft('');
             setShowEmojis(false);
             setShowCineHelp(false);
@@ -304,7 +317,7 @@ export default function ChatDock({ isDarkMode, onOpenFilm }) {
                                 ? 'rounded-br-md bg-[#635bff] text-white'
                                 : isDarkMode ? 'rounded-bl-md bg-white/10' : 'rounded-bl-md bg-[#f1f4f8]'}`}
                         >{message.body}</p>
-                        {message.private && <span className="mt-0.5 px-1 text-[10px] opacity-60">🔒 Visible par toi seul</span>}
+                        {message.private && <span className="mt-0.5 px-1 text-[10px] opacity-60" title="Tape @quit pour l’effacer tout de suite">🔒 Visible par toi seul · s’efface dans {Math.round(PRIVATE_TTL_MS / 60_000)} min</span>}
                         {films.length > 0 && <div className="mt-1 flex flex-wrap gap-1">
                             {films.map((film) => {
                                 const active = openFilm?.messageId === message.id && openFilm?.siteId === film.site_id;

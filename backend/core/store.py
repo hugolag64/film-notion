@@ -23,6 +23,8 @@ _COLUMNS = [
     "watched_in_cinema", "watched_date", "backdrop_url", "cast", "created_at",
 ]
 
+# Durée de vie d'un échange privé avec un bot (commande + réponse) dans le salon.
+PRIVATE_CHAT_TTL = timedelta(minutes=10)
 _LIST_FIELDS = {"categories", "tags", "cast"}
 _ACTIVE_RENTAL_STATES = ("requested", "downloading", "available", "keep_requested")
 # A requested rental is "waiting for a source" while Radarr has nothing to download yet.
@@ -1606,9 +1608,15 @@ class MediaStore:
         self, author_id: str, author_name: str, author_avatar_url: Optional[str], body: str,
         payload: Optional[Dict[str, Any]] = None, visible_to: Optional[str] = None,
     ) -> Dict[str, Any]:
-        created_at = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
+        created_at = now.isoformat()
         with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
+            # Les échanges privés avec les bots expirés n'ont plus de raison d'être gardés.
+            conn.execute(
+                "DELETE FROM chat_messages WHERE visible_to IS NOT NULL AND created_at <= ?",
+                ((now - PRIVATE_CHAT_TTL).isoformat(),),
+            )
             cursor = conn.execute(
                 "INSERT INTO chat_messages "
                 "(author_id, author_name, author_avatar_url, body, created_at, payload, visible_to) "
@@ -1625,18 +1633,21 @@ class MediaStore:
     def _list_chat_messages_sync(
         self, after_id: Optional[int], limit: int, viewer_id: Optional[str],
     ) -> List[Dict[str, Any]]:
-        visible = "(visible_to IS NULL OR visible_to = ?)"
+        # Les messages privés (commandes de bot et leurs réponses) disparaissent après PRIVATE_CHAT_TTL.
+        visible = "(visible_to IS NULL OR (visible_to = ? AND created_at > ?))"
+        fresh_since = (datetime.now(timezone.utc) - PRIVATE_CHAT_TTL).isoformat()
         with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             if after_id is None:
                 rows = conn.execute(
-                    f"SELECT * FROM chat_messages WHERE {visible} ORDER BY id DESC LIMIT ?", (viewer_id, limit),
+                    f"SELECT * FROM chat_messages WHERE {visible} ORDER BY id DESC LIMIT ?",
+                    (viewer_id, fresh_since, limit),
                 ).fetchall()
                 rows.reverse()
             else:
                 rows = conn.execute(
                     f"SELECT * FROM chat_messages WHERE id > ? AND {visible} ORDER BY id ASC LIMIT ?",
-                    (after_id, viewer_id, limit),
+                    (after_id, viewer_id, fresh_since, limit),
                 ).fetchall()
         return [self._row_to_chat_message(row) for row in rows]
 
@@ -1647,6 +1658,14 @@ class MediaStore:
         return await asyncio.to_thread(
             self._create_chat_message_sync, author_id, author_name, author_avatar_url, body, payload, visible_to,
         )
+
+    def _delete_private_chat_messages_sync(self, viewer_id: str) -> int:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
+            return conn.execute("DELETE FROM chat_messages WHERE visible_to = ?", (viewer_id,)).rowcount
+
+    async def delete_private_chat_messages(self, viewer_id: str) -> int:
+        """Efface les échanges privés de `viewer_id` avec les bots ; renvoie combien ont disparu."""
+        return await asyncio.to_thread(self._delete_private_chat_messages_sync, viewer_id)
 
     async def list_chat_messages(
         self, after_id: Optional[int] = None, limit: int = 50, viewer_id: Optional[str] = None,

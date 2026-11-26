@@ -78,3 +78,36 @@ def test_bot_message_keeps_its_payload(tmp_path):
 
     assert bot["payload"] == {"type": "cine_help", "commands": []}
     assert human["payload"] is None
+
+
+def _age_private_messages(store, minutes):
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+    old = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute("UPDATE chat_messages SET created_at = ? WHERE visible_to IS NOT NULL", (old,))
+
+
+def test_private_bot_exchange_disappears_after_ten_minutes(tmp_path):
+    store = _store(tmp_path)
+    asyncio.run(post_chat_message(PostChatMessageRequest(body="@ciné aide"), _user(), store))
+    asyncio.run(post_chat_message(PostChatMessageRequest(body="salut"), _user(), store))
+    assert len(asyncio.run(list_chat_messages(None, _user(), store))["messages"]) == 3
+
+    _age_private_messages(store, 11)
+
+    bodies = [m["body"] for m in asyncio.run(list_chat_messages(None, _user(), store))["messages"]]
+    assert bodies == ["salut"]
+
+
+def test_quit_clears_only_my_private_messages_and_is_not_posted(tmp_path):
+    store = _store(tmp_path)
+    asyncio.run(post_chat_message(PostChatMessageRequest(body="@ciné aide"), _user(), store))
+    asyncio.run(post_chat_message(PostChatMessageRequest(body="@ciné aide"), _user("lea", "Léa"), store))
+    asyncio.run(post_chat_message(PostChatMessageRequest(body="salut"), _user(), store))
+
+    result = asyncio.run(post_chat_message(PostChatMessageRequest(body=" @QUIT "), _user(), store))
+
+    assert result == {"cleared": 2}
+    assert [m["body"] for m in asyncio.run(list_chat_messages(None, _user(), store))["messages"]] == ["salut"]
+    assert len(asyncio.run(list_chat_messages(None, _user("lea", "Léa"), store))["messages"]) == 3

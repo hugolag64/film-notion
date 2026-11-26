@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import asyncio
 import logging
 import random
+import re
 import sqlite3
 import time
 import uuid
@@ -2694,6 +2695,11 @@ async def mark_notification_read(
 
 
 CHAT_MESSAGE_MAX_LENGTH = 500
+_CLEAR_COMMAND_RE = re.compile(r"^@(quit|effacer|clear)$", re.IGNORECASE)
+
+
+def is_clear_command(body: str) -> bool:
+    return _CLEAR_COMMAND_RE.match(body.strip()) is not None
 
 
 class PostChatMessageRequest(BaseModel):
@@ -2721,7 +2727,11 @@ async def post_chat_message(
     if len(body) > CHAT_MESSAGE_MAX_LENGTH:
         raise HTTPException(status_code=400, detail=f"Message trop long ({CHAT_MESSAGE_MAX_LENGTH} caractères max).")
     user = current.user
+    # « @quit » range le salon : efface tout de suite ses échanges privés avec les bots.
+    if is_clear_command(body):
+        return {"cleared": await store.delete_private_chat_messages(user["id"])}
     # Les commandes de bot (@ciné, @soirée) et leurs réponses ne regardent que celui qui demande.
+    # Elles disparaissent seules après PRIVATE_CHAT_TTL pour ne pas encombrer le salon.
     is_command = cinema_bot.parse_command(body) is not None or is_party_command(body)
     message = await store.create_chat_message(
         user["id"], user.get("display_name") or "Anonyme", user.get("avatar_url"), body,

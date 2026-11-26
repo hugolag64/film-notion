@@ -25,7 +25,26 @@ export const HELP_SECTIONS = [
             { command: '@soirée ciné', description: 'Choisir ensemble une séance ce soir au Grand Sud.' },
         ],
     },
+    {
+        title: 'Ranger le salon',
+        audience: 'Tes échanges privés avec les bots s’effacent seuls après 10 min',
+        commands: [
+            { command: '@quit', description: 'Efface tout de suite tes commandes et les réponses des bots.' },
+        ],
+    },
 ];
+
+// Même durée que PRIVATE_CHAT_TTL dans backend/core/store.py.
+export const PRIVATE_TTL_MS = 10 * 60_000;
+
+export function isExpiredPrivate(message, now = Date.now()) {
+    return Boolean(message?.private) && now - new Date(message.created_at).getTime() > PRIVATE_TTL_MS;
+}
+
+// Même règle que is_clear_command dans backend/api.py.
+export function isClearCommand(text) {
+    return /^@(quit|effacer|clear)$/i.test((text || '').trim());
+}
 
 // Les deux bots du salon : « Ciné » et « Soirée ».
 const BOT_IDS = new Set([BOT_ID, 'bot:soiree']);
