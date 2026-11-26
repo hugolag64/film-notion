@@ -166,3 +166,15 @@ def test_pick_three_keeps_one_server_film():
 
     assert [c["tmdb_id"] for c in chosen] == [1, 2, 5]
     assert chosen[2]["rank"] == 3
+
+
+def test_coloc_drops_server_film_longer_than_runtime_max(tmp_path):
+    store, _ = _stores(tmp_path)
+    _library_film(store, 1, "Trop long")
+    _library_film(store, 2, "Court")
+    _library_film(store, 3, "Durée inconnue")
+    tmdb = FakeTMDB(details={1: {"runtime": 141}, 2: {"runtime": 100}, 3: httpx.ConnectError("down")})
+
+    found = run(coloc_candidates(store, tmdb, TasteProfile(), {**ANY, "runtime_max": 135}, set(), NOW))
+
+    assert sorted(c["title"] for c in found) == ["Court", "Durée inconnue"]

@@ -107,7 +107,26 @@ async def coloc_candidates(
     for candidate in found:
         candidate["score"] = _score(candidate, profile, combined, now)
     found.sort(key=lambda c: -c["score"])
+    if combined.get("runtime_max"):
+        found = await _within_runtime(found, tmdb, combined["runtime_max"])
     return found
+
+
+async def _within_runtime(candidates: list[dict], tmdb, runtime_max: int) -> list[dict]:
+    """La bibliothèque ne connaît pas la durée : on la demande à TMDB, seulement pour
+    les films du serveur assez bien classés pour être proposés."""
+    kept: list[dict] = []
+    for candidate in candidates:
+        if candidate["source"] == "server" and len(kept) < TOP_N:
+            try:
+                runtime = ((await tmdb.get_movie_details(candidate["tmdb_id"])) or {}).get("runtime")
+            except _TMDB_ERRORS as error:
+                logger.warning("[soirée] Durée inconnue pour %s : %s", candidate["title"], error)
+                runtime = None
+            if runtime and runtime > runtime_max:
+                continue
+        kept.append(candidate)
+    return kept
 
 
 def pick_three(candidates: list[dict], pick: Optional[GeminiGroupPick]) -> list[dict]:
