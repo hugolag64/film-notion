@@ -50,7 +50,7 @@ export const countQueuedRentals = (rentals = []) => rentals.filter(isQueuedRenta
 /** "expire dans 3 j", "expire aujourd'hui", or null when there is no deadline yet. */
 export const rentalExpiryLabel = (rental, now = new Date()) => {
     if (!rental?.expires_at || !isActiveRental(rental)) return null;
-    const days = Math.ceil((deadline - now.getTime()) / 86_400_000);
+    const days = Math.ceil((new Date(rental.expires_at).getTime() - now.getTime()) / 86_400_000);
     if (Number.isNaN(days)) return null;
     if (days <= 0) return 'expire aujourd’hui';
     return `expire dans ${days} j`;

@@ -421,10 +421,12 @@ export async function deleteExpiredRentals() {
     return body;
 }
 
-export async function fetchAvailableMediaIds() {
+/** Films ready on Jellyfin, plus the download state of every film the server tracks. */
+export async function fetchLibraryAvailability() {
     const response = await apiFetch(`${API_BASE_URL}/library/available`);
     if (!response.ok) throw new Error('Disponibilités indisponibles');
-    return (await response.json()).media_ids || [];
+    const body = await response.json();
+    return { mediaIds: body.media_ids || [], states: body.states || {} };
 }
 
 export async function deleteMedia(mediaId, { deleteFiles = false } = {}) {

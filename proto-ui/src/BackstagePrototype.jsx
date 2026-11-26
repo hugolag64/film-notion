@@ -10,14 +10,14 @@ import NotificationBell from './components/NotificationBell';
 import ChatDock from './components/ChatDock';
 import useLayer from './useLayer';
 import { useAuth } from './auth-context';
-import { fetchPlaybackHealth, fetchMedias, updateMedia, deleteMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, updateSeasonWatched, refreshSeriesFromTMDB, fetchAvailability, fetchJellyfinPlaybackTarget, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, cancelRental, fetchMediaServerActivity, syncMediaServer, syncPlayback, fetchAvailableMediaIds, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest } from './api';
-import { filterAndSortMovies, filterOptions, normalizeStatus, mediaPath, parseMediaPath, searchLibrary } from './library';
+import { fetchPlaybackHealth, fetchMedias, updateMedia, deleteMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, updateSeasonWatched, refreshSeriesFromTMDB, fetchAvailability, fetchJellyfinPlaybackTarget, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, cancelRental, fetchMediaServerActivity, syncMediaServer, syncPlayback, fetchLibraryAvailability, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest } from './api';
+import { enRouteBadge, filterAndSortMovies, filterOptions, libraryPlacement, normalizeStatus, mediaPath, parseMediaPath, searchLibrary } from './library';
 
 // Read once, before anything changes the address bar.
 const INITIAL_DEEP_LINK = parseMediaPath(window.location.pathname);
 import { replaceEpisode } from './series';
 import SeriesDetailView from './components/SeriesDetailView';
-import { DEFAULT_MAX_ACTIVE_RENTALS, DEFAULT_MAX_QUEUED_RENTALS, countQueuedRentals, countRentalsInUse, indexRentalsByMedia, isQueuedRental, rentalExpiryLabel, rentalStatusLabel } from './rentals';
+import { DEFAULT_MAX_ACTIVE_RENTALS, DEFAULT_MAX_QUEUED_RENTALS, countQueuedRentals, countRentalsInUse, indexRentalsByMedia, isOpenRental, isQueuedRental, rentalCardBadge, rentalExpiryLabel, rentalStatusLabel } from './rentals';
 
 const ALL_GENRES = [
     'Action', 'Aventure', 'Animation', 'Biopic', 'Comédie', 'Crime',
@@ -69,6 +69,17 @@ const GENRE_TRANSLATIONS = {
 const translateGenre = (genre) => GENRE_TRANSLATIONS[genre] || genre;
 
 const LIBRARY_BATCH_SIZE = 48;
+// One color per badge meaning, shared by the library cards and the « En route » row.
+const BADGE_TONE_CLASSES = {
+    cinema: 'bg-rose-600/90',
+    upcoming: 'bg-amber-500/90',
+    requested: 'bg-slate-600/90',
+    searching: 'bg-sky-600/90',
+    downloading: 'bg-[#635bff]/90',
+    rental: 'bg-[#635bff]/90',
+    error: 'bg-red-600/90',
+    kept: 'bg-emerald-600/90',
+};
 // A roommate should hear back within seconds when the media server is down.
 const PLAYER_TARGET_TIMEOUT_MS = 10000;
 const PLAYER_ACK_TIMEOUT_MS = 15000;
@@ -148,6 +159,7 @@ const mapMediaToMovie = (media, index = 0) => {
             tmdbId: media.tmdb_id || null,
             director: media.director || (media.type === 'Série' ? 'Créateur inconnu' : 'Réalisateur inconnu'),
             year: media.release_date ? (new Date(media.release_date).getFullYear() || '—') : '—',
+            releaseDate: media.release_date || null,
             genre: categories,
             poster: media.cover_url || 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?auto=format&fit=crop&w=600&q=80',
             backdrop: media.backdrop_url || media.cover_url || 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=1200&q=80',
@@ -231,6 +243,8 @@ export default function BackstagePrototype() {
     const [availabilityByMedia, setAvailabilityByMedia] = useState({});
     const [availableMediaIds, setAvailableMediaIds] = useState(() => new Set());
     const [onlyAvailable, setOnlyAvailable] = useState(false);
+    const [onlyMine, setOnlyMine] = useState(false);
+    const [libraryStates, setLibraryStates] = useState({});
     const [rentalsByMedia, setRentalsByMedia] = useState({});
     const [rentals, setRentals] = useState([]);
     const [maxActiveRentals, setMaxActiveRentals] = useState(DEFAULT_MAX_ACTIVE_RENTALS);
@@ -716,8 +730,11 @@ export default function BackstagePrototype() {
         }
     };
 
-    const refreshAvailableMediaIds = () => fetchAvailableMediaIds()
-        .then((ids) => setAvailableMediaIds(new Set(ids)))
+    const refreshAvailableMediaIds = () => fetchLibraryAvailability()
+        .then(({mediaIds, states}) => {
+            setAvailableMediaIds(new Set(mediaIds));
+            setLibraryStates(states);
+        })
         .catch(() => {});
 
     const refreshLibraryState = async ({sync = false} = {}) => {
@@ -869,12 +886,16 @@ export default function BackstagePrototype() {
         .filter(movie => activeFilter === 'all' || activeFilter === 'watched' ? activeFilter === 'all' || ['Terminé', 'Terminée'].includes(movie.status)
             : activeFilter === 'unwatched' ? !['Terminé', 'Terminée'].includes(movie.status)
                 : activeFilter === 'watchlist' ? movie.isWatchlist : movie.isFavorite)
-        .filter((movie) => !onlyAvailable || availableMediaIds.has(movie.id));
+        .filter((movie) => !onlyAvailable || availableMediaIds.has(movie.id))
+        .filter((movie) => !onlyMine || isOpenRental(rentalsByMedia[movie.id]));
+    // Films only: what the server tracks but cannot play yet sits in the « En route » row.
+    const enRouteMovies = collection === 'Films' ? filteredMovies.filter((movie) => libraryPlacement(movie.id, libraryStates) === 'enRoute') : [];
+    const gridMovies = enRouteMovies.length ? filteredMovies.filter((movie) => libraryPlacement(movie.id, libraryStates) === 'grid') : filteredMovies;
     // Progressive rendering: 48 posters at a time instead of the whole catalogue.
     // The window resets whenever the collection, filters, sort or search change.
-    const libraryKey = JSON.stringify([collection, filters, sort, searchQuery, activeFilter, onlyAvailable]);
+    const libraryKey = JSON.stringify([collection, filters, sort, searchQuery, activeFilter, onlyAvailable, onlyMine]);
     const visibleCount = libraryWindow.key === libraryKey ? libraryWindow.count : LIBRARY_BATCH_SIZE;
-    const visibleMovies = filteredMovies.slice(0, visibleCount);
+    const visibleMovies = gridMovies.slice(0, visibleCount);
     const showMoreMovies = () => setLibraryWindow({key: libraryKey, count: visibleCount + LIBRARY_BATCH_SIZE});
 
     useEffect(() => {
@@ -1720,7 +1741,7 @@ export default function BackstagePrototype() {
                             {collection === 'Films' && <button type="button" onClick={() => setShowRecommendationFlow(true)} className="inline-flex min-h-11 items-center gap-1.5 rounded-lg bg-gradient-to-br from-[#635bff] to-[#a855f7] px-4 py-2 text-sm font-semibold text-white shadow-md shadow-[#635bff]/25 transition hover:-translate-y-0.5" title="Choisir un film en quelques questions"><Icon name="sparkle" />Choisir un film</button>}
                             <div className={`text-xs font-mono ${isDarkMode ? 'text-white/50' : 'text-[#425466]'
                                 }`}>
-                                {filteredMovies.length} Titre{filteredMovies.length > 1 ? 's' : ''} affiché{filteredMovies.length > 1 ? 's' : ''}
+                                {gridMovies.length} Titre{gridMovies.length > 1 ? 's' : ''} affiché{gridMovies.length > 1 ? 's' : ''}
                             </div>
                         </div>
                     </div>
@@ -1730,7 +1751,8 @@ export default function BackstagePrototype() {
                         <button onClick={() => setSort(prev => ({ ...prev, direction: prev.direction === 'asc' ? 'desc' : 'asc' }))} className="text-xs rounded border px-2 py-1.5">{sort.direction === 'asc' ? '↑ Croissant' : '↓ Décroissant'}</button>
                         {[['genre', 'Genre', filterOptions(collectionMedias, 'genre')], ['director', collection === 'Séries' ? 'Créateur' : 'Réalisateur', filterOptions(collectionMedias, 'director')], ['status', 'Statut', ['À regarder', 'En cours', 'Terminé', 'Terminée']], ['support', 'Support', filterOptions(collectionMedias, 'supports')]].map(([key, label, options]) => <select key={key} aria-label={`Filtrer par ${label.toLowerCase()}`} value={filters[key]} onChange={e => setFilters(prev => ({ ...prev, [key]: e.target.value }))} className="text-xs rounded border px-2 py-1.5"><option value="">{label}</option>{options.map(option => <option key={option} value={option}>{option}</option>)}</select>)}
                         <button type="button" onClick={() => setOnlyAvailable((value) => !value)} aria-pressed={onlyAvailable} className={`rounded border px-2 py-1.5 text-xs font-semibold transition ${onlyAvailable ? 'border-emerald-500 bg-emerald-500 text-white' : 'border-emerald-500/40 text-emerald-600 hover:bg-emerald-500/10'}`} title={collection === 'Séries' ? 'Séries présentes sur le serveur' : 'Films prêts à être lus sur le serveur'}>▶ Disponible maintenant</button>
-                        <button onClick={() => { setFilters({ genre: '', director: '', status: '', support: '' }); setOnlyAvailable(false); }} className="text-xs text-[#635bff] px-2">Réinitialiser</button>
+                        <button type="button" onClick={() => setOnlyMine((value) => !value)} aria-pressed={onlyMine} className={`rounded border px-2 py-1.5 text-xs font-semibold transition ${onlyMine ? 'border-[#635bff] bg-[#635bff] text-white' : 'border-[#635bff]/40 text-[#635bff] hover:bg-[#635bff]/10'}`} title="Les titres que tu as loués">Mes locations</button>
+                        <button onClick={() => { setFilters({ genre: '', director: '', status: '', support: '' }); setOnlyAvailable(false); setOnlyMine(false); }} className="text-xs text-[#635bff] px-2">Réinitialiser</button>
                     </div>
 
                     <div className="category-rail mb-7" aria-label="Explorer par catégorie">
@@ -1749,6 +1771,27 @@ export default function BackstagePrototype() {
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-5" aria-busy="true" aria-label="Chargement de la bibliothèque">
                             {Array.from({length: 12}, (_, index) => <div key={index} className="aspect-[2/3] animate-pulse rounded-xl bg-current/10" />)}
                         </div>
+                    )}
+
+                    {enRouteMovies.length > 0 && (
+                        <section aria-label="En route" className="mb-8">
+                            <h2 className={`mb-3 text-lg font-serif font-bold ${isDarkMode ? 'text-white' : 'text-[#0a2540]'}`}>En route <span className="ml-1 text-xs font-mono opacity-60">{enRouteMovies.length}</span></h2>
+                            <div className="flex gap-3 overflow-x-auto pb-2">
+                                {enRouteMovies.map((movie) => {
+                                    const badge = enRouteBadge(movie.releaseDate, libraryStates[movie.id]);
+                                    return (
+                                        <button type="button" key={movie.id} onClick={() => openMovie(movie)} className="group w-28 shrink-0 text-left">
+                                            <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-slate-900">
+                                                <img src={movie.poster} alt={movie.title} loading="lazy" decoding="async" className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" />
+                                                <span className={`absolute left-1.5 top-1.5 rounded-md px-1.5 py-0.5 text-[8.5px] font-mono font-bold text-white shadow backdrop-blur-md ${BADGE_TONE_CLASSES[badge.tone]}`}>{badge.label}</span>
+                                            </div>
+                                            <p className={`mt-1.5 truncate text-xs font-semibold group-hover:text-[#635bff] ${isDarkMode ? 'text-white' : 'text-[#0a2540]'}`}>{movie.title}</p>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            <h2 className={`mt-6 text-lg font-serif font-bold ${isDarkMode ? 'text-white' : 'text-[#0a2540]'}`}>Bibliothèque</h2>
+                        </section>
                     )}
 
                     {/* 2/3 Poster Grid */}
@@ -1773,25 +1816,13 @@ export default function BackstagePrototype() {
                                     />
                                     <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent opacity-75 group-hover:opacity-30 transition-opacity" />
 
-                                    {/* Support pills and favorite */}
+                                    {/* Rental badge and favorite */}
                                     <div className="absolute top-2.5 left-2.5 right-2.5 flex justify-start gap-1 pointer-events-none">
                                         <div className="flex w-full items-center gap-1 pointer-events-auto">
-                                            {(Array.isArray(movie.supports) ? movie.supports : (movie.support ? [movie.support] : [])).filter((sup) => ['Serveur', 'Physique', 'Streaming', 'Cinéma'].includes(sup)).slice(0, 2).map((sup, idx) => (
-                                                <span
-                                                    key={idx}
-                                                    className={`text-[8.5px] font-mono font-bold px-1.5 py-0.5 rounded-md shadow backdrop-blur-md text-white ${sup === 'Cinéma'
-                                                        ? 'bg-rose-600/90'
-                                                        : sup === 'Serveur'
-                                                            ? 'bg-purple-600/90'
-                                                            : sup === 'Physique'
-                                                                ? 'bg-amber-600/90'
-                                                                : 'bg-sky-600/90'
-                                                        }`}
-                                                >
-                                                    {sup === 'Cinéma' ? 'Cinéma' : sup === 'Serveur' ? 'Serveur' : sup === 'Physique' ? 'Physique' : 'Streaming'}
-                                                </span>
-                                            ))}
-                                            {availabilityByMedia[movie.id] && <span className="text-[8.5px] font-mono font-bold px-1.5 py-0.5 rounded-md bg-[#635bff]/90 text-white shadow">{availabilityByMedia[movie.id].state === 'available' ? 'Disponible' : availabilityByMedia[movie.id].state === 'imported' ? 'Possédé' : availabilityByMedia[movie.id].state === 'downloading' ? `${availabilityByMedia[movie.id].progress_percent || 0}%` : availabilityByMedia[movie.id].state === 'searching' ? 'Recherche' : availabilityByMedia[movie.id].state === 'error' ? 'Erreur' : 'Demandé'}</span>}
+                                            {(() => {
+                                                const badge = rentalCardBadge(rentalsByMedia[movie.id]);
+                                                return badge && <span className={`text-[8.5px] font-mono font-bold px-1.5 py-0.5 rounded-md shadow backdrop-blur-md text-white ${BADGE_TONE_CLASSES[badge.tone]}`}>{badge.label}</span>;
+                                            })()}
                                             <button
                                                 type="button"
                                                 onClick={(e) => toggleFavorite(movie.id, e)}
@@ -1842,12 +1873,12 @@ export default function BackstagePrototype() {
                         ))}
                     </div>
 
-                    {visibleMovies.length < filteredMovies.length && (
+                    {visibleMovies.length < gridMovies.length && (
                         <div ref={observeLibrarySentinel(showMoreMovies)} className="mt-8 flex flex-col items-center gap-2">
                             <button type="button" onClick={showMoreMovies} className={`min-h-11 rounded-lg border px-5 text-sm font-semibold transition ${isDarkMode ? 'border-white/15 hover:bg-white/10' : 'border-[#e3e8ee] bg-white hover:bg-[#f6f9fc]'}`}>
                                 Afficher plus de titres
                             </button>
-                            <p className={`text-xs ${isDarkMode ? 'text-white/50' : 'text-[#425466]'}`}>{visibleMovies.length} sur {filteredMovies.length}</p>
+                            <p className={`text-xs ${isDarkMode ? 'text-white/50' : 'text-[#425466]'}`}>{visibleMovies.length} sur {gridMovies.length}</p>
                         </div>
                     )}
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { isOpenRental, rentalCardBadge } from './rentals.js';
+import { isOpenRental, rentalCardBadge, rentalExpiryLabel } from './rentals.js';
 
 const NOW = new Date('2026-11-26T12:00:00Z');
 
@@ -28,4 +28,8 @@ test('card badge: kept films, and nothing for closed rentals', () => {
 
 test('card badge: an unreadable deadline falls back to the plain label', () => {
     assert.deepEqual(rentalCardBadge({ status: 'available', expires_at: 'pas une date' }, NOW), { label: 'Ta location', tone: 'rental' });
+});
+
+test('expiry label still counts the days left', () => {
+    assert.equal(rentalExpiryLabel({ status: 'available', expires_at: '2026-11-29T12:00:00Z' }, NOW), 'expire dans 3 j');
 });
