@@ -221,3 +221,33 @@ def test_tracked_release_dates_are_refreshed(stores):
     assert refreshed == 1
     assert asyncio.run(store.get_tmdb_movies([777]))[777]["fr_release_date"] == "2026-11-18"
     assert asyncio.run(refresh_tracked_release_dates(store, cinema, tmdb, date(2026, 11, 26))) == 0
+
+
+def test_programme_without_any_showtime_is_a_failure(stores):
+    store, cinema = stores
+    fetch = FakeFetcher()
+    asyncio.run(refresh_cinema(store, cinema, FakeTMDB(), fetch, NOW))
+    before = asyncio.run(cinema.list_showtimes(NOW))
+    fetch.programme = fetch.programme.replace("data-time=", "data-heure=")
+
+    result = asyncio.run(refresh_cinema(store, cinema, FakeTMDB(), fetch, NOW + timedelta(days=1)))
+
+    assert result["ok"] is False
+    assert asyncio.run(cinema.list_showtimes(NOW)) == before
+    assert asyncio.run(cinema.get_status())["last_success_at"] == NOW
+
+
+def test_films_absent_from_the_current_read_are_not_refetched(stores):
+    store, cinema = stores
+    asyncio.run(cinema.upsert_site_film(999, "Disparu", "/film/disparu/999/", None))
+    fetch, tmdb = FakeFetcher(), FakeTMDB()
+    paths = []
+
+    async def recording(path):
+        paths.append(path)
+        return await fetch(path)
+
+    asyncio.run(refresh_cinema(store, cinema, tmdb, recording, NOW))
+
+    assert "/film/disparu/999/" not in paths
+    assert all(query != "Disparu" for query, _ in tmdb.searches)

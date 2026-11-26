@@ -116,6 +116,8 @@ async def refresh_cinema(
         programme = parse_programme(await fetch(GRAND_SUD_PATH))
         if not programme:
             raise RuntimeError("Programmation lue sans aucun film")
+        if not any(film.showtimes for film in programme):
+            raise RuntimeError("Programmation lue sans aucune séance")
     except Exception as exc:
         logger.warning("[cinema] Lecture de la programmation impossible : %s", exc)
         await cinema.record_failure(now, str(exc) or exc.__class__.__name__)
@@ -130,8 +132,12 @@ async def refresh_cinema(
     for film in [*programme, *upcoming]:
         await cinema.upsert_site_film(film.site_id, film.title, film.url, film.poster_url)
 
+    # Seuls les films lus aujourd'hui : un film disparu du site n'est plus relu.
+    seen = {film.site_id for film in programme} | {film.site_id for film in upcoming}
     films = await cinema.get_site_films()
     for site_id, film in films.items():
+        if site_id not in seen:
+            continue
         fetched_at = film["details_fetched_at"]
         stale = fetched_at is None or (not film["release_reunion"] and now - fetched_at > DETAILS_RETRY)
         if not stale:
@@ -147,7 +153,7 @@ async def refresh_cinema(
         films = await cinema.get_site_films()
         for site_id, film in films.items():
             attempted = film["match_attempted_at"]
-            if film["tmdb_id"] is not None or (attempted is not None and now - attempted <= MATCH_RETRY):
+            if site_id not in seen or film["tmdb_id"] is not None or (attempted is not None and now - attempted <= MATCH_RETRY):
                 continue
             details = FilmDetails(
                 film["original_title"],
