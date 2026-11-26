@@ -685,3 +685,37 @@ export async function updateSeasonWatched(mediaId, seasonNumber, watched) {
     if (!response.ok) throw new Error(`La saison n’a pas pu être mise à jour (erreur ${response.status}).`);
     return response.json();
 }
+
+async function journalRequest(path, init, fallback) {
+    const response = await apiFetch(`${API_BASE_URL}${path}`, init);
+    if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        const error = new Error(errorDetail(detail, `${fallback} (erreur ${response.status}).`));
+        error.status = response.status;
+        throw error;
+    }
+    return response.status === 204 ? null : response.json();
+}
+
+const jsonBody = (method, payload) => ({
+    method,
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+});
+
+/** Journal « Vu » : entries of the signed-in user only. */
+export async function fetchJournal() {
+    return journalRequest('/journal', {}, 'Le journal n’a pas pu être chargé');
+}
+
+export async function createJournalEntry(payload) {
+    return journalRequest('/journal', jsonBody('POST', payload), 'Le film n’a pas pu être ajouté au journal');
+}
+
+export async function updateJournalEntry(entryId, payload) {
+    return journalRequest(`/journal/${encodeURIComponent(entryId)}`, jsonBody('PATCH', payload), 'L’entrée n’a pas pu être modifiée');
+}
+
+export async function deleteJournalEntry(entryId) {
+    return journalRequest(`/journal/${encodeURIComponent(entryId)}`, {method: 'DELETE'}, 'L’entrée n’a pas pu être supprimée');
+}

@@ -8,9 +8,11 @@ import DashboardHome from './components/DashboardHome';
 import TMDBMoviePreview from './components/TMDBMoviePreview';
 import NotificationBell from './components/NotificationBell';
 import ChatDock from './components/ChatDock';
+import JournalView from './components/JournalView';
+import SeenDialog from './components/SeenDialog';
 import useLayer from './useLayer';
 import { useAuth } from './auth-context';
-import { fetchPlaybackHealth, fetchMedias, updateMedia, deleteMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, updateSeasonWatched, refreshSeriesFromTMDB, fetchAvailability, fetchJellyfinPlaybackTarget, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, cancelRental, fetchMediaServerActivity, syncMediaServer, syncPlayback, fetchLibraryAvailability, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest } from './api';
+import { fetchPlaybackHealth, fetchMedias, updateMedia, deleteMedia, updatePersonalMedia, searchTMDB, searchTMDBPerson, relinkTMDB, createMediaFromTMDB, searchTMDBTV, createSeriesFromTMDB, fetchSeriesEpisodes, updateEpisode, updateSeasonWatched, refreshSeriesFromTMDB, fetchAvailability, fetchJellyfinPlaybackTarget, fetchMediaServerOptions, fetchMediaServerStatus, requestAcquisition, fetchRentals, requestRentalKeep, cancelRental, fetchMediaServerActivity, syncMediaServer, syncPlayback, fetchLibraryAvailability, fetchTMDBRating, fetchTMDBMovieDetails, fetchDashboard, addRecommendationToWatchlist, createSeerrRequest, cancelSeerrRequest, createJournalEntry } from './api';
 import { enRouteBadge, filterAndSortMovies, filterOptions, libraryPlacement, normalizeStatus, mediaPath, parseMediaPath, searchLibrary } from './library';
 
 // Read once, before anything changes the address bar.
@@ -230,6 +232,8 @@ export default function BackstagePrototype() {
     const [filters, setFilters] = useState({ genre: '', director: '', status: '', support: '' });
     const [sort, setSort] = useState({ key: 'createdAt', direction: 'desc' });
     const [showAddDialog, setShowAddDialog] = useState(false);
+    // Library film being logged as « Vu » (opens SeenDialog).
+    const [seenDialogMovie, setSeenDialogMovie] = useState(null);
     const [libraryWindow, setLibraryWindow] = useState({key: '', count: LIBRARY_BATCH_SIZE});
     const [addQuery, setAddQuery] = useState('');
     const [addResults, setAddResults] = useState([]);
@@ -766,6 +770,44 @@ export default function BackstagePrototype() {
             window.removeEventListener('focus', handleFocus);
         };
     }, [user?.id, user?.role]);
+
+    // « Vu » on a library film: log it in the journal (which also marks it
+    // seen in the library). Films never linked to TMDB fall back to the
+    // plain « seen » state.
+    const openLibrarySeen = async (movie) => {
+        let tmdbId = movie.tmdbId;
+        if (!tmdbId) {
+            try {
+                tmdbId = (await fetchTMDBRating(movie.id))?.tmdb_id || null;
+            } catch {
+                tmdbId = null;
+            }
+        }
+        if (!tmdbId) {
+            try {
+                replaceCanonicalMedia(await updatePersonalMedia(movie.id, { status: 'Terminé' }));
+                showToast(`« ${movie.title} » marqué comme vu.`);
+            } catch (err) {
+                if (err?.status !== 401) showToast(err?.message || 'La modification n’a pas pu être enregistrée.', 'error');
+            }
+            return;
+        }
+        setSeenDialogMovie({ mediaId: movie.id, tmdbId, title: movie.title, posterUrl: movie.poster || null });
+    };
+
+    const saveLibrarySeen = async (payload) => {
+        const target = seenDialogMovie;
+        await createJournalEntry({ tmdb_id: target.tmdbId, ...payload });
+        setSeenDialogMovie(null);
+        await refreshCanonicalMedia(target.mediaId);
+        showToast(`« ${target.title} » ajouté à ton journal.`);
+    };
+
+    const openLibraryFilmById = (mediaId) => {
+        const local = movies.find((movie) => movie.id === mediaId);
+        if (local) openDashboardMedia(local);
+        else showToast('Ce film n’est plus dans la bibliothèque.', 'info');
+    };
 
     const openDashboardMedia = (media) => {
         if (!media) return;
@@ -1436,9 +1478,9 @@ export default function BackstagePrototype() {
                     <div className={`${mobileSearchOpen ? 'flex' : 'hidden'} order-last basis-full items-center pb-3 lg:order-none lg:flex lg:basis-auto lg:min-w-0 lg:justify-self-center lg:gap-5 lg:pb-0`}>
                     <nav className="hidden shrink-0 lg:block" aria-label="Navigation principale">
                         <div className={`flex items-center gap-6 whitespace-nowrap text-sm font-semibold ${isDarkMode ? 'text-white/60' : 'text-[#425466]'}`}>
-                            {[['dashboard', 'Accueil'], ['library', 'Films'], ['library', 'Séries']].map(([view, label]) => {
-                                const selected = view === 'dashboard' ? activeView === 'dashboard' : activeView === 'library' && collection === label;
-                                return <button key={label} type="button" onClick={() => view === 'dashboard' ? setActiveView('dashboard') : (setActiveView('library'), changeCollection(label))} className={`border-b-2 px-1 pb-2 pt-2 transition-all ${selected ? 'border-b-2 border-[#635bff] text-[#635bff]' : 'border-transparent hover:border-[#635bff]/40 hover:text-[#635bff]'}`}>
+                            {[['dashboard', 'Accueil'], ['library', 'Films'], ['library', 'Séries'], ['journal', 'Journal']].map(([view, label]) => {
+                                const selected = view === 'library' ? activeView === 'library' && collection === label : activeView === view;
+                                return <button key={label} type="button" onClick={() => view === 'library' ? (setActiveView('library'), changeCollection(label)) : setActiveView(view)} className={`border-b-2 px-1 pb-2 pt-2 transition-all ${selected ? 'border-b-2 border-[#635bff] text-[#635bff]' : 'border-transparent hover:border-[#635bff]/40 hover:text-[#635bff]'}`}>
                                     {label}
                                 </button>;
                             })}
@@ -1539,6 +1581,7 @@ export default function BackstagePrototype() {
                         {key: 'dashboard', label: 'Accueil', selected: activeView === 'dashboard', onClick: () => setActiveView('dashboard'), icon: <path strokeLinecap="round" strokeLinejoin="round" d="M3.5 10.5 12 4l8.5 6.5V20a1 1 0 0 1-1 1h-5v-6h-5v6h-5a1 1 0 0 1-1-1z" />},
                         {key: 'films', label: 'Films', selected: activeView === 'library' && collection === 'Films', onClick: () => { setActiveView('library'); changeCollection('Films'); }, icon: <><rect x="3.5" y="5" width="17" height="14" rx="2" /><path strokeLinecap="round" d="M3.5 9h17M3.5 15h17M8 5v14M16 5v14" /></>},
                         {key: 'series', label: 'Séries', selected: activeView === 'library' && collection === 'Séries', onClick: () => { setActiveView('library'); changeCollection('Séries'); }, icon: <><rect x="3.5" y="6" width="17" height="12" rx="2" /><path strokeLinecap="round" strokeLinejoin="round" d="M9 21h6M8.5 2.5 12 6l3.5-3.5" /></>},
+                        {key: 'carnet', label: 'Carnet', selected: activeView === 'journal' || activeView === 'lists', onClick: () => setActiveView('journal'), icon: <><path strokeLinecap="round" strokeLinejoin="round" d="M6 3.5h11a1.5 1.5 0 0 1 1.5 1.5v14a1.5 1.5 0 0 1-1.5 1.5H6z" /><path strokeLinecap="round" d="M6 3.5v17M9.5 8h5.5M9.5 11.5h5.5" /></>},
                         {key: 'add', label: isAdmin ? 'Ajouter' : 'Louer', selected: showAddDialog, onClick: () => setShowAddDialog(true), icon: <><circle cx="12" cy="12" r="8.5" /><path strokeLinecap="round" d="M12 8v8M8 12h8" /></>},
                         ...(user?.role === 'admin' ? [{key: 'admin', label: 'Admin', selected: showAdminCenter, onClick: () => setShowAdminCenter(true), icon: <><circle cx="12" cy="12" r="3" /><path strokeLinecap="round" strokeLinejoin="round" d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" /></>}] : []),
                     ].map((tab) => (
@@ -1546,7 +1589,7 @@ export default function BackstagePrototype() {
                             key={tab.key}
                             type="button"
                             onClick={() => { setMobileSearchOpen(false); tab.onClick(); }}
-                            aria-current={tab.selected && ['dashboard', 'films', 'series'].includes(tab.key) ? 'page' : undefined}
+                            aria-current={tab.selected && ['dashboard', 'films', 'series', 'carnet'].includes(tab.key) ? 'page' : undefined}
                             className={`flex min-h-14 flex-1 flex-col items-center justify-center gap-0.5 px-1 text-xs font-semibold transition-colors ${tab.selected ? 'text-[#635bff]' : isDarkMode ? 'text-white/70' : 'text-[#425466]'}`}
                         >
                             <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">{tab.icon}</svg>
@@ -1558,6 +1601,7 @@ export default function BackstagePrototype() {
 
             {showAccountPanel &&<AccountPanel isDarkMode={isDarkMode} onClose={() => setShowAccountPanel(false)} />}
             <ChatDock isDarkMode={isDarkMode} />
+            {seenDialogMovie && <SeenDialog movie={seenDialogMovie} isDarkMode={isDarkMode} onSave={saveLibrarySeen} onClose={() => setSeenDialogMovie(null)} />}
             {showAdminCenter && user?.role === 'admin' && <AdminCenter isDarkMode={isDarkMode} onClose={() => setShowAdminCenter(false)} onMediaChanged={loadRealMedias} />}
             {showRecommendationFlow && <RecommendationFlow isDarkMode={isDarkMode} onClose={() => setShowRecommendationFlow(false)} onPlay={openJellyfinPlayer} />}
             {tmdbPreview.open && <TMDBMoviePreview
@@ -1688,7 +1732,12 @@ export default function BackstagePrototype() {
 
                 {/* Main Content Area */}
                 <main id="contenu" tabIndex={-1} key={collection} className="series-portal flex-1 min-w-0 outline-none">
-                    {activeView === 'dashboard' ? <DashboardHome
+                    {activeView === 'journal' ? <JournalView
+                        isDarkMode={isDarkMode}
+                        onOpenLibraryFilm={openLibraryFilmById}
+                        onChanged={loadRealMedias}
+                        showToast={showToast}
+                    /> : activeView === 'dashboard' ? <DashboardHome
                         data={dashboardData}
                         isDarkMode={isDarkMode}
                         loading={dashboardLoading}
@@ -2194,6 +2243,13 @@ export default function BackstagePrototype() {
                                     <div className={`text-xs mt-0.5 ${isDarkMode ? 'text-white/60' : 'text-[#425466]'}`}>
                                         Évaluation par demi-étoiles
                                     </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => openLibrarySeen(selectedMovie)}
+                                        className="mt-2 rounded-lg border border-[#635bff] px-3 py-1.5 text-xs font-semibold text-[#635bff] hover:bg-[#635bff]/10"
+                                    >
+                                        Vu
+                                    </button>
                                 </div>
 
                                 <div className="flex flex-wrap items-center justify-end gap-3">
