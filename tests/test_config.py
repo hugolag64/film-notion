@@ -23,3 +23,9 @@ def test_requirements_include_timezone_database():
 
     requirements = (Path(__file__).parents[1] / "requirements.txt").read_text(encoding="utf-8")
     assert "tzdata" in requirements
+
+
+def test_cinema_defaults():
+    assert Config.CINEMA_ENABLED is True
+    assert Config.CINEMA_BASE_URL == "https://cine-reunion.com"
+    assert Config.CINEMA_REFRESH_HOURS == 24

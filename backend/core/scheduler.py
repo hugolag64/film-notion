@@ -123,3 +123,46 @@ def start_media_server_sync():
         return
     if _media_task is None or _media_task.done():
         _media_task = asyncio.create_task(_media_loop())
+
+
+_cinema_task: asyncio.Task | None = None
+
+
+async def run_cinema_sync_once():
+    """Une passe : programmation du Ciné Grand Sud, puis dates de sortie des films suivis."""
+    from backend.core.cinema_store import CinemaStore
+    from backend.core.cinema_sync import (
+        fetch_site_page, refresh_cinema, refresh_tracked_release_dates, reunion_now,
+    )
+    from backend.core.tmdb import TMDBClient
+
+    store = MediaStore(Config.DB_PATH)
+    cinema = CinemaStore(Config.DB_PATH)
+    try:
+        tmdb = TMDBClient()
+    except ValueError:
+        logger.warning("[cinema] TMDB non configuré : association des films ignorée")
+        tmdb = None
+    try:
+        await refresh_cinema(store, cinema, tmdb, fetch_site_page, reunion_now())
+    except Exception:
+        logger.exception("[cinema] Erreur de synchronisation")
+    if tmdb is not None:
+        try:
+            await refresh_tracked_release_dates(store, cinema, tmdb, reunion_now().date())
+        except Exception:
+            logger.exception("[cinema] Erreur de relecture des dates de sortie")
+
+
+async def _cinema_loop():
+    while True:
+        await run_cinema_sync_once()
+        await asyncio.sleep(max(Config.CINEMA_REFRESH_HOURS, 1) * 3600)
+
+
+def start_cinema_sync():
+    global _cinema_task
+    if not Config.CINEMA_ENABLED:
+        return
+    if _cinema_task is None or _cinema_task.done():
+        _cinema_task = asyncio.create_task(_cinema_loop())

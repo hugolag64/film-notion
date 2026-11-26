@@ -69,6 +69,9 @@ AuthStore(Config.DB_PATH).init_schema()
 # Synchronisation auto périodique (si SYNC_INTERVAL_MIN > 0)
 app.on_startup(scheduler.start_media_server_sync)
 
+# Lecture quotidienne de la programmation du Ciné Grand Sud
+app.on_startup(scheduler.start_cinema_sync)
+
 # Ferme proprement le client HTTP partagé à l'arrêt
 app.on_shutdown(http.aclose)
 

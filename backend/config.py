@@ -44,6 +44,9 @@ class Config:
     SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
     SMTP_FROM = os.getenv("SMTP_FROM")
     BACKSTAGE_PUBLIC_URL = os.getenv("BACKSTAGE_PUBLIC_URL", "http://localhost:8090")
+    CINEMA_ENABLED = os.getenv("CINEMA_ENABLED", "true").strip().lower() not in ("0", "false", "no", "non", "off")
+    CINEMA_BASE_URL = os.getenv("CINEMA_BASE_URL", "https://cine-reunion.com")
+    CINEMA_REFRESH_HOURS = float(os.getenv("CINEMA_REFRESH_HOURS", "24") or "24")
 
     @classmethod
     def radarr_enabled(cls) -> bool:
