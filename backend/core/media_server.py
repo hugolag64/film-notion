@@ -1,7 +1,9 @@
 """Shared models for the local media-server integration."""
 from datetime import datetime, timedelta
 from datetime import timezone
+import asyncio
 import logging
+import time
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -15,11 +17,16 @@ from backend.core.tmdb import TMDBClient
 
 logger = logging.getLogger(__name__)
 STALE_REQUEST_GRACE = timedelta(hours=1)
+FINISHED_FILM_JOURNAL_WINDOW = timedelta(days=3)
 HARD_STORAGE_PROTECTION_REASONS = {"favorite", "active_rental", "manual"}
 # (source, external id, is_series) -> TMDB id, so each sync does not ask TMDB again.
 _EXTERNAL_TMDB_IDS: dict[tuple[str, str, bool], int] = {}
 # Medias already enriched once in this process (avoid a TMDB call per sync).
 _ENRICHED_MEDIA_IDS: set[tuple[str, str]] = set()
+# The admin page asks for disk space three times per load (activity, storage
+# status, dashboard); Radarr and Sonarr answer slowly, so keep it briefly.
+_DISK_CACHE_TTL_SEC = 30.0
+_DISK_CACHE: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
 
 
 def _optional_tmdb():
@@ -619,16 +626,31 @@ class MediaServerService:
                     synced += 1
         return {"synced": synced}
 
+    @staticmethod
+    async def _disk_space(provider: str, client: Any) -> list[dict[str, Any]]:
+        base_url = getattr(client, "base_url", None)
+        key = (provider, base_url) if isinstance(base_url, str) else None
+        now = time.monotonic()
+        cached = _DISK_CACHE.get(key) if key else None
+        if cached and now - cached[0] < _DISK_CACHE_TTL_SEC:
+            return cached[1]
+        try:
+            disks = [{"provider": provider, **disk} for disk in await client.disk_space()]
+        except Exception:
+            return []
+        if key:
+            _DISK_CACHE[key] = (now, disks)
+        return disks
+
     async def activity(self) -> dict[str, list[dict[str, Any]]]:
+        clients = [
+            (provider, client)
+            for provider, client in (("radarr", self.radarr), ("sonarr", self.sonarr))
+            if client is not None and hasattr(client, "disk_space")
+        ]
         disks: list[dict[str, Any]] = []
-        for provider, client in (("radarr", self.radarr), ("sonarr", self.sonarr)):
-            if client is None or not hasattr(client, "disk_space"):
-                continue
-            try:
-                for disk in await client.disk_space():
-                    disks.append({"provider": provider, **disk})
-            except Exception:
-                continue
+        for provider_disks in await asyncio.gather(*(self._disk_space(p, c) for p, c in clients)):
+            disks.extend(provider_disks)
         medias = {media.id: media for media in await self.store.fetch_all()}
         items = []
         for availability in await self.store.list_availabilities():
@@ -849,7 +871,12 @@ class MediaServerService:
                 played=bool(item.get("played")) or float(item.get("percent", 0)) >= 95,
                 last_played_at=item.get("last_played_at"),
             )
-            await self.store.upsert_playback(progress)
+            _, newly_played = await self.store.upsert_playback_tracking(progress)
+            if newly_played and media_id and not episode_id:
+                try:
+                    await self._record_finished_film(backstage_user_id, media_id, progress.last_played_at)
+                except Exception:
+                    logger.exception("Film fini %s non reporté dans le journal", media_id)
             if media_id and progress.position_ticks > 0:
                 first_played_at = datetime.now(timezone.utc)
                 await self.store.mark_rental_first_played(
@@ -857,6 +884,42 @@ class MediaServerService:
                 )
             synced += 1
         return {"synced": synced}
+
+    async def _record_finished_film(
+        self, user_id: str, media_id: str, played_at: Optional[datetime],
+    ) -> None:
+        """A film finished in Jellyfin is « Terminé » and gets a journal entry.
+
+        Only recent viewings count: linking a Jellyfin account with years of
+        history must not flood the journal. A viewing already logged around
+        that day (by hand, or from the library) is not logged twice.
+        """
+        now = datetime.now(timezone.utc)
+        played_at = played_at or now
+        if played_at.tzinfo is None:
+            played_at = played_at.replace(tzinfo=timezone.utc)
+        if now - played_at > FINISHED_FILM_JOURNAL_WINDOW:
+            return
+        media = await self.store.fetch_one(media_id)
+        if not media or not media.tmdb_id or media.type != "Film":
+            return
+        state = await self.store.get_user_media_state(user_id, media_id)
+        if not (state and state.status == "Terminé" and not state.is_watchlist):
+            await self.store.upsert_user_media_state(
+                user_id, media_id, {"status": "Terminé", "is_watchlist": False},
+            )
+        from backend.journal_api import add_diary_entry, local_date
+
+        watched_on = local_date(played_at)
+        latest = await self.store.latest_diary_entry(user_id, media.tmdb_id)
+        if latest is not None and (
+            (latest.watched_on and abs((watched_on - latest.watched_on).days) <= 1)
+            or now - latest.created_at <= timedelta(days=1)
+        ):
+            return
+        await add_diary_entry(
+            self.store, user_id, media.tmdb_id, watched_on=watched_on, source="jellyfin",
+        )
 
     async def playback_summary(self, backstage_user_id: str) -> dict[str, Any]:
         return {

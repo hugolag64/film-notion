@@ -210,7 +210,7 @@ export default function SeriesDetailView({
 
             <div className="space-y-5 p-4 md:p-6">
                 {/* Availability notice when the series cannot be played */}
-                {!mediaAction.canPlay && <div className={`rounded-xl border p-4 text-sm ${card}`}>
+                {!mediaAction.canPlay && !mediaAction.checking && <div className={`rounded-xl border p-4 text-sm ${card}`}>
                     <p className="font-semibold">Cette série n’est pas encore sur le serveur</p>
                     <p className={`mt-1 text-xs ${muted}`}>{isAdmin ? 'Lance une demande de téléchargement depuis le bouton principal.' : 'Demande-la à l’administrateur.'}</p>
                 </div>}

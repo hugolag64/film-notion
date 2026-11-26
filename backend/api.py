@@ -545,31 +545,61 @@ def get_catalogue_owner_id(auth_store: AuthStore = Depends(get_auth_store)) -> s
     return None
 
 
-def _seen_in_journal(media: Media, seen_tmdb_ids: set[int] | None) -> Media:
-    # A film logged in the journal counts as seen, even if it reached the
-    # server after the user watched it elsewhere. Only called when the user
-    # has no personal state for it: a status they chose in the library wins.
-    # Journal ids are TMDB *movie* ids, which overlap TV ids.
-    if (
-        seen_tmdb_ids and media.tmdb_id in seen_tmdb_ids and not is_series(media.type)
-        and media.status not in {"Terminé", "Terminée"}
-    ):
-        return media.model_copy(update={"status": "Terminé", "is_watchlist": False})
-    return media
+class JournalView(dict):
+    """tmdb_id -> {"rating": float | None, "review": str | None} for one user.
+
+    Rating and review come from the most recent entry that has one: a rewatch
+    logged without a note keeps the note of the previous viewing.
+    """
+
+
+async def _journal_view(store: MediaStore, user_id: str) -> JournalView:
+    view = JournalView()
+    for entry in await store.list_diary_entries(user_id):  # most recent first
+        seen = view.setdefault(entry.tmdb_id, {"rating": None, "review": None})
+        if seen["rating"] is None and entry.rating is not None:
+            seen["rating"] = entry.rating
+        if seen["review"] is None and (entry.review or "").strip():
+            seen["review"] = entry.review
+    return view
+
+
+def _seen_in_journal(media: Media, state: Any, journal: JournalView | None) -> Media:
+    """Complete a library film with what the user wrote in the journal.
+
+    A film logged in the journal counts as seen, even if it reached the server
+    after the user watched it elsewhere, and shows the journal's note and
+    review until the user rates it in the library. Putting the film back to
+    « À regarder » is an explicit choice and wins. Journal ids are TMDB
+    *movie* ids, which overlap TV ids.
+    """
+    seen = journal.get(media.tmdb_id) if journal and media.tmdb_id is not None else None
+    if seen is None or is_series(media.type):
+        return media
+    if state is not None and (state.is_watchlist or state.status == "À regarder"):
+        return media
+    updates: Dict[str, Any] = {"status": "Terminé", "is_watchlist": False}
+    if not (media.rating and str(media.rating).strip()) and seen["rating"] is not None:
+        updates["rating"] = f"{seen['rating']:g}"
+    if not (media.review or "").strip() and seen["review"]:
+        updates["review"] = seen["review"]
+    return media.model_copy(update=updates)
 
 
 async def _media_for_user(
     media: Media, current: AuthContext, store: MediaStore, state: Any = _STATE_NOT_LOADED,
-    catalogue_owner_id: str | None = None, seen_tmdb_ids: set[int] | None = None,
+    catalogue_owner_id: str | None = None, journal: Any = _STATE_NOT_LOADED,
 ) -> Media:
     if state is _STATE_NOT_LOADED:
         state = await store.get_user_media_state(current.user["id"], media.id)
+    if journal is _STATE_NOT_LOADED:
+        journal = await _journal_view(store, current.user["id"])
     # Only the catalogue's original owner inherits the ratings stored on the
     # media; a second admin starts with a blank slate like everyone else.
     if state is None and current.user["role"] == "admin" and current.user["id"] == catalogue_owner_id:
         if media.rating and str(media.rating).strip():
             return media.model_copy(update={"status": "Terminé", "is_watchlist": False})
-        return _seen_in_journal(media, seen_tmdb_ids)
+        return _seen_in_journal(media, state, journal)
     tags = [tag for tag in media.tags if tag != "Favoris"]
     if state and state.is_favorite:
         tags.append("Favoris")
@@ -585,8 +615,7 @@ async def _media_for_user(
         "tags": tags,
         "is_watchlist": is_watchlist,
     }
-    updated = media.model_copy(update=updates)
-    return updated if state is not None else _seen_in_journal(updated, seen_tmdb_ids)
+    return _seen_in_journal(media.model_copy(update=updates), state, journal)
 
 
 @router.get("/medias", response_model=List[Media])
@@ -595,15 +624,15 @@ async def list_medias(
     store: MediaStore = Depends(get_store),
     catalogue_owner_id: str | None = Depends(get_catalogue_owner_id),
 ):
-    medias, states, seen_tmdb_ids = await asyncio.gather(
+    medias, states, journal = await asyncio.gather(
         store.fetch_all(), store.list_user_media_states(current.user["id"]),
-        store.list_diary_tmdb_ids(current.user["id"]),
+        _journal_view(store, current.user["id"]),
     )
     # One query for every personal state instead of one per media.
     state_by_media = {state.media_id: state for state in states}
     return [
         await _media_for_user(
-            media, current, store, state_by_media.get(media.id), catalogue_owner_id, seen_tmdb_ids,
+            media, current, store, state_by_media.get(media.id), catalogue_owner_id, journal,
         )
         for media in medias
     ]
@@ -781,10 +810,7 @@ async def get_media(
     media = await store.fetch_one(media_id)
     if not media:
         raise HTTPException(status_code=404, detail="Média non trouvé")
-    seen_tmdb_ids = await store.list_diary_tmdb_ids(current.user["id"])
-    return await _media_for_user(
-        media, current, store, catalogue_owner_id=catalogue_owner_id, seen_tmdb_ids=seen_tmdb_ids,
-    )
+    return await _media_for_user(media, current, store, catalogue_owner_id=catalogue_owner_id)
 
 
 @router.get("/medias/{media_id}/tmdb-rating")
@@ -2033,11 +2059,16 @@ async def _ensure_playback_access(
 @router.get("/medias/{media_id}/availability")
 async def get_availability(
     media_id: str,
+    sync: bool = True,
     current: AuthContext = Depends(get_current_user),
     service: MediaServerService = Depends(get_media_server_service),
 ):
+    # sync=false answers from the stored state (kept fresh by the background
+    # loop) so a fiche can show « Lire » at once; the live Radarr/Jellyfin
+    # check, which reads both whole libraries, follows with sync=true.
     await _ensure_playback_access(current, media_id, service.store)
-    await service.sync_media(media_id)
+    if sync:
+        await service.sync_media(media_id)
     availability = await service.store.get_availability(media_id)
     playback_url = await service.playback_url(media_id)
     return {"availability": availability, "playback_url": playback_url}

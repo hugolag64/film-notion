@@ -1035,3 +1035,67 @@ def test_radarr_pass_keeps_a_film_already_ready_in_jellyfin(tmp_path):
     availability = asyncio.run(store.get_availability("inter"))
     assert availability.state == "available"
     assert availability.jellyfin_id == "jelly-inter"
+
+
+class FinishedFilmJellyfin(FakeJellyfin):
+    def __init__(self, played_at, played=True):
+        self.played_at = played_at
+        self.played = played
+
+    async def user_playback(self, user_id):
+        return [{
+            "jellyfin_id": "jelly-dune", "tmdb_id": 438631, "title": "Dune", "item_type": "Movie",
+            "series_title": None, "series_jellyfin_id": None, "season_number": None,
+            "episode_number": None, "position_ticks": 0, "runtime_ticks": 100,
+            "percent": 100.0 if self.played else 40.0, "played": self.played,
+            "last_played_at": self.played_at,
+        }]
+
+
+def _finished_film_service(tmp_path, monkeypatch, jellyfin):
+    import backend.journal_api as journal_api
+
+    async def cached(store, tmdb_id):
+        return {"tmdb_id": tmdb_id}
+
+    monkeypatch.setattr(journal_api, "ensure_cached_movie", cached)
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    asyncio.run(store.upsert_availability(Availability(
+        media_id="dune", provider="radarr", jellyfin_id="jelly-dune", state="available",
+    )))
+    return store, MediaServerService(store, jellyfin=jellyfin)
+
+
+def test_film_finished_in_jellyfin_is_done_and_logged_once(tmp_path, monkeypatch):
+    store, service = _finished_film_service(
+        tmp_path, monkeypatch, FinishedFilmJellyfin(datetime.now(timezone.utc) - timedelta(hours=2)),
+    )
+
+    asyncio.run(service.sync_playback("hugo", "jf-hugo"))
+    asyncio.run(service.sync_playback("hugo", "jf-hugo"))
+
+    entries = asyncio.run(store.list_diary_entries("hugo"))
+    assert [(entry.tmdb_id, entry.source) for entry in entries] == [(438631, "jellyfin")]
+    assert asyncio.run(store.get_user_media_state("hugo", "dune")).status == "Terminé"
+
+
+def test_old_jellyfin_history_does_not_flood_the_journal(tmp_path, monkeypatch):
+    store, service = _finished_film_service(
+        tmp_path, monkeypatch, FinishedFilmJellyfin(datetime.now(timezone.utc) - timedelta(days=200)),
+    )
+
+    asyncio.run(service.sync_playback("hugo", "jf-hugo"))
+
+    assert asyncio.run(store.list_diary_entries("hugo")) == []
+
+
+def test_unfinished_film_is_not_logged(tmp_path, monkeypatch):
+    store, service = _finished_film_service(
+        tmp_path, monkeypatch, FinishedFilmJellyfin(datetime.now(timezone.utc), played=False),
+    )
+
+    asyncio.run(service.sync_playback("hugo", "jf-hugo"))
+
+    assert asyncio.run(store.list_diary_entries("hugo")) == []

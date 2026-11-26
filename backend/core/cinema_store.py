@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from backend.core.cinema_site import FilmDetails, Showtime
+from backend.core.sqlite_util import SQLITE_BUSY_TIMEOUT_SEC
 
 
 def create_cinema_tables(conn: sqlite3.Connection) -> None:
@@ -90,7 +91,7 @@ class CinemaStore:
         self.db_path = db_path
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC)
         conn.row_factory = sqlite3.Row
         return conn
 

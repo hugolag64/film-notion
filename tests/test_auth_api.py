@@ -504,6 +504,33 @@ def test_availability_read_refreshes_the_targeted_media(tmp_path, monkeypatch):
     assert response.json()["availability"]["state"] == "available"
 
 
+def test_availability_read_without_sync_answers_from_the_stored_state(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    store = MediaStore(Config.DB_PATH)
+    media = asyncio.run(store.create({"id": "dune", "title": "Dune", "type": "Film", "tmdb_id": 438631}))
+    asyncio.run(store.upsert_availability(Availability(
+        media_id=media.id, provider="radarr", state="available", jellyfin_id="jelly-dune",
+    )))
+
+    class SlowService:
+        def __init__(self):
+            self.store = store
+
+        async def sync_media(self, media_id):
+            raise AssertionError("a stored read must not query Radarr or Jellyfin")
+
+        async def playback_url(self, media_id):
+            return None
+
+    client.app.dependency_overrides[api_module.get_media_server_service] = lambda: SlowService()
+
+    response = client.get(f"/api/medias/{media.id}/availability?sync=false")
+
+    assert response.status_code == 200
+    assert response.json()["availability"]["jellyfin_id"] == "jelly-dune"
+
+
 def test_admin_acquisition_is_permanent_and_creates_no_rental(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     _setup(client)

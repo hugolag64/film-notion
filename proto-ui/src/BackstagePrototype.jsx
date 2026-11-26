@@ -96,9 +96,14 @@ const formatRuntime = (minutes) => {
     return `${hours} h ${String(rest).padStart(2, '0')}`;
 };
 
-const getMediaAction = (mediaType, availability, isAdmin = true) => {
+const getMediaAction = (mediaType, availability, isAdmin = true, checking = false) => {
     if (availability?.jellyfin_id) {
         return { label: 'Lire', canPlay: true, disabled: false };
+    }
+    // Until the first answer arrives, never offer a request for a film that
+    // may already be on the server.
+    if (checking) {
+        return { label: 'Vérification de la disponibilité…', canPlay: false, disabled: true, checking: true };
     }
     if (availability?.state === 'downloading') {
         return { label: 'Téléchargement en cours', canPlay: false, disabled: true };
@@ -300,7 +305,10 @@ export default function BackstagePrototype() {
 
     const selectedMedia = selectedMovie || selectedSeries;
     const selectedMovieId = selectedMovie?.id;
-    const mediaAction = getMediaAction(selectedMedia?.type, mediaAvailability?.availability, isAdmin);
+    // mediaAvailability stays null only while the fiche's first answer is pending.
+    const mediaAction = getMediaAction(
+        selectedMedia?.type, mediaAvailability?.availability, isAdmin, Boolean(selectedMedia?.id) && mediaAvailability === null,
+    );
     const selectedRental = selectedMedia?.id ? rentalsByMedia[selectedMedia.id] : null;
     const playbackOffline = mediaAction.canPlay && playbackHealth === 'offline';
 
@@ -432,22 +440,33 @@ export default function BackstagePrototype() {
     useEffect(() => {
         if (!selectedMedia?.id) return;
         let cancelled = false;
-        const loadAvailability = () => fetchAvailability(selectedMedia.id)
-            .then((result) => {
-                if (cancelled) return;
-                setMediaAvailability(result);
-                const availability = result?.availability;
-                const onServer = Boolean(availability?.jellyfin_id)
-                    || ['imported', 'available'].includes(availability?.state);
-                if (onServer) {
-                    refreshCanonicalMedia(selectedMedia.id).catch((error) => {
-                        console.error('Erreur de synchronisation du média serveur:', error);
-                    });
-                }
-            })
-            .catch(() => { if (!cancelled) setMediaAvailability(null); });
+        const mediaId = selectedMedia.id;
+        let wasOnServer = false;
+        const applyAvailability = (result) => {
+            if (cancelled) return;
+            setMediaAvailability(result);
+            const availability = result?.availability;
+            const onServer = Boolean(availability?.jellyfin_id)
+                || ['imported', 'available'].includes(availability?.state);
+            if (onServer && !wasOnServer) {
+                refreshCanonicalMedia(mediaId).catch((error) => {
+                    console.error('Erreur de synchronisation du média serveur:', error);
+                });
+            }
+            wasOnServer = onServer;
+        };
+        // The live check reads the whole Radarr and Jellyfin libraries; keep
+        // the stored answer on screen if it is slow or fails.
+        const loadAvailability = () => fetchAvailability(mediaId)
+            .then(applyAvailability)
+            .catch(() => {
+                if (!cancelled) setMediaAvailability((current) => current || {availability: null});
+            });
         setMediaAvailability(null);
-        loadAvailability();
+        fetchAvailability(mediaId, {sync: false})
+            .then(applyAvailability)
+            .catch(() => {})
+            .finally(loadAvailability);
         window.addEventListener('focus', loadAvailability);
         return () => {
             cancelled = true;
@@ -2223,7 +2242,7 @@ export default function BackstagePrototype() {
                             <div className={`flex items-center justify-between gap-4 rounded-xl border p-4 shadow-sm ${isDarkMode ? 'border-white/10 bg-[#0a0a0a]' : 'border-[#e3e8ee] bg-white'}`}>
                                 <div className="flex min-w-0 items-center gap-3">
                                     <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${mediaAction.canPlay ? 'bg-emerald-500 text-white' : 'bg-[#635bff] text-white'}`} aria-hidden="true">{mediaAction.canPlay ? '✓' : '+'}</div>
-                                    <div className="min-w-0"><p className="text-sm font-semibold">{mediaAction.canPlay ? 'Disponible dans ta bibliothèque' : mediaAction.disabled ? mediaAction.label : 'Ce film n’est pas encore disponible'}</p><p className="mt-0.5 truncate text-xs opacity-75">{playbackOffline ? <span className="font-semibold text-amber-600">Serveur de lecture hors ligne — réessaie dans quelques minutes</span> : mediaAction.canPlay ? 'Prêt à regarder' : (isAdmin ? 'Lancer une demande de téléchargement via Seerr' : selectedMedia?.type === 'Série' ? 'Demande-la à l’admin' : 'Location de 21 jours, lisible dès la fin du téléchargement')}</p></div>
+                                    <div className="min-w-0"><p className="text-sm font-semibold">{mediaAction.canPlay ? 'Disponible dans ta bibliothèque' : mediaAction.disabled ? mediaAction.label : 'Ce film n’est pas encore disponible'}</p><p className="mt-0.5 truncate text-xs opacity-75">{playbackOffline ? <span className="font-semibold text-amber-600">Serveur de lecture hors ligne — réessaie dans quelques minutes</span> : mediaAction.canPlay ? 'Prêt à regarder' : mediaAction.checking ? 'Un instant…' : (isAdmin ? 'Lancer une demande de téléchargement via Seerr' : selectedMedia?.type === 'Série' ? 'Demande-la à l’admin' : 'Location de 21 jours, lisible dès la fin du téléchargement')}</p></div>
                                 </div>
                                 <div className="flex shrink-0 items-center gap-2">
                                 <button type="button" onClick={() => shareMedia(selectedMovie)} className={`rounded-lg border px-3 py-2.5 text-xs font-semibold transition ${isDarkMode ? 'border-white/15 text-white/70 hover:bg-white/10' : 'border-[#e3e8ee] text-[#425466] hover:bg-[#f6f9fc]'}`} aria-label={`Partager le lien de ${selectedMovie.title}`} title="Partager le lien"><Icon name="send" /></button>

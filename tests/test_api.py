@@ -343,6 +343,9 @@ class _NoStateStore:
     async def get_user_media_state(self, user_id, media_id):
         return None
 
+    async def list_diary_entries(self, user_id):
+        return []
+
 
 def test_only_the_catalogue_owner_inherits_catalogue_ratings():
     from backend.api import _media_for_user

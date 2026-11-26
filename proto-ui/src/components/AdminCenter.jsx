@@ -136,7 +136,15 @@ export default function AdminCenter({isDarkMode, onClose, onMediaChanged}) {
     const load = useCallback(async () => {
         try {
             setError('');
-            const [nextDashboard, nextActivity, nextKeepRequests, nextAdminRentals, nextUsers, nextStorage, nextServices, nextBackup, nextStorageOverview] = await Promise.all([
+            // The storage review reads Radarr's whole library: let it fill in
+            // on its own instead of holding back the rest of the page.
+            fetchStorageOverview()
+                .catch(() => ({candidates: [], history: []}))
+                .then((nextStorageOverview) => {
+                    setStorageCandidates(nextStorageOverview.candidates || []);
+                    setStorageCleanupHistory(nextStorageOverview.history || []);
+                });
+            const [nextDashboard, nextActivity, nextKeepRequests, nextAdminRentals, nextUsers, nextStorage, nextServices, nextBackup] = await Promise.all([
                 fetchAdminDashboard(),
                 fetchMediaServerActivity(),
                 fetchKeepRequests(),
@@ -145,7 +153,6 @@ export default function AdminCenter({isDarkMode, onClose, onMediaChanged}) {
                 fetchStorageStatus(),
                 fetchMediaServerStatus(),
                 fetchBackupStatus().catch(() => null),
-                fetchStorageOverview().catch(() => ({candidates: [], history: []})),
             ]);
             setDashboard(nextDashboard);
             setActivity(nextActivity);
@@ -155,8 +162,6 @@ export default function AdminCenter({isDarkMode, onClose, onMediaChanged}) {
             setStorage(nextStorage);
             setServices(nextServices);
             setBackupStatus(nextBackup);
-            setStorageCandidates(nextStorageOverview.candidates || []);
-            setStorageCleanupHistory(nextStorageOverview.history || []);
         } catch (requestError) {
             setError(requestError.message || 'Impossible de charger le centre d’administration.');
         } finally {

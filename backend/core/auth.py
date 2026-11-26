@@ -9,6 +9,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, TypedDict
 
+from backend.core.sqlite_util import SQLITE_BUSY_TIMEOUT_SEC
+
+SESSION_SEEN_RESOLUTION = timedelta(minutes=1)
+
 
 _SCRYPT_N = 2**14
 _SCRYPT_R = 8
@@ -64,7 +68,7 @@ class AuthStore:
         self.db_path = db_path
 
     def init_schema(self) -> None:
-        with sqlite3.connect(self.db_path) as connection:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as connection:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS users (
@@ -189,14 +193,14 @@ class AuthStore:
         return self._row_to_user(row)
 
     def create_admin(self, display_name: str, email: str, password: str) -> AuthUser:
-        with sqlite3.connect(self.db_path) as connection:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as connection:
             connection.execute("BEGIN IMMEDIATE")
             if connection.execute("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1").fetchone():
                 raise ValueError("administrator already exists")
             return self._insert_user(connection, display_name, email, password, "admin")
 
     def create_user(self, display_name: str, email: str, password: str) -> AuthUser:
-        with sqlite3.connect(self.db_path) as connection:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as connection:
             user = self._insert_user(connection, display_name, email, password, "user")
             connection.execute("UPDATE users SET must_change_password = 1 WHERE id = ?", (user["id"],))
             connection.row_factory = sqlite3.Row
@@ -213,7 +217,7 @@ class AuthStore:
         self, email: str, password: str, remember_device: bool, user_agent: str | None,
     ) -> tuple[AuthUser, str, datetime]:
         now = self._now()
-        with sqlite3.connect(self.db_path) as connection:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as connection:
             connection.row_factory = sqlite3.Row
             self._cleanup_sessions(connection, now)
             row = connection.execute(
@@ -238,12 +242,12 @@ class AuthStore:
 
     def user_from_token(self, token: str) -> tuple[AuthUser, str] | None:
         now = self._now()
-        with sqlite3.connect(self.db_path) as connection:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as connection:
             connection.row_factory = sqlite3.Row
             row = connection.execute(
                 """
                 SELECT auth_sessions.id AS session_id, auth_sessions.expires_at,
-                       users.*
+                       auth_sessions.last_seen_at, users.*
                 FROM auth_sessions
                 JOIN users ON users.id = auth_sessions.user_id
                 WHERE auth_sessions.token_hash = ?
@@ -253,14 +257,18 @@ class AuthStore:
             ).fetchone()
             if not row or row["expires_at"] <= now.isoformat() or not row["is_active"]:
                 return None
-            connection.execute(
-                "UPDATE auth_sessions SET last_seen_at = ? WHERE id = ?",
-                (now.isoformat(), row["session_id"]),
-            )
+            # Every API call authenticates: writing on each one made reads
+            # queue behind the background sync. Minute precision is plenty
+            # for the « last seen » shown on the devices page.
+            if row["last_seen_at"] <= (now - SESSION_SEEN_RESOLUTION).isoformat():
+                connection.execute(
+                    "UPDATE auth_sessions SET last_seen_at = ? WHERE id = ?",
+                    (now.isoformat(), row["session_id"]),
+                )
             return self._row_to_user(row), row["session_id"]
 
     def revoke_token(self, token: str) -> bool:
-        with sqlite3.connect(self.db_path) as connection:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as connection:
             cursor = connection.execute(
                 "UPDATE auth_sessions SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL",
                 (self._now().isoformat(), self._token_hash(token)),
@@ -269,7 +277,7 @@ class AuthStore:
 
     def list_sessions(self, user_id: str, current_session_id: str) -> list[dict[str, Any]]:
         now = self._now()
-        with sqlite3.connect(self.db_path) as connection:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as connection:
             connection.row_factory = sqlite3.Row
             self._cleanup_sessions(connection, now)
             rows = connection.execute(
@@ -292,7 +300,7 @@ class AuthStore:
         ]
 
     def revoke_session(self, user_id: str, session_id: str) -> bool:
-        with sqlite3.connect(self.db_path) as connection:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as connection:
             cursor = connection.execute(
                 """
                 UPDATE auth_sessions SET revoked_at = ?
@@ -303,7 +311,7 @@ class AuthStore:
             return cursor.rowcount > 0
 
     def revoke_other_sessions(self, user_id: str, current_session_id: str) -> int:
-        with sqlite3.connect(self.db_path) as connection:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as connection:
             cursor = connection.execute(
                 """
                 UPDATE auth_sessions SET revoked_at = ?
@@ -323,7 +331,7 @@ class AuthStore:
         current_session_id: str,
     ) -> None:
         self._validate_new_password(new_password)
-        with sqlite3.connect(self.db_path) as connection:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as connection:
             connection.row_factory = sqlite3.Row
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -349,7 +357,7 @@ class AuthStore:
 
     def set_password(self, user_id: str, new_password: str) -> None:
         self._validate_new_password(new_password)
-        with sqlite3.connect(self.db_path) as connection:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as connection:
             connection.row_factory = sqlite3.Row
             connection.execute("BEGIN IMMEDIATE")
             if not connection.execute(
@@ -370,7 +378,7 @@ class AuthStore:
         self, user_id: str, new_password: str, current_session_id: str,
     ) -> AuthUser:
         self._validate_new_password(new_password)
-        with sqlite3.connect(self.db_path) as connection:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as connection:
             connection.row_factory = sqlite3.Row
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -393,7 +401,7 @@ class AuthStore:
             return self._row_to_user(refreshed)
 
     def set_avatar(self, user_id: str, image_data: bytes | None, mime_type: str | None) -> AuthUser:
-        with sqlite3.connect(self.db_path) as connection:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as connection:
             connection.row_factory = sqlite3.Row
             connection.execute("BEGIN IMMEDIATE")
             if not connection.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone():
@@ -406,7 +414,7 @@ class AuthStore:
             return self._row_to_user(refreshed)
 
     def get_avatar(self, user_id: str) -> tuple[bytes, str] | None:
-        with sqlite3.connect(self.db_path) as connection:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as connection:
             connection.row_factory = sqlite3.Row
             row = connection.execute(
                 "SELECT avatar_data, avatar_mime FROM users WHERE id = ? AND is_active = 1",
@@ -426,7 +434,7 @@ class AuthStore:
 
     def create_password_reset_token(self, email: str) -> tuple[str, str] | None:
         now = self._now()
-        with sqlite3.connect(self.db_path) as connection:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as connection:
             connection.row_factory = sqlite3.Row
             self._cleanup_password_reset_tokens(connection, now)
             row = connection.execute(
@@ -452,7 +460,7 @@ class AuthStore:
     def reset_password(self, token: str, new_password: str) -> str:
         self._validate_new_password(new_password)
         now = self._now()
-        with sqlite3.connect(self.db_path) as connection:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as connection:
             connection.row_factory = sqlite3.Row
             connection.execute("BEGIN IMMEDIATE")
             self._cleanup_password_reset_tokens(connection, now)
@@ -486,7 +494,7 @@ class AuthStore:
             return row["user_id"]
 
     def list_users(self) -> list[AuthUser]:
-        with sqlite3.connect(self.db_path) as connection:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as connection:
             connection.row_factory = sqlite3.Row
             rows = connection.execute("SELECT * FROM users ORDER BY created_at").fetchall()
         return [self._row_to_user(row) for row in rows]
@@ -495,7 +503,7 @@ class AuthStore:
         self, user_id: str, jellyfin_user_id: str | None,
     ) -> AuthUser:
         normalized_id = jellyfin_user_id.strip() if jellyfin_user_id else None
-        with sqlite3.connect(self.db_path) as connection:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as connection:
             connection.row_factory = sqlite3.Row
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -518,7 +526,7 @@ class AuthStore:
     def update_user(self, user_id: str, fields: dict[str, object]) -> AuthUser:
         allowed = {"display_name", "email", "role", "is_active"}
         updates = {key: value for key, value in fields.items() if key in allowed}
-        with sqlite3.connect(self.db_path) as connection:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as connection:
             connection.row_factory = sqlite3.Row
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
@@ -558,7 +566,7 @@ class AuthStore:
             return self._row_to_user(refreshed)
 
     def delete_user(self, user_id: str) -> bool:
-        with sqlite3.connect(self.db_path) as connection:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as connection:
             connection.row_factory = sqlite3.Row
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(

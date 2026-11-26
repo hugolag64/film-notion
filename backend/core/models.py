@@ -127,7 +127,7 @@ class DiaryEntry(BaseModel):
     rating: Optional[float] = None
     review: Optional[str] = None
     in_cinema: bool = False
-    source: Literal["manual", "library", "recommendation", "backfill"] = "manual"
+    source: Literal["manual", "library", "recommendation", "backfill", "jellyfin"] = "manual"
     created_at: datetime
     updated_at: datetime
 

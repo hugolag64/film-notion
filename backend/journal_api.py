@@ -30,14 +30,19 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def local_today() -> date:
-    """Today for the household (Paris by default), not the server's UTC date:
-    a film logged just after midnight belongs to the new day."""
+def local_date(moment: datetime) -> date:
+    """The household's calendar day (Paris by default) for a UTC moment."""
     try:
         zone = ZoneInfo(getattr(Config, "RECOMMENDATION_TIMEZONE", "Europe/Paris"))
     except ZoneInfoNotFoundError:
-        return _utcnow().astimezone().date()
-    return _utcnow().astimezone(zone).date()
+        return moment.astimezone().date()
+    return moment.astimezone(zone).date()
+
+
+def local_today() -> date:
+    """Today for the household, not the server's UTC date: a film logged just
+    after midnight belongs to the new day."""
+    return local_date(_utcnow())
 
 
 def _check_rating(value: Optional[float]) -> Optional[float]:
@@ -135,7 +140,10 @@ async def sync_library_state(
         return
     if latest.rating is not None:
         fields["rating"] = f"{latest.rating:g}"
-    await store.upsert_user_media_state(user_id, media.id, fields)
+    if edited_entry_id is None and (latest.review or "").strip():
+        fields["review"] = latest.review
+    if fields:
+        await store.upsert_user_media_state(user_id, media.id, fields)
 
 
 def _serialize_entry(entry: DiaryEntry, movie: Optional[dict], media_id: Optional[str]) -> dict:

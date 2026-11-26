@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from backend.core.cinema_store import create_cinema_tables
+from backend.core.sqlite_util import SQLITE_BUSY_TIMEOUT_SEC, enable_wal
 from backend.core.party_store import create_party_tables
 from backend.core.models import (
     DiaryEntry, FilmList, FilmListItem,
@@ -33,7 +34,8 @@ class MediaStore:
         self.db_path = db_path
 
     def init_schema(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
+            enable_wal(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS media (
@@ -573,7 +575,7 @@ class MediaStore:
         return dict(row)
 
     def _record_recommendation_event_sync(self, event: RecommendationEvent) -> RecommendationEvent:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.execute(
                 "INSERT INTO recommendation_events "
                 "(id, backstage_user_id, session_id, media_id, event_type, value, numeric_value, created_at) "
@@ -586,7 +588,7 @@ class MediaStore:
         return event
 
     def _list_recommendation_events_sync(self, user_id: str) -> List[RecommendationEvent]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM recommendation_events WHERE backstage_user_id = ? "
@@ -596,7 +598,7 @@ class MediaStore:
         return [self._row_to_recommendation_event(row) for row in rows]
 
     def _create_recommendation_session_sync(self, session: RecommendationSession) -> RecommendationSession:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.execute(
                 "INSERT INTO recommendation_sessions "
                 "(id, backstage_user_id, question_count, session_preferences, status, created_at, completed_at) "
@@ -614,7 +616,7 @@ class MediaStore:
         self, session: RecommendationSession, limit: int, day_start: Any,
     ) -> Optional[RecommendationSession]:
         day_start_iso = self._coerce_iso_datetime(day_start)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.execute("BEGIN IMMEDIATE")
             count = conn.execute(
                 "SELECT COUNT(*) FROM recommendation_sessions "
@@ -636,7 +638,7 @@ class MediaStore:
         return session
 
     def _get_recommendation_session_sync(self, session_id: str) -> Optional[RecommendationSession]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT * FROM recommendation_sessions WHERE id = ?", (session_id,),
@@ -656,7 +658,7 @@ class MediaStore:
         if not updates:
             return self._get_recommendation_session_sync(session_id)
         assignments = ", ".join(f"{key} = ?" for key in updates)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.execute(
                 f"UPDATE recommendation_sessions SET {assignments} WHERE id = ?",
                 [*updates.values(), session_id],
@@ -666,7 +668,7 @@ class MediaStore:
     def _advance_recommendation_session_sync(
         self, session_id: str, expected_question_count: int, preferences: Dict[str, Any],
     ) -> bool:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             cursor = conn.execute(
                 "UPDATE recommendation_sessions SET question_count = question_count + 1, session_preferences = ? "
                 "WHERE id = ? AND status = 'active' AND question_count = ?",
@@ -683,7 +685,7 @@ class MediaStore:
 
     def _count_recommendation_sessions_sync(self, user_id: str, day_start: Any) -> int:
         day_start_iso = self._coerce_iso_datetime(day_start)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             row = conn.execute(
                 "SELECT COUNT(*) FROM recommendation_sessions "
                 "WHERE backstage_user_id = ? AND created_at >= ? AND status != 'cancelled'",
@@ -692,7 +694,7 @@ class MediaStore:
         return int(row[0] or 0)
 
     def _get_recommendation_usage_sync(self, session_id: str) -> List[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM ai_usage WHERE session_id = ? ORDER BY created_at ASC, id ASC",
@@ -715,7 +717,7 @@ class MediaStore:
             "error": payload.get("error"),
             "created_at": created_at,
         }
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.execute(
                 """
                 INSERT INTO ai_usage
@@ -736,7 +738,7 @@ class MediaStore:
     ) -> Dict[str, Any]:
         now = datetime.now(timezone.utc).isoformat()
         fields_json = json.dumps(fields or {})
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.execute(
                 """
                 INSERT INTO media_recommendation_preferences
@@ -757,7 +759,7 @@ class MediaStore:
         return self._row_to_media_recommendation_preference(row)
 
     def _get_user_media_state_sync(self, user_id: str, media_id: str) -> Optional[UserMediaState]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT * FROM user_media_state WHERE backstage_user_id = ? AND media_id = ?",
@@ -766,7 +768,7 @@ class MediaStore:
         return self._row_to_user_media_state(row) if row else None
 
     def _list_user_media_states_sync(self, user_id: str) -> List[UserMediaState]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM user_media_state WHERE backstage_user_id = ? ORDER BY last_interacted_at DESC",
@@ -776,7 +778,7 @@ class MediaStore:
 
     def _storage_context_sync(self, watched_since: datetime) -> Dict[str, Any]:
         """Return cross-user signals used to protect media from deletion."""
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             favorite_rows = conn.execute(
                 "SELECT DISTINCT media_id FROM user_media_state WHERE is_favorite = 1"
             ).fetchall()
@@ -817,7 +819,7 @@ class MediaStore:
 
     def _set_storage_protection_sync(self, media_id: str, protected: bool) -> bool:
         now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             media = conn.execute("SELECT 1 FROM media WHERE id = ?", (media_id,)).fetchone()
             if not media:
                 return False
@@ -842,7 +844,7 @@ class MediaStore:
             "status": payload.get("status", "deleted"),
             "error": payload.get("error"),
         }
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.execute(
                 "INSERT INTO storage_cleanup_log "
                 "(id, admin_user_id, media_id, media_title, size_bytes, deleted_at, status, error) "
@@ -855,7 +857,7 @@ class MediaStore:
         return values
 
     def _list_storage_cleanup_log_sync(self, limit: int = 50) -> List[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT id, admin_user_id, media_id, media_title, size_bytes, deleted_at, status, error "
@@ -890,7 +892,7 @@ class MediaStore:
         values = [user_id, media_id, *encoded.values()]
         assignments = ", ".join(f"{column} = excluded.{column}" for column in encoded)
         placeholders = ", ".join("?" for _ in columns)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             conn.execute(
                 f"INSERT INTO user_media_state ({', '.join(columns)}) VALUES ({placeholders}) "
@@ -917,14 +919,14 @@ class MediaStore:
 
     def _fetch_all_sync(self) -> List[Media]:
         escaped_cols = ", ".join(f'"{col}"' for col in _COLUMNS)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(f"SELECT {escaped_cols} FROM media ORDER BY rowid").fetchall()
         return [self._row_to_media(row) for row in rows]
 
     def _fetch_one_sync(self, media_id: str) -> Optional[Media]:
         escaped_cols = ", ".join(f'"{col}"' for col in _COLUMNS)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 f"SELECT {escaped_cols} FROM media WHERE id = ?", (media_id,)
@@ -938,7 +940,7 @@ class MediaStore:
         values["created_at"] = values["created_at"] or datetime.now(timezone.utc)
 
         escaped_cols = ", ".join(f'"{col}"' for col in _COLUMNS)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             placeholders = ", ".join("?" for _ in _COLUMNS)
             conn.execute(
                 f"INSERT INTO media ({escaped_cols}) VALUES ({placeholders})",
@@ -954,7 +956,7 @@ class MediaStore:
             return self._fetch_one_sync(media_id) is not None
         set_clause = ", ".join(f'"{col}" = ?' for col in filtered_fields)
         values = [self._encode(col, val) for col, val in filtered_fields.items()]
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             cursor = conn.execute(
                 f"UPDATE media SET {set_clause} WHERE id = ?", [*values, media_id]
             )
@@ -965,7 +967,7 @@ class MediaStore:
         # Foreign keys are not enforced on these connections, so the ON DELETE
         # CASCADE clauses never fire: clean the dependent rows explicitly.
         # Rental history, recommendation events and the cleanup log are kept.
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.execute(
                 "DELETE FROM user_episode_state WHERE episode_id IN "
                 "(SELECT id FROM episode WHERE media_id = ?)",
@@ -1020,7 +1022,7 @@ class MediaStore:
         }
 
     def _list_episodes_sync(self, media_id: str) -> List[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 """
@@ -1037,7 +1039,7 @@ class MediaStore:
         return [self._row_to_episode(row) for row in rows]
 
     def _list_episodes_for_user_sync(self, media_id: str, user_id: str) -> List[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 """
@@ -1058,7 +1060,7 @@ class MediaStore:
         return [self._row_to_episode(row) for row in rows]
 
     def _series_progress_sync(self, media_id: str) -> Optional[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             media = conn.execute(
                 "SELECT id FROM media WHERE id = ? AND substr(type, 1, 1) = 'S' AND substr(type, -3) = 'rie'", (media_id,)
@@ -1072,7 +1074,7 @@ class MediaStore:
         return self._progress_from_rows(media_id, rows)
 
     def _series_progress_for_user_sync(self, media_id: str, user_id: str) -> Optional[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             media = conn.execute(
                 "SELECT id FROM media WHERE id = ? AND substr(type, 1, 1) = 'S' AND substr(type, -3) = 'rie'", (media_id,)
@@ -1104,7 +1106,7 @@ class MediaStore:
         return progress
 
     def _create_episodes_sync(self, media_id: str, episodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             media = conn.execute(
                 "SELECT id FROM media WHERE id = ? AND substr(type, 1, 1) = 'S' AND substr(type, -3) = 'rie'", (media_id,)
             ).fetchone()
@@ -1135,7 +1137,7 @@ class MediaStore:
 
     def _upsert_episodes_sync(self, media_id: str, episodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Refresh TMDB episode metadata without ever resetting local watch history."""
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             media = conn.execute(
                 "SELECT id FROM media WHERE id = ? AND substr(type, 1, 1) = 'S' AND substr(type, -3) = 'rie'", (media_id,)
             ).fetchone()
@@ -1167,7 +1169,7 @@ class MediaStore:
         self, media_id: str, seasons: List[Dict[str, Any]], info: Dict[str, Any],
     ) -> None:
         now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             for season in seasons:
                 conn.execute(
                     """
@@ -1202,7 +1204,7 @@ class MediaStore:
             )
 
     def _get_series_metadata_sync(self, media_id: str) -> Dict[str, Any]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             info = conn.execute("SELECT * FROM series_info WHERE media_id = ?", (media_id,)).fetchone()
             seasons = conn.execute(
@@ -1216,7 +1218,7 @@ class MediaStore:
         }
 
     def _list_episode_playback_sync(self, media_id: str, user_id: str) -> Dict[tuple, Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 """
@@ -1233,7 +1235,7 @@ class MediaStore:
         self, media_id: str, season_number: int, user_id: str, watched: bool,
     ) -> int:
         now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             rows = conn.execute(
                 """
                 SELECT episode.id FROM episode
@@ -1256,7 +1258,7 @@ class MediaStore:
         return len(rows)
 
     def _set_episode_watched_sync(self, episode_id: str, watched: bool) -> Optional[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             episode = conn.execute(
                 """
@@ -1285,7 +1287,7 @@ class MediaStore:
         self, episode_id: str, user_id: str, watched: bool,
     ) -> Optional[Dict[str, Any]]:
         now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             episode = conn.execute(
                 """
@@ -1311,7 +1313,7 @@ class MediaStore:
         return self._get_episode_for_user_sync(episode_id, user_id)
 
     def _get_episode_for_user_sync(self, episode_id: str, user_id: str) -> Optional[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 """
@@ -1338,7 +1340,7 @@ class MediaStore:
         return Availability(**data)
 
     def _get_availability_sync(self, media_id: str) -> Optional[Availability]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT * FROM media_availability WHERE media_id = ?", (media_id,)
@@ -1354,7 +1356,7 @@ class MediaStore:
             if values[field] is not None:
                 values[field] = values[field].isoformat()
         columns = list(values)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.execute(
                 f"INSERT INTO media_rentals ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
                 [values[column] for column in columns],
@@ -1362,13 +1364,13 @@ class MediaStore:
         return self._get_rental_sync(rental.id)
 
     def _get_rental_sync(self, rental_id: str) -> Optional[Rental]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute("SELECT * FROM media_rentals WHERE id = ?", (rental_id,)).fetchone()
         return self._row_to_rental(row) if row else None
 
     def _list_user_rentals_sync(self, user_id: str) -> List[Rental]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM media_rentals WHERE backstage_user_id = ? ORDER BY created_at DESC",
@@ -1377,7 +1379,7 @@ class MediaStore:
         return [self._row_to_rental(row) for row in rows]
 
     def _list_rentals_for_media_sync(self, media_id: str) -> List[Rental]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM media_rentals WHERE media_id = ? ORDER BY created_at DESC",
@@ -1389,7 +1391,7 @@ class MediaStore:
         """Split a user's active rentals into used slots and queued (waiting) requests."""
         active = ", ".join("?" for _ in _ACTIVE_RENTAL_STATES)
         waiting = ", ".join("?" for _ in _WAITING_DOWNLOAD_STATES)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             row = conn.execute(
                 "SELECT "
                 f"COALESCE(SUM(CASE WHEN r.status = 'requested' AND (a.state IS NULL OR a.state IN ({waiting})) THEN 1 ELSE 0 END), 0), "
@@ -1403,7 +1405,7 @@ class MediaStore:
 
     def _count_active_rentals_sync(self, user_id: str) -> int:
         placeholders = ", ".join("?" for _ in _ACTIVE_RENTAL_STATES)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             row = conn.execute(
                 f"SELECT COUNT(*) FROM media_rentals WHERE backstage_user_id = ? AND status IN ({placeholders})",
                 (user_id, *_ACTIVE_RENTAL_STATES),
@@ -1420,7 +1422,7 @@ class MediaStore:
         if user_id is not None:
             query += " AND backstage_user_id = ?"
             params += (user_id,)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             row = conn.execute(query, params).fetchone()
         return int(row[0] or 0)
 
@@ -1428,7 +1430,7 @@ class MediaStore:
         self, user_id: str, media_id: str, season_number: Optional[int] = None,
     ) -> Optional[Rental]:
         placeholders = ", ".join("?" for _ in _ACTIVE_RENTAL_STATES)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 f"SELECT * FROM media_rentals WHERE backstage_user_id = ? AND media_id = ? "
@@ -1449,7 +1451,7 @@ class MediaStore:
                 values[key] = value.isoformat()
         if values:
             assignments = ", ".join(f"{key} = ?" for key in values)
-            with sqlite3.connect(self.db_path) as conn:
+            with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
                 conn.execute(
                     f"UPDATE media_rentals SET {assignments} WHERE id = ?",
                     (*values.values(), rental_id),
@@ -1457,7 +1459,7 @@ class MediaStore:
         return self._get_rental_sync(rental_id)
 
     def _list_keep_requested_rentals_sync(self) -> List[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT media_rentals.*, media.title AS media_title "
@@ -1475,7 +1477,7 @@ class MediaStore:
     def _list_admin_rentals_sync(self) -> List[Dict[str, Any]]:
         states = (*_ACTIVE_RENTAL_STATES, "kept")
         placeholders = ", ".join("?" for _ in states)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT media_rentals.*, media.title AS media_title "
@@ -1491,7 +1493,7 @@ class MediaStore:
 
     def _expire_rentals_sync(self, now: datetime) -> int:
         """Close overdue temporary rentals; pending keep requests wait for the admin."""
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             cursor = conn.execute(
                 "UPDATE media_rentals SET status = 'expired', updated_at = ? "
                 "WHERE status = 'available' AND storage_policy = 'temporary' "
@@ -1503,7 +1505,7 @@ class MediaStore:
     def _decide_rental_sync(self, rental_id: str, decision: str, admin_id: str, decided_at: datetime) -> Optional[Rental]:
         if decision not in {"accepted", "refused"}:
             raise ValueError("invalid rental decision")
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             row = conn.execute("SELECT status FROM media_rentals WHERE id = ?", (rental_id,)).fetchone()
             if not row:
                 return None
@@ -1528,7 +1530,7 @@ class MediaStore:
         return self._get_rental_sync(rental_id)
 
     def _revoke_rental_sync(self, rental_id: str, admin_id: str, decided_at: datetime) -> Optional[Rental]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             row = conn.execute("SELECT status FROM media_rentals WHERE id = ?", (rental_id,)).fetchone()
             if not row:
                 return None
@@ -1542,7 +1544,7 @@ class MediaStore:
         return self._get_rental_sync(rental_id)
 
     def _extend_rental_sync(self, rental_id: str, now: datetime) -> Optional[Rental]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute("SELECT status, expires_at FROM media_rentals WHERE id = ?", (rental_id,)).fetchone()
             if not row:
@@ -1563,12 +1565,12 @@ class MediaStore:
             if values[field] is not None:
                 values[field] = values[field].isoformat()
         columns = list(values)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.execute(
                 f"INSERT OR IGNORE INTO notifications ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
                 [values[column] for column in columns],
             )
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT * FROM notifications WHERE id = ? OR (? IS NOT NULL AND dedupe_key = ?)",
@@ -1577,7 +1579,7 @@ class MediaStore:
         return self._row_to_notification(row)
 
     def _list_notifications_sync(self, user_id: str) -> List[Notification]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM notifications WHERE backstage_user_id = ? ORDER BY created_at DESC",
@@ -1605,7 +1607,7 @@ class MediaStore:
         payload: Optional[Dict[str, Any]] = None, visible_to: Optional[str] = None,
     ) -> Dict[str, Any]:
         created_at = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
                 "INSERT INTO chat_messages "
@@ -1624,7 +1626,7 @@ class MediaStore:
         self, after_id: Optional[int], limit: int, viewer_id: Optional[str],
     ) -> List[Dict[str, Any]]:
         visible = "(visible_to IS NULL OR visible_to = ?)"
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             if after_id is None:
                 rows = conn.execute(
@@ -1653,7 +1655,7 @@ class MediaStore:
         return await asyncio.to_thread(self._list_chat_messages_sync, after_id, limit, viewer_id)
 
     def _mark_notification_read_sync(self, notification_id: str, user_id: str, read_at: datetime) -> bool:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             cursor = conn.execute(
                 "UPDATE notifications SET read_at = ? WHERE id = ? AND backstage_user_id = ?",
                 (read_at.isoformat(), notification_id, user_id),
@@ -1666,7 +1668,7 @@ class MediaStore:
     ) -> int:
         active_states = ("requested", "downloading", "available")
         placeholders = ", ".join("?" for _ in active_states)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             cursor = conn.execute(
                 f"UPDATE media_rentals SET status = 'available', available_at = COALESCE(available_at, ?), "
                 f"expires_at = COALESCE(expires_at, ?), size_bytes = COALESCE(size_bytes, ?), updated_at = ? "
@@ -1682,7 +1684,7 @@ class MediaStore:
         if not season_numbers:
             return 0
         seasons = ", ".join("?" for _ in season_numbers)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             cursor = conn.execute(
                 f"UPDATE media_rentals SET status = 'available', available_at = COALESCE(available_at, ?), "
                 f"expires_at = COALESCE(expires_at, ?), updated_at = ? "
@@ -1695,7 +1697,7 @@ class MediaStore:
     def _mark_rental_first_played_sync(
         self, user_id: str, media_id: str, first_played_at: datetime, expires_at: datetime,
     ) -> bool:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             cursor = conn.execute(
                 "UPDATE media_rentals SET first_played_at = ?, expires_at = ?, updated_at = ? "
                 "WHERE backstage_user_id = ? AND media_id = ? AND status = 'available' AND first_played_at IS NULL",
@@ -1706,7 +1708,7 @@ class MediaStore:
     def _cleanup_preview_sync(self, now: datetime) -> List[Dict[str, Any]]:
         active_states = ("requested", "downloading", "available", "keep_requested")
         placeholders = ", ".join("?" for _ in active_states)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT media_rentals.*, media.title AS media_title FROM media_rentals "
@@ -1750,7 +1752,7 @@ class MediaStore:
         if values["last_synced_at"] is not None:
             values["last_synced_at"] = values["last_synced_at"].isoformat()
         columns = list(values)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.execute(
                 f"INSERT INTO media_availability ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)}) "
                 "ON CONFLICT(media_id) DO UPDATE SET " + ", ".join(
@@ -1761,7 +1763,7 @@ class MediaStore:
         return self._get_availability_sync(availability.media_id)
 
     def _list_availabilities_sync(self) -> List[Availability]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("SELECT * FROM media_availability ORDER BY last_synced_at DESC").fetchall()
         return [self._row_to_availability(row) for row in rows]
@@ -1784,10 +1786,15 @@ class MediaStore:
         values["played"] = int(values["played"])
         return values
 
-    def _upsert_playback_sync(self, progress: PlaybackProgress) -> PlaybackProgress:
+    def _upsert_playback_sync(self, progress: PlaybackProgress) -> tuple[PlaybackProgress, bool]:
+        """Save one Jellyfin progress row; the flag says it just became « vu »."""
         values = self._playback_values(progress)
         columns = list(values)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
+            previous = conn.execute(
+                "SELECT played FROM playback_progress WHERE backstage_user_id = ? AND jellyfin_id = ?",
+                (progress.backstage_user_id, progress.jellyfin_id),
+            ).fetchone()
             conn.execute(
                 f"INSERT INTO playback_progress ({', '.join(columns)}) VALUES "
                 f"({', '.join('?' for _ in columns)}) ON CONFLICT(backstage_user_id, jellyfin_id) DO UPDATE SET "
@@ -1799,10 +1806,11 @@ class MediaStore:
                 "SELECT * FROM playback_progress WHERE backstage_user_id = ? AND jellyfin_id = ?",
                 (progress.backstage_user_id, progress.jellyfin_id),
             ).fetchone()
-        return self._row_to_playback(row)
+        newly_played = bool(progress.played) and not (previous and previous[0])
+        return self._row_to_playback(row), newly_played
 
     def _resolve_playback_item_sync(self, item: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             jellyfin_ids = [
                 value for value in (item.get("jellyfin_id"), item.get("series_jellyfin_id"))
                 if value
@@ -1833,7 +1841,7 @@ class MediaStore:
 
     def _list_playback_sync(self, user_id: str, completed: bool) -> List[PlaybackProgress]:
         clause = "(played = 1 OR percent >= 95)" if completed else "played = 0 AND percent < 95"
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 f"SELECT * FROM playback_progress WHERE backstage_user_id = ? AND {clause} "
@@ -1843,7 +1851,7 @@ class MediaStore:
         return [self._row_to_playback(row) for row in rows]
 
     def _list_next_episodes_sync(self, user_id: str) -> List[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             series_rows = conn.execute(
                 "SELECT DISTINCT media_id FROM playback_progress "
@@ -1884,7 +1892,7 @@ class MediaStore:
         return output
 
     def _last_playback_sync_sync(self, user_id: str) -> Optional[datetime]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             row = conn.execute(
                 "SELECT MAX(synced_at) FROM playback_progress WHERE backstage_user_id = ?",
                 (user_id,),
@@ -2119,7 +2127,7 @@ class MediaStore:
         return await asyncio.to_thread(self._upsert_availability_sync, availability)
 
     def _clear_arr_id_conflict_sync(self, provider: str, arr_id: int, media_id: str) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.execute(
                 "UPDATE media_availability SET arr_id = NULL, last_error = ? "
                 "WHERE provider = ? AND arr_id = ? AND media_id != ?",
@@ -2133,6 +2141,9 @@ class MediaStore:
         return await asyncio.to_thread(self._list_availabilities_sync)
 
     async def upsert_playback(self, progress: PlaybackProgress) -> PlaybackProgress:
+        return (await asyncio.to_thread(self._upsert_playback_sync, progress))[0]
+
+    async def upsert_playback_tracking(self, progress: PlaybackProgress) -> tuple[PlaybackProgress, bool]:
         return await asyncio.to_thread(self._upsert_playback_sync, progress)
 
     async def resolve_playback_item(self, item: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
@@ -2183,7 +2194,7 @@ class MediaStore:
             "fetched_at": datetime.now(timezone.utc).isoformat(),
         }
         columns = list(values)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.execute(
                 f"INSERT OR REPLACE INTO tmdb_movie_cache ({', '.join(columns)}) "
                 f"VALUES ({', '.join('?' for _ in columns)})",
@@ -2195,7 +2206,7 @@ class MediaStore:
         ids = [int(tmdb_id) for tmdb_id in tmdb_ids]
         if not ids:
             return {}
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 f"SELECT * FROM tmdb_movie_cache WHERE tmdb_id IN ({', '.join('?' for _ in ids)})",
@@ -2211,7 +2222,7 @@ class MediaStore:
     def _create_diary_entry_sync(self, entry: DiaryEntry) -> DiaryEntry:
         values = self._diary_values(entry.model_dump())
         columns = list(values)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.execute(
                 f"INSERT INTO diary_entries ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
                 [values[column] for column in columns],
@@ -2219,13 +2230,13 @@ class MediaStore:
         return self._get_diary_entry_sync(entry.id)
 
     def _get_diary_entry_sync(self, entry_id: str) -> Optional[DiaryEntry]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute("SELECT * FROM diary_entries WHERE id = ?", (entry_id,)).fetchone()
         return self._row_to_diary_entry(row) if row else None
 
     def _list_diary_entries_sync(self, user_id: str) -> List[DiaryEntry]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 f"SELECT * FROM diary_entries WHERE backstage_user_id = ? {self._DIARY_ORDER}",
@@ -2238,7 +2249,7 @@ class MediaStore:
         values = self._diary_values({k: v for k, v in fields.items() if k in allowed})
         values["updated_at"] = datetime.now(timezone.utc).isoformat()
         assignments = ", ".join(f"{column} = ?" for column in values)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             cursor = conn.execute(
                 f"UPDATE diary_entries SET {assignments} WHERE id = ?",
                 [*values.values(), entry_id],
@@ -2248,12 +2259,12 @@ class MediaStore:
         return self._get_diary_entry_sync(entry_id)
 
     def _delete_diary_entry_sync(self, entry_id: str) -> bool:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             cursor = conn.execute("DELETE FROM diary_entries WHERE id = ?", (entry_id,))
         return cursor.rowcount > 0
 
     def _latest_diary_entry_sync(self, user_id: str, tmdb_id: int) -> Optional[DiaryEntry]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 f"SELECT * FROM diary_entries WHERE backstage_user_id = ? AND tmdb_id = ? "
@@ -2263,7 +2274,7 @@ class MediaStore:
         return self._row_to_diary_entry(row) if row else None
 
     def _list_diary_tmdb_ids_sync(self, user_id: str) -> set:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             rows = conn.execute(
                 "SELECT DISTINCT tmdb_id FROM diary_entries WHERE backstage_user_id = ?",
                 (user_id,),
@@ -2279,7 +2290,7 @@ class MediaStore:
             id=str(uuid.uuid4()), name=name, created_by=created_by,
             created_at=datetime.now(timezone.utc),
         )
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.execute(
                 "INSERT INTO film_lists (id, name, created_by, created_at) VALUES (?, ?, ?, ?)",
                 (film_list.id, film_list.name, film_list.created_by, film_list.created_at.isoformat()),
@@ -2287,7 +2298,7 @@ class MediaStore:
         return film_list
 
     def _list_film_lists_sync(self) -> List[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT l.*, COUNT(i.tmdb_id) AS item_count FROM film_lists l "
@@ -2300,24 +2311,24 @@ class MediaStore:
         ]
 
     def _get_film_list_sync(self, list_id: str) -> Optional[FilmList]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute("SELECT * FROM film_lists WHERE id = ?", (list_id,)).fetchone()
         return self._row_to_film_list(row) if row else None
 
     def _rename_film_list_sync(self, list_id: str, name: str) -> Optional[FilmList]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             cursor = conn.execute("UPDATE film_lists SET name = ? WHERE id = ?", (name, list_id))
         return self._get_film_list_sync(list_id) if cursor.rowcount else None
 
     def _delete_film_list_sync(self, list_id: str) -> bool:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.execute("DELETE FROM film_list_items WHERE list_id = ?", (list_id,))
             cursor = conn.execute("DELETE FROM film_lists WHERE id = ?", (list_id,))
         return cursor.rowcount > 0
 
     def _add_film_list_item_sync(self, list_id: str, tmdb_id: int, added_by: str) -> bool:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             cursor = conn.execute(
                 "INSERT OR IGNORE INTO film_list_items (list_id, tmdb_id, added_by, added_at) "
                 "VALUES (?, ?, ?, ?)",
@@ -2326,7 +2337,7 @@ class MediaStore:
         return cursor.rowcount > 0
 
     def _remove_film_list_item_sync(self, list_id: str, tmdb_id: int) -> bool:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             cursor = conn.execute(
                 "DELETE FROM film_list_items WHERE list_id = ? AND tmdb_id = ?",
                 (list_id, int(tmdb_id)),
@@ -2334,7 +2345,7 @@ class MediaStore:
         return cursor.rowcount > 0
 
     def _list_film_list_items_sync(self, list_id: str) -> List[FilmListItem]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM film_list_items WHERE list_id = ? ORDER BY added_at DESC",

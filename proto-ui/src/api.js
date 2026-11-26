@@ -278,8 +278,9 @@ export async function updatePersonalMedia(mediaId, payload) {
     return response.json();
 }
 
-export async function fetchAvailability(mediaId) {
-    const response = await apiFetch(`${API_BASE_URL}/medias/${mediaId}/availability`);
+export async function fetchAvailability(mediaId, {sync = true} = {}) {
+    const query = sync ? '' : '?sync=false';
+    const response = await apiFetch(`${API_BASE_URL}/medias/${mediaId}/availability${query}`);
     if (!response.ok) throw new Error(`Disponibilité impossible: ${response.statusText}`);
     return response.json();
 }

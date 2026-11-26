@@ -1,5 +1,6 @@
 """Authentication and authorization routes for Backstage."""
 
+import asyncio
 import logging
 import os
 from dataclasses import dataclass
@@ -151,7 +152,8 @@ async def get_current_user(
     token = request.cookies.get(SESSION_COOKIE)
     if not token:
         raise HTTPException(status_code=401, detail="Authentification requise")
-    session = store.user_from_token(token)
+    # Off the event loop: a slow SQLite call here would stall every request.
+    session = await asyncio.to_thread(store.user_from_token, token)
     if session is None:
         raise HTTPException(status_code=401, detail="Authentification requise")
     user, session_id = session

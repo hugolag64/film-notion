@@ -8,6 +8,8 @@ import sqlite3
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from backend.core.sqlite_util import SQLITE_BUSY_TIMEOUT_SEC
+
 ACTIVE_STATUSES = ("joining", "voting")
 
 
@@ -90,7 +92,7 @@ class PartyStore:
         self.db_path = db_path
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_SEC)
         conn.row_factory = sqlite3.Row
         return conn
 

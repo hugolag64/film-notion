@@ -279,3 +279,48 @@ def test_editing_an_entry_keeps_the_library_choice(client):
 def test_cached_movie_keeps_french_release_date(client):
     client.post("/api/journal", json={"tmdb_id": 550})
     assert asyncio.run(_store().get_tmdb_movies([550]))[550]["fr_release_date"] == "2024-02-28"
+
+
+# --- Journal ↔ bibliothèque ---------------------------------------------------
+
+def test_journal_rating_and_review_follow_a_film_added_later(client):
+    client.post("/api/journal", json={"tmdb_id": 550, "rating": 4.5, "review": "Sublime."})
+    asyncio.run(_store().create({"id": "dune", "title": "Dune 2", "type": "Film", "tmdb_id": 550}))
+
+    film = next(m for m in client.get("/api/medias").json() if m["id"] == "dune")
+
+    assert film["status"] == "Terminé"
+    assert film["rating"] == "4.5"
+    assert film["review"] == "Sublime."
+    single = client.get("/api/medias/dune").json()
+    assert (single["rating"], single["review"]) == ("4.5", "Sublime.")
+
+
+def test_rewatch_without_note_keeps_the_previous_journal_note(client):
+    client.post("/api/journal", json={"tmdb_id": 550, "watched_on": "2026-01-01", "rating": 3, "review": "Bien."})
+    client.post("/api/journal", json={"tmdb_id": 550, "watched_on": "2026-02-01"})
+    asyncio.run(_store().create({"id": "dune", "title": "Dune 2", "type": "Film", "tmdb_id": 550}))
+
+    film = client.get("/api/medias/dune").json()
+
+    assert (film["rating"], film["review"]) == ("3", "Bien.")
+
+
+def test_library_rating_wins_over_the_journal_note(client):
+    client.post("/api/journal", json={"tmdb_id": 550, "rating": 2})
+    asyncio.run(_store().create({"id": "dune", "title": "Dune 2", "type": "Film", "tmdb_id": 550}))
+
+    client.patch("/api/medias/dune/personal", json={"rating": "5"})
+
+    assert client.get("/api/medias/dune").json()["rating"] == "5"
+
+
+def test_watchlisted_film_does_not_show_the_old_journal_note(client):
+    asyncio.run(_store().create({"id": "dune", "title": "Dune 2", "type": "Film", "tmdb_id": 550}))
+    client.post("/api/journal", json={"tmdb_id": 550, "rating": 4})
+    client.patch("/api/medias/dune/personal", json={"status": "watchlist"})
+
+    film = client.get("/api/medias/dune").json()
+
+    assert film["status"] == "À regarder"
+    assert film["rating"] is None
