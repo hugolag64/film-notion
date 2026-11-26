@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
-    "test": "node --test src/library.test.js src/rentals.test.js src/series.test.js",
+    "test": "node --test src/library.test.js src/rentals.test.js src/series.test.js src/journal.test.js",
     "test:playback-bridge": "node --test ../integrations/jellyfin/backstage-autoplay.test.cjs",
     "preview": "vite preview"
   },
