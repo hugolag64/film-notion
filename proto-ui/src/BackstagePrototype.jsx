@@ -9,6 +9,7 @@ import TMDBMoviePreview from './components/TMDBMoviePreview';
 import NotificationBell from './components/NotificationBell';
 import ChatDock from './components/ChatDock';
 import JournalView from './components/JournalView';
+import ListsView from './components/ListsView';
 import SeenDialog from './components/SeenDialog';
 import useLayer from './useLayer';
 import { useAuth } from './auth-context';
@@ -18,6 +19,7 @@ import { enRouteBadge, filterAndSortMovies, filterOptions, libraryPlacement, nor
 // Read once, before anything changes the address bar.
 const INITIAL_DEEP_LINK = parseMediaPath(window.location.pathname);
 import { replaceEpisode } from './series';
+import { BADGE_TONE_CLASSES } from './journal';
 import SeriesDetailView from './components/SeriesDetailView';
 import { DEFAULT_MAX_ACTIVE_RENTALS, DEFAULT_MAX_QUEUED_RENTALS, countQueuedRentals, countRentalsInUse, indexRentalsByMedia, isOpenRental, isQueuedRental, rentalCardBadge, rentalExpiryLabel, rentalStatusLabel } from './rentals';
 
@@ -72,16 +74,6 @@ const translateGenre = (genre) => GENRE_TRANSLATIONS[genre] || genre;
 
 const LIBRARY_BATCH_SIZE = 48;
 // One color per badge meaning, shared by the library cards and the « En route » row.
-const BADGE_TONE_CLASSES = {
-    cinema: 'bg-rose-600/90',
-    upcoming: 'bg-amber-500/90',
-    requested: 'bg-slate-600/90',
-    searching: 'bg-sky-600/90',
-    downloading: 'bg-[#635bff]/90',
-    rental: 'bg-[#635bff]/90',
-    error: 'bg-red-600/90',
-    kept: 'bg-emerald-600/90',
-};
 // A roommate should hear back within seconds when the media server is down.
 const PLAYER_TARGET_TIMEOUT_MS = 10000;
 const PLAYER_ACK_TIMEOUT_MS = 15000;
@@ -803,6 +795,13 @@ export default function BackstagePrototype() {
         showToast(`« ${target.title} » ajouté à ton journal.`);
     };
 
+    // « Demander aussi sur le serveur ? » from a shared list: the admin picks
+    // a Radarr profile as for any Seerr request; a flatmate rents the film.
+    const requestListFilmOnServer = async (film) => {
+        if (isAdmin) await prepareSeerrFilmRequest(film);
+        else await requestRecommendationOnSeerr(film);
+    };
+
     const openLibraryFilmById = (mediaId) => {
         const local = movies.find((movie) => movie.id === mediaId);
         if (local) openDashboardMedia(local);
@@ -1478,7 +1477,7 @@ export default function BackstagePrototype() {
                     <div className={`${mobileSearchOpen ? 'flex' : 'hidden'} order-last basis-full items-center pb-3 lg:order-none lg:flex lg:basis-auto lg:min-w-0 lg:justify-self-center lg:gap-5 lg:pb-0`}>
                     <nav className="hidden shrink-0 lg:block" aria-label="Navigation principale">
                         <div className={`flex items-center gap-6 whitespace-nowrap text-sm font-semibold ${isDarkMode ? 'text-white/60' : 'text-[#425466]'}`}>
-                            {[['dashboard', 'Accueil'], ['library', 'Films'], ['library', 'Séries'], ['journal', 'Journal']].map(([view, label]) => {
+                            {[['dashboard', 'Accueil'], ['library', 'Films'], ['library', 'Séries'], ['journal', 'Journal'], ['lists', 'Listes']].map(([view, label]) => {
                                 const selected = view === 'library' ? activeView === 'library' && collection === label : activeView === view;
                                 return <button key={label} type="button" onClick={() => view === 'library' ? (setActiveView('library'), changeCollection(label)) : setActiveView(view)} className={`border-b-2 px-1 pb-2 pt-2 transition-all ${selected ? 'border-b-2 border-[#635bff] text-[#635bff]' : 'border-transparent hover:border-[#635bff]/40 hover:text-[#635bff]'}`}>
                                     {label}
@@ -1732,12 +1731,29 @@ export default function BackstagePrototype() {
 
                 {/* Main Content Area */}
                 <main id="contenu" tabIndex={-1} key={collection} className="series-portal flex-1 min-w-0 outline-none">
-                    {activeView === 'journal' ? <JournalView
-                        isDarkMode={isDarkMode}
-                        onOpenLibraryFilm={openLibraryFilmById}
-                        onChanged={loadRealMedias}
-                        showToast={showToast}
-                    /> : activeView === 'dashboard' ? <DashboardHome
+                    {activeView === 'journal' || activeView === 'lists' ? <>
+                        <div role="tablist" aria-label="Carnet" className={`mb-5 inline-flex rounded-xl border p-1 text-sm font-semibold lg:hidden ${isDarkMode ? 'border-white/10' : 'border-[#e3e8ee]'}`}>
+                            {[['journal', 'Journal'], ['lists', 'Listes']].map(([view, label]) => <button
+                                key={view}
+                                type="button"
+                                role="tab"
+                                aria-selected={activeView === view}
+                                onClick={() => setActiveView(view)}
+                                className={`rounded-lg px-4 py-1.5 ${activeView === view ? 'bg-[#635bff] text-white' : isDarkMode ? 'text-white/70' : 'text-[#425466]'}`}
+                            >{label}</button>)}
+                        </div>
+                        {activeView === 'journal' ? <JournalView
+                            isDarkMode={isDarkMode}
+                            onOpenLibraryFilm={openLibraryFilmById}
+                            onChanged={loadRealMedias}
+                            showToast={showToast}
+                        /> : <ListsView
+                            isDarkMode={isDarkMode}
+                            showToast={showToast}
+                            onRequestOnServer={requestListFilmOnServer}
+                            onJournalChanged={loadRealMedias}
+                        />}
+                    </> : activeView === 'dashboard' ? <DashboardHome
                         data={dashboardData}
                         isDarkMode={isDarkMode}
                         loading={dashboardLoading}

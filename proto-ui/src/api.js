@@ -719,3 +719,32 @@ export async function updateJournalEntry(entryId, payload) {
 export async function deleteJournalEntry(entryId) {
     return journalRequest(`/journal/${encodeURIComponent(entryId)}`, {method: 'DELETE'}, 'L’entrée n’a pas pu être supprimée');
 }
+
+/** Shared film lists (every flatmate sees and edits them). */
+export async function fetchFilmLists() {
+    return journalRequest('/lists', {}, 'Les listes n’ont pas pu être chargées');
+}
+
+export async function createFilmList(name) {
+    return journalRequest('/lists', jsonBody('POST', {name}), 'La liste n’a pas pu être créée');
+}
+
+export async function renameFilmList(listId, name) {
+    return journalRequest(`/lists/${encodeURIComponent(listId)}`, jsonBody('PATCH', {name}), 'La liste n’a pas pu être renommée');
+}
+
+export async function deleteFilmList(listId) {
+    return journalRequest(`/lists/${encodeURIComponent(listId)}`, {method: 'DELETE'}, 'La liste n’a pas pu être supprimée');
+}
+
+export async function fetchFilmList(listId) {
+    return journalRequest(`/lists/${encodeURIComponent(listId)}`, {}, 'La liste n’a pas pu être chargée');
+}
+
+export async function addFilmListItem(listId, tmdbId) {
+    return journalRequest(`/lists/${encodeURIComponent(listId)}/items`, jsonBody('POST', {tmdb_id: tmdbId}), 'Le film n’a pas pu être ajouté à la liste');
+}
+
+export async function removeFilmListItem(listId, tmdbId) {
+    return journalRequest(`/lists/${encodeURIComponent(listId)}/items/${encodeURIComponent(tmdbId)}`, {method: 'DELETE'}, 'Le film n’a pas pu être retiré');
+}

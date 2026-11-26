@@ -1,5 +1,18 @@
 import { enRouteBadge } from './library.js';
 
+/** Background color of each badge tone (library cards and list items). */
+export const BADGE_TONE_CLASSES = {
+    cinema: 'bg-rose-600/90',
+    upcoming: 'bg-amber-500/90',
+    requested: 'bg-slate-600/90',
+    searching: 'bg-sky-600/90',
+    downloading: 'bg-[#635bff]/90',
+    rental: 'bg-[#635bff]/90',
+    error: 'bg-red-600/90',
+    kept: 'bg-emerald-600/90',
+    ready: 'bg-emerald-600/90',
+};
+
 const MONTHS = [
     'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
     'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre',
