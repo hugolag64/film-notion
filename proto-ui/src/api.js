@@ -514,6 +514,45 @@ export async function fetchFilmShowtimes(siteId) {
     return response.json();
 }
 
+async function partyRequest(path, body, fallback) {
+    const options = body === undefined
+        ? {method: 'POST'}
+        : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)};
+    const response = await apiFetch(`${API_BASE_URL}/parties${path}`, options);
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), fallback));
+    return response.json();
+}
+
+export function startParty(mode) {
+    return partyRequest('', {mode}, 'Soirée non lancée');
+}
+
+export async function fetchParty(partyId) {
+    const response = await apiFetch(`${API_BASE_URL}/parties/${encodeURIComponent(partyId)}`);
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Soirée indisponible'));
+    return response.json();
+}
+
+export function joinParty(partyId) {
+    return partyRequest(`/${encodeURIComponent(partyId)}/join`, undefined, 'Impossible de rejoindre la soirée');
+}
+
+export function answerParty(partyId, answers) {
+    return partyRequest(`/${encodeURIComponent(partyId)}/answers`, {answers}, 'Réponses non enregistrées');
+}
+
+export function launchParty(partyId) {
+    return partyRequest(`/${encodeURIComponent(partyId)}/launch`, undefined, 'Soirée non lancée');
+}
+
+export function voteParty(partyId, rank, value) {
+    return partyRequest(`/${encodeURIComponent(partyId)}/votes`, {rank, value}, 'Vote non enregistré');
+}
+
+export function closeParty(partyId) {
+    return partyRequest(`/${encodeURIComponent(partyId)}/close`, undefined, 'Vote non clos');
+}
+
 export async function fetchCalendarUrl() {
     const response = await apiFetch(`${API_BASE_URL}/cinema/calendar`);
     if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Agenda indisponible'));

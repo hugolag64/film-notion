@@ -53,7 +53,7 @@ def test_join_and_answer_through_routes(tmp_path):
         state["id"], AnswersRequest(answers={"mood": "any", "runtime": "105"}), _user("lea", "Léa"), store,
     ))
 
-    assert answered["me"] == {"member": True, "answered": True, "votes": {}}
+    assert answered["me"] == {"member": True, "answered": True, "starter": False, "votes": {}}
     assert [m["name"] for m in answered["members"]] == ["Hugo", "Léa"]
 
 

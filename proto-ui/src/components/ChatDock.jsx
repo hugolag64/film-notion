@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Icon from './Icon';
-import { fetchChatMessages, fetchFilmShowtimes, postChatMessage } from '../api';
+import { fetchChatMessages, fetchFilmShowtimes, postChatMessage, startParty } from '../api';
+import { PARTY_BOT_ID, isPartyCommand, partyIdOf } from '../party';
+import PartyCard from './PartyCard';
 import { CINE_COMMANDS, filmButtons, helpCommands, isBotMessage, isCineCommand, showtimeLine } from '../cinema';
 import { useAuth } from '../auth-context';
 
@@ -60,7 +62,7 @@ const initials = (name) => (name || '?').trim().split(/\s+/).slice(0, 2).map((pa
 const isEmojiOnly = (text) => /^(\p{Extended_Pictographic}|\p{Emoji_Component}|‍|️|\s){1,12}$/u.test(text) && !/[0-9#*]/.test(text);
 
 function Avatar({ author, isDarkMode, bot }) {
-    if (bot) return <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm ${isDarkMode ? 'bg-white/10' : 'bg-[#635bff]/10'}`} aria-hidden="true">🎬</span>;
+    if (bot) return <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm ${isDarkMode ? 'bg-white/10' : 'bg-[#635bff]/10'}`} aria-hidden="true">{author.id === PARTY_BOT_ID ? '🍿' : '🎬'}</span>;
     return author.avatar_url
         ? <img src={author.avatar_url} alt="" className="h-7 w-7 shrink-0 rounded-full object-cover" />
         : <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${isDarkMode ? 'bg-white/10' : 'bg-[#635bff]/10 text-[#635bff]'}`} aria-hidden="true">{initials(author.display_name)}</span>;
@@ -89,7 +91,7 @@ function FilmShowtimes({ state, isDarkMode }) {
     </div>;
 }
 
-export default function ChatDock({ isDarkMode }) {
+export default function ChatDock({ isDarkMode, onOpenFilm }) {
     const { user } = useAuth();
     const [open, setOpen] = useState(() => readStorage(OPEN_KEY, false));
     const [messages, setMessages] = useState([]);
@@ -99,6 +101,7 @@ export default function ChatDock({ isDarkMode }) {
     const [error, setError] = useState('');
     const [showEmojis, setShowEmojis] = useState(false);
     const [showCineHelp, setShowCineHelp] = useState(false);
+    const [showPartyPicker, setShowPartyPicker] = useState(false);
     const [openFilm, setOpenFilm] = useState(null); // { messageId, siteId, status, data }
     const lastIdRef = useRef(null);
     const listRef = useRef(null);
@@ -167,7 +170,7 @@ export default function ChatDock({ isDarkMode }) {
             setShowEmojis(false);
             setShowCineHelp(false);
             // The bot answers right away: fetch its reply without waiting for the next poll.
-            if (isCineCommand(body)) refresh();
+            if (isCineCommand(body) || isPartyCommand(body)) refresh();
         } catch (sendError) {
             setError(sendError.message || 'Message non envoyé');
         } finally {
@@ -215,12 +218,25 @@ export default function ChatDock({ isDarkMode }) {
         }
     };
 
+    const launchParty = async (mode) => {
+        setShowPartyPicker(false);
+        setError('');
+        try {
+            stickToBottom.current = true;
+            await startParty(mode);
+            refresh();
+        } catch (partyError) {
+            setError(partyError.message || 'Soirée non lancée');
+        }
+    };
+
     const onKeyDown = (event) => {
         if (event.key === 'Enter' && !event.shiftKey) send(event);
         if (event.key === 'Escape') {
             event.stopPropagation();
             if (showEmojis) setShowEmojis(false);
             else if (showCineHelp) setShowCineHelp(false);
+            else if (showPartyPicker) setShowPartyPicker(false);
             else setOpen(false);
         }
     };
@@ -271,6 +287,7 @@ export default function ChatDock({ isDarkMode }) {
                 const bot = isBotMessage(message);
                 const films = filmButtons(message.payload);
                 const commands = helpCommands(message.payload);
+                const partyId = partyIdOf(message.payload);
                 const previous = messages[index - 1];
                 const grouped = previous?.author.id === message.author.id
                     && new Date(message.created_at) - new Date(previous.created_at) < 5 * 60_000;
@@ -311,6 +328,7 @@ export default function ChatDock({ isDarkMode }) {
                                 </button>
                             </li>)}
                         </ul>}
+                        {partyId && <PartyCard partyId={partyId} isDarkMode={isDarkMode} onOpenFilm={onOpenFilm} />}
                     </div>
                 </li>;
             })}
@@ -337,11 +355,24 @@ export default function ChatDock({ isDarkMode }) {
                     </li>)}
                 </ul>
             </div>}
+            {showPartyPicker && <div className={`absolute bottom-full left-2 right-2 mb-2 rounded-xl border p-2 shadow-xl ${surface}`} role="group" aria-label="Lancer une soirée film">
+                <p className="px-1 pb-1 text-xs font-semibold">Lancer une soirée film</p>
+                <div className="grid grid-cols-2 gap-1">
+                    <button type="button" onClick={() => launchParty('coloc')} className="rounded-lg px-2 py-2 text-left text-xs hover:bg-current/10">
+                        <span className="block font-semibold text-[#635bff]">🛋️ Coloc</span>
+                        <span className="opacity-75">Un film ici, sur le serveur ou à demander</span>
+                    </button>
+                    <button type="button" onClick={() => launchParty('cinema')} className="rounded-lg px-2 py-2 text-left text-xs hover:bg-current/10">
+                        <span className="block font-semibold text-[#635bff]">🎟️ Ciné ce soir</span>
+                        <span className="opacity-75">Une séance au Grand Sud</span>
+                    </button>
+                </div>
+            </div>}
             {error && <p className="px-2 pb-1 text-xs text-rose-500" role="alert">{error}</p>}
             <div className="flex items-end gap-1">
                 <button
                     type="button"
-                    onClick={() => { setShowCineHelp(false); setShowEmojis((value) => !value); }}
+                    onClick={() => { setShowCineHelp(false); setShowPartyPicker(false); setShowEmojis((value) => !value); }}
                     className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full hover:bg-current/10 ${showEmojis ? 'text-[#635bff]' : ''}`}
                     aria-label="Choisir un emoji"
                     aria-expanded={showEmojis}
@@ -351,12 +382,20 @@ export default function ChatDock({ isDarkMode }) {
                 </button>
                 <button
                     type="button"
-                    onClick={() => { setShowEmojis(false); setShowCineHelp((value) => !value); }}
+                    onClick={() => { setShowEmojis(false); setShowPartyPicker(false); setShowCineHelp((value) => !value); }}
                     className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-lg hover:bg-current/10 ${showCineHelp ? 'bg-[#635bff]/10' : ''}`}
                     aria-label="Commandes du bot Ciné"
                     aria-expanded={showCineHelp}
                     title="Bot Ciné"
                 >🎬</button>
+                <button
+                    type="button"
+                    onClick={() => { setShowEmojis(false); setShowCineHelp(false); setShowPartyPicker((value) => !value); }}
+                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-lg hover:bg-current/10 ${showPartyPicker ? 'bg-[#635bff]/10' : ''}`}
+                    aria-label="Lancer une soirée film"
+                    aria-expanded={showPartyPicker}
+                    title="Soirée film"
+                >🍿</button>
                 <textarea
                     ref={inputRef}
                     value={draft}

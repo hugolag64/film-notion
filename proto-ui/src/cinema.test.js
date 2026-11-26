@@ -5,6 +5,7 @@ import { CINE_COMMANDS, filmButtons, helpCommands, isBotMessage, isCineCommand, 
 
 test('reconnaît les messages du bot', () => {
     assert.equal(isBotMessage({ author: { id: 'bot:cine' } }), true);
+    assert.equal(isBotMessage({ author: { id: 'bot:soiree' } }), true);
     assert.equal(isBotMessage({ author: { id: 'hugo' } }), false);
     assert.equal(isBotMessage(null), false);
 });

@@ -10,8 +10,11 @@ export const CINE_COMMANDS = [
     { command: '@ciné aide', description: 'Cette liste de commandes.' },
 ];
 
+// Les deux bots du salon : « Ciné » et « Soirée ».
+const BOT_IDS = new Set([BOT_ID, 'bot:soiree']);
+
 export function isBotMessage(message) {
-    return message?.author?.id === BOT_ID;
+    return BOT_IDS.has(message?.author?.id);
 }
 
 export function filmButtons(payload) {

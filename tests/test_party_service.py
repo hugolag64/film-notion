@@ -94,6 +94,8 @@ def test_start_posts_bot_card_and_joins_starter(tmp_path):
     assert state["members"] == [{"name": "Hugo", "answered": False, "late": False}]
     assert state["status"] == "joining"
     assert state["me"]["member"] is True
+    assert state["me"]["starter"] is True
+    assert run(service.state(state["id"], "lea"))["me"]["starter"] is False
 
 
 def test_second_party_refused_while_one_is_active(tmp_path):

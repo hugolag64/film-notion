@@ -121,6 +121,7 @@ class PartyService:
             "me": {
                 "member": me is not None,
                 "answered": bool(me and me["answers"] is not None),
+                "starter": party["starter_id"] == viewer_id,
                 "votes": {v["rank"]: v["value"] for v in votes if v["user_id"] == viewer_id},
             },
             "proposals": [

@@ -1599,7 +1599,7 @@ export default function BackstagePrototype() {
             </nav>
 
             {showAccountPanel &&<AccountPanel isDarkMode={isDarkMode} onClose={() => setShowAccountPanel(false)} />}
-            <ChatDock isDarkMode={isDarkMode} />
+            <ChatDock isDarkMode={isDarkMode} onOpenFilm={openTMDBPreview} />
             {seenDialogMovie && <SeenDialog movie={seenDialogMovie} isDarkMode={isDarkMode} onSave={saveLibrarySeen} onClose={() => setSeenDialogMovie(null)} />}
             {showAdminCenter && user?.role === 'admin' && <AdminCenter isDarkMode={isDarkMode} onClose={() => setShowAdminCenter(false)} onMediaChanged={loadRealMedias} />}
             {showRecommendationFlow && <RecommendationFlow isDarkMode={isDarkMode} onClose={() => setShowRecommendationFlow(false)} onPlay={openJellyfinPlayer} />}
