@@ -18,7 +18,10 @@ export function partyStep(state) {
         if (!me.member) return 'join';
         return me.answered ? 'wait' : 'answer';
     }
-    if (state?.status === 'voting') return me.member ? 'vote' : 'join';
+    if (state?.status === 'voting') {
+        if (Array.isArray(state.proposals) && state.proposals.length === 0) return 'searching';
+        return me.member ? 'vote' : 'join';
+    }
     return 'over';
 }
 

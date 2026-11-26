@@ -40,6 +40,16 @@ EMPTY_MESSAGES = {
 }
 
 
+class _NoTMDB:
+    """TMDB non configuré : chaque appel échoue comme une panne, que les candidats tolèrent."""
+
+    async def discover_movies(self, **kwargs):
+        raise ValueError("TMDB indisponible")
+
+    async def get_movie_details(self, tmdb_id):
+        raise ValueError("TMDB indisponible")
+
+
 class PartyError(Exception):
     def __init__(self, status: int, message: str):
         super().__init__(message)
@@ -197,9 +207,11 @@ class PartyService:
         if not getattr(gateway, "enabled", False):
             return None
         try:
-            return await asyncio.to_thread(
-                gateway.select_group, profile.model_dump(mode="json"), combined, candidates[:TOP_N],
-            )
+            # Gemini ne choisit que parmi des films identifiés (un film du ciné peut ne pas l'être).
+            known = [c for c in candidates[:TOP_N] if c.get("tmdb_id")]
+            if len(known) < 3:
+                return None
+            return await asyncio.to_thread(gateway.select_group, profile.model_dump(mode="json"), combined, known)
         except Exception as error:  # Gemini est une aide : le classement local suffit.
             logger.warning("[soirée] Gemini indisponible : %s", error)
             return None
@@ -210,7 +222,27 @@ class PartyService:
         now = self.clock()
         if not await self.parties.set_status(party_id, "voting", at=now):
             raise PartyError(409, "La soirée est déjà lancée.")
-        members = await self.parties.list_members(party_id)
+        try:
+            proposals = await self._propose(party, now)
+        except Exception:  # Une panne ne doit pas bloquer la coloc pendant 3 h.
+            logger.exception("[soirée] Lancement impossible")
+            proposals = []
+        if not proposals:
+            await self.parties.set_status(party_id, "empty", at=now)
+            await self._bot_say(EMPTY_MESSAGES[party["mode"]])
+            return await self.state(party_id, user["id"])
+        await self.parties.replace_proposals(party_id, proposals)
+        return await self.state(party_id, user["id"])
+
+    def _tmdb(self):
+        try:
+            return self.tmdb_factory()
+        except ValueError as error:
+            logger.warning("[soirée] TMDB indisponible : %s", error)
+            return _NoTMDB()
+
+    async def _propose(self, party: dict, now: datetime) -> list[dict]:
+        members = await self.parties.list_members(party["id"])
         answered = [m for m in members if m["answers"] is not None] or members
         medias = await self.store.fetch_all()
         profiles, seen = [], set()
@@ -221,18 +253,15 @@ class PartyService:
                 profiles.append(profile)
         profile = average_profiles(profiles)
         combined = combine_answers([m["answers"] for m in answered if m["answers"]])
-        tmdb = self.tmdb_factory()
+        tmdb = self._tmdb()
         if party["mode"] == "cinema":
             candidates = await cinema_candidates(CinemaStore(self.store.db_path), tmdb, profile, combined, now)
         else:
             candidates = await coloc_candidates(self.store, tmdb, profile, combined, seen, now)
         if not candidates:
-            await self.parties.set_status(party_id, "empty", at=now)
-            await self._bot_say(EMPTY_MESSAGES[party["mode"]])
-            return await self.state(party_id, user["id"])
+            return []
         pick = await self._gemini_pick(profile, combined, candidates)
-        await self.parties.replace_proposals(party_id, pick_three(candidates, pick))
-        return await self.state(party_id, user["id"])
+        return pick_three(candidates, pick)
 
     async def vote(self, party_id: str, user: dict, rank: int, value: int) -> dict:
         party = await self._party(party_id)
@@ -257,8 +286,19 @@ class PartyService:
         self._require_status(party, "voting")
         return await self._finish(party_id, user["id"] if user else party["starter_id"])
 
+    async def cancel(self, party_id: str, user: dict) -> dict:
+        party = await self._party(party_id)
+        self._require_starter(party, user)
+        self._require_status(party, "joining", "voting")
+        if await self.parties.set_status(party_id, "cancelled", at=self.clock()):
+            await self._bot_say(f"Soirée annulée par {_name(user)}.")
+        return await self.state(party_id, user["id"])
+
     async def _finish(self, party_id: str, viewer_id: str) -> dict:
         proposals = await self.parties.list_proposals(party_id)
+        if not proposals:
+            await self.parties.set_status(party_id, "empty", at=self.clock())
+            return await self.state(party_id, viewer_id)
         winner_rank = tally(proposals, await self.parties.list_votes(party_id))["winner_rank"]
         winner = next(p for p in proposals if p["rank"] == winner_rank)
         if await self.parties.set_status(party_id, "done", at=self.clock(), winner_tmdb_id=winner["tmdb_id"]):

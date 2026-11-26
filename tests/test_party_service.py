@@ -285,3 +285,59 @@ def test_chat_command_starts_coloc_party_and_help_without_argument(tmp_path):
     refused = run(service.handle_chat_message("@soirée ciné", LEA))
     assert refused["body"] == "Une soirée est déjà en cours."
     assert run(service.handle_chat_message("salut", HUGO)) is None
+
+
+def test_launch_failure_ends_party_and_frees_the_flat(tmp_path):
+    store = MediaStore(str(tmp_path / "f.db"))
+    store.init_schema()
+
+    def broken_tmdb():
+        raise ValueError("TMDB_API_KEY manquante")
+
+    service = PartyService(store, tmdb_factory=broken_tmdb, gateway_factory=lambda: FakeGateway(), clock=Clock(T0))
+    party_id = _ready_party(service)
+
+    state = run(service.launch(party_id, HUGO))
+
+    assert state["status"] == "empty"
+    assert run(store.list_chat_messages(None))[-1]["body"] == "Pas de film trouvé pour ce soir."
+    assert run(service.start(LEA, "coloc"))["status"] == "joining"
+
+
+def test_starter_can_cancel_a_party(tmp_path):
+    store, service = _service(tmp_path)
+    party_id = _ready_party(service, LEA)
+
+    with pytest.raises(PartyError) as error:
+        run(service.cancel(party_id, LEA))
+    assert _status(error) == 403
+    state = run(service.cancel(party_id, HUGO))
+
+    assert state["status"] == "cancelled"
+    assert run(store.list_chat_messages(None))[-1]["body"] == "Soirée annulée par Hugo."
+    assert run(service.start(LEA, "cinema"))["status"] == "joining"
+
+
+def test_cinema_gemini_ignores_films_without_tmdb_id(tmp_path):
+    seen = {}
+
+    class Recorder(FakeGateway):
+        def select_group(self, profile, combined, candidates):
+            seen["ids"] = [c["tmdb_id"] for c in candidates]
+            return None
+
+    store, service = _service(tmp_path, gateway=Recorder())
+    cinema = CinemaStore(store.db_path)
+    run(cinema.upsert_site_film(1, "Sans TMDB", "https://cine/1", None))
+    run(cinema.upsert_site_film(2, "Avec TMDB", "https://cine/2", None))
+    for site_id in (2, 3, 4):
+        if site_id != 2:
+            run(cinema.upsert_site_film(site_id, f"Film {site_id}", f"https://cine/{site_id}", None))
+        run(cinema.set_tmdb_match(site_id, site_id * 11, T0))
+    tonight = [Showtime(T0 + timedelta(hours=1), "VF", None)]
+    run(cinema.replace_showtimes({site_id: tonight for site_id in (1, 2, 3, 4)}))
+    state = run(service.start(HUGO, "cinema"))
+
+    run(service.launch(state["id"], HUGO))
+
+    assert sorted(seen["ids"]) == [22, 33, 44]

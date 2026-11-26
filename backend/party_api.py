@@ -77,6 +77,11 @@ async def vote_party(
     return await _call(PartyService(store).vote(party_id, current.user, payload.rank, payload.value))
 
 
+@party_router.post("/{party_id}/cancel")
+async def cancel_party(party_id: str, current: AuthContext = Depends(get_current_user), store: MediaStore = Depends(get_store)):
+    return await _call(PartyService(store).cancel(party_id, current.user))
+
+
 @party_router.post("/{party_id}/close")
 async def close_party(party_id: str, current: AuthContext = Depends(get_current_user), store: MediaStore = Depends(get_store)):
     return await _call(PartyService(store).close(party_id, current.user))

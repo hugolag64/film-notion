@@ -178,3 +178,22 @@ def test_coloc_drops_server_film_longer_than_runtime_max(tmp_path):
     found = run(coloc_candidates(store, tmdb, TasteProfile(), {**ANY, "runtime_max": 135}, set(), NOW))
 
     assert sorted(c["title"] for c in found) == ["Court", "Durée inconnue"]
+
+
+def test_slow_tmdb_details_are_bounded(tmp_path, monkeypatch):
+    import backend.core.party_candidates as candidates_module
+    monkeypatch.setattr(candidates_module, "DETAILS_TIMEOUT_SEC", 0.05)
+    _, cinema = _stores(tmp_path)
+    for site_id in (1, 2, 3):
+        _film(cinema, site_id, f"F{site_id}", tmdb_id=10 + site_id)
+    run(cinema.replace_showtimes({sid: [Showtime(datetime(2026, 11, 26, 20, 0), "", None)] for sid in (1, 2, 3)}))
+
+    class SlowTMDB(FakeTMDB):
+        async def get_movie_details(self, tmdb_id):
+            await asyncio.sleep(5)
+
+    started = datetime.now()
+    found = run(cinema_candidates(cinema, SlowTMDB(), TasteProfile(), ANY, NOW))
+
+    assert len(found) == 3
+    assert (datetime.now() - started).total_seconds() < 2

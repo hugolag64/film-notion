@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, datetime, time, timedelta
 from typing import Any, Optional
@@ -21,6 +22,16 @@ TOP_N = 15
 RECENT_ERA_YEARS = 6
 CLASSIC_ERA_END = "2005-12-31"
 _TMDB_ERRORS = (ValueError, httpx.HTTPError)
+DETAILS_TIMEOUT_SEC = 8.0
+
+
+async def _details(tmdb, tmdb_id: int, title: str) -> dict:
+    """Détails TMDB d'un film, bornés dans le temps : un TMDB lent ne bloque pas la soirée."""
+    try:
+        return await asyncio.wait_for(tmdb.get_movie_details(tmdb_id), DETAILS_TIMEOUT_SEC) or {}
+    except (asyncio.TimeoutError, *_TMDB_ERRORS) as error:
+        logger.warning("[soirée] Détails TMDB indisponibles pour %s : %r", title, error)
+        return {}
 
 
 def _score(candidate: dict, profile: TasteProfile, combined: dict, now: datetime) -> float:
@@ -38,6 +49,9 @@ async def cinema_candidates(
     for show in await cinema.list_showtimes(now, midnight):
         if show["site_id"] in films:
             next_show.setdefault(show["site_id"], show)
+    with_tmdb = [films[site_id] for site_id in next_show if films[site_id]["tmdb_id"]]
+    fetched = await asyncio.gather(*(_details(tmdb, film["tmdb_id"], film["title"]) for film in with_tmdb))
+    details_by_site = {film["site_id"]: details for film, details in zip(with_tmdb, fetched)}
     found = []
     for site_id, show in next_show.items():
         film = films[site_id]
@@ -47,11 +61,7 @@ async def cinema_candidates(
             "showtime": {"time": f"{show['starts_at']:%H:%M}", "version": show["version"], "booking_url": show["booking_url"]},
         }
         if film["tmdb_id"]:
-            try:
-                details = await tmdb.get_movie_details(film["tmdb_id"]) or {}
-            except _TMDB_ERRORS as error:
-                logger.warning("[soirée] Détails TMDB indisponibles pour %s : %s", film["title"], error)
-                details = {}
+            details = details_by_site.get(site_id, {})
             runtime = details.get("runtime")
             if runtime and combined.get("runtime_max") and runtime > combined["runtime_max"]:
                 continue
@@ -115,18 +125,13 @@ async def coloc_candidates(
 async def _within_runtime(candidates: list[dict], tmdb, runtime_max: int) -> list[dict]:
     """La bibliothèque ne connaît pas la durée : on la demande à TMDB, seulement pour
     les films du serveur assez bien classés pour être proposés."""
-    kept: list[dict] = []
-    for candidate in candidates:
-        if candidate["source"] == "server" and len(kept) < TOP_N:
-            try:
-                runtime = ((await tmdb.get_movie_details(candidate["tmdb_id"])) or {}).get("runtime")
-            except _TMDB_ERRORS as error:
-                logger.warning("[soirée] Durée inconnue pour %s : %s", candidate["title"], error)
-                runtime = None
-            if runtime and runtime > runtime_max:
-                continue
-        kept.append(candidate)
-    return kept
+    checked = [c for c in candidates[: TOP_N * 2] if c["source"] == "server"]
+    fetched = await asyncio.gather(*(_details(tmdb, c["tmdb_id"], c["title"]) for c in checked))
+    too_long = {
+        c["tmdb_id"] for c, details in zip(checked, fetched)
+        if details.get("runtime") and details["runtime"] > runtime_max
+    }
+    return [c for c in candidates if c["tmdb_id"] not in too_long]
 
 
 def pick_three(candidates: list[dict], pick: Optional[GeminiGroupPick]) -> list[dict]:

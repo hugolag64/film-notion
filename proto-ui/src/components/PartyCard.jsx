@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { answerParty, closeParty, fetchParty, joinParty, launchParty, voteParty } from '../api';
+import { answerParty, cancelParty, closeParty, fetchParty, joinParty, launchParty, voteParty } from '../api';
 import { PARTY_POLL_MS, isPartyActive, partyStep, safeBookingUrl, voteSummary } from '../party';
 
 const SOURCE_LABELS = { server: 'Sur le serveur', tmdb: 'À demander' };
+const OVER_LABELS = { expired: 'Soirée expirée.', cancelled: 'Soirée annulée.' };
 
 function Poster({ proposal, onOpenFilm }) {
     const image = proposal.poster_url
@@ -145,7 +146,11 @@ export default function PartyCard({ partyId, isDarkMode, onOpenFilm }) {
             </div>
         </div>}
 
-        {step === 'over' && <p className="opacity-75">{state.status === 'expired' ? 'Soirée expirée.' : 'Pas de proposition ce soir.'}</p>}
+        {step === 'searching' && <p className="opacity-75">Recherche des films…</p>}
+
+        {step === 'over' && <p className="opacity-75">{OVER_LABELS[state.status] || 'Pas de proposition ce soir.'}</p>}
+
+        {starter && isPartyActive(state) && <button type="button" disabled={busy} onClick={() => act(() => cancelParty(partyId))} className="mt-2 w-full text-center text-[11px] underline opacity-60 hover:opacity-100">Annuler la soirée</button>}
 
         {error && <p className="mt-1 text-rose-500" role="alert">{error}</p>}
     </div>;

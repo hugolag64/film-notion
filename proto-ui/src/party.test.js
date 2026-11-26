@@ -47,3 +47,9 @@ test("n'ouvre que des liens de réservation web", () => {
     assert.equal(safeBookingUrl('javascript:alert(1)'), null);
     assert.equal(safeBookingUrl(null), null);
 });
+
+test('montre la recherche tant que les films ne sont pas là', () => {
+    assert.equal(partyStep({ ...state('voting', { member: true }), proposals: [] }), 'searching');
+    assert.equal(partyStep({ ...state('voting'), proposals: [] }), 'searching');
+    assert.equal(partyStep({ ...state('voting', { member: true }), proposals: [{ rank: 1 }] }), 'vote');
+});

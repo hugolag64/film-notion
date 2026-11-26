@@ -549,6 +549,10 @@ export function voteParty(partyId, rank, value) {
     return partyRequest(`/${encodeURIComponent(partyId)}/votes`, {rank, value}, 'Vote non enregistré');
 }
 
+export function cancelParty(partyId) {
+    return partyRequest(`/${encodeURIComponent(partyId)}/cancel`, undefined, 'Soirée non annulée');
+}
+
 export function closeParty(partyId) {
     return partyRequest(`/${encodeURIComponent(partyId)}/close`, undefined, 'Vote non clos');
 }
