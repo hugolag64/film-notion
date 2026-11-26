@@ -46,7 +46,8 @@ if os.path.exists(DIST_DIR):
         app.mount("/assets", StaticFiles(directory=assets_dir), name="react_assets")
 
     def serve_react_index():
-        return FileResponse(os.path.join(DIST_DIR, "index.html"))
+        # no-cache : après un déploiement, le navigateur recharge la nouvelle version au lieu de garder l'ancienne.
+        return FileResponse(os.path.join(DIST_DIR, "index.html"), headers={"Cache-Control": "no-cache"})
 
     @ui.page("/")
     def serve_index():

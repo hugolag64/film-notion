@@ -495,6 +495,9 @@ class MediaStore:
             chat_columns = {row[1] for row in conn.execute("PRAGMA table_info(chat_messages)").fetchall()}
             if "payload" not in chat_columns:
                 conn.execute("ALTER TABLE chat_messages ADD COLUMN payload TEXT")
+            if "visible_to" not in chat_columns:
+                # Réponses de bot et commandes visibles par une seule personne (NULL = tout le salon).
+                conn.execute("ALTER TABLE chat_messages ADD COLUMN visible_to TEXT")
             tmdb_cache_columns = {row[1] for row in conn.execute("PRAGMA table_info(tmdb_movie_cache)").fetchall()}
             if "fr_release_date" not in tmdb_cache_columns:
                 conn.execute("ALTER TABLE tmdb_movie_cache ADD COLUMN fr_release_date TEXT")
@@ -1594,50 +1597,60 @@ class MediaStore:
             "body": row["body"],
             "created_at": row["created_at"],
             "payload": json.loads(row["payload"]) if row["payload"] else None,
+            "private": row["visible_to"] is not None,
         }
 
     def _create_chat_message_sync(
         self, author_id: str, author_name: str, author_avatar_url: Optional[str], body: str,
-        payload: Optional[Dict[str, Any]] = None,
+        payload: Optional[Dict[str, Any]] = None, visible_to: Optional[str] = None,
     ) -> Dict[str, Any]:
         created_at = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
-                "INSERT INTO chat_messages (author_id, author_name, author_avatar_url, body, created_at, payload) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO chat_messages "
+                "(author_id, author_name, author_avatar_url, body, created_at, payload, visible_to) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     author_id, author_name, author_avatar_url, body, created_at,
                     json.dumps(payload, ensure_ascii=False) if payload is not None else None,
+                    visible_to,
                 ),
             )
             row = conn.execute("SELECT * FROM chat_messages WHERE id = ?", (cursor.lastrowid,)).fetchone()
         return self._row_to_chat_message(row)
 
-    def _list_chat_messages_sync(self, after_id: Optional[int], limit: int) -> List[Dict[str, Any]]:
+    def _list_chat_messages_sync(
+        self, after_id: Optional[int], limit: int, viewer_id: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        visible = "(visible_to IS NULL OR visible_to = ?)"
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             if after_id is None:
                 rows = conn.execute(
-                    "SELECT * FROM chat_messages ORDER BY id DESC LIMIT ?", (limit,),
+                    f"SELECT * FROM chat_messages WHERE {visible} ORDER BY id DESC LIMIT ?", (viewer_id, limit),
                 ).fetchall()
                 rows.reverse()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM chat_messages WHERE id > ? ORDER BY id ASC LIMIT ?", (after_id, limit),
+                    f"SELECT * FROM chat_messages WHERE id > ? AND {visible} ORDER BY id ASC LIMIT ?",
+                    (after_id, viewer_id, limit),
                 ).fetchall()
         return [self._row_to_chat_message(row) for row in rows]
 
     async def create_chat_message(
         self, author_id: str, author_name: str, author_avatar_url: Optional[str], body: str,
-        payload: Optional[Dict[str, Any]] = None,
+        payload: Optional[Dict[str, Any]] = None, visible_to: Optional[str] = None,
     ) -> Dict[str, Any]:
         return await asyncio.to_thread(
-            self._create_chat_message_sync, author_id, author_name, author_avatar_url, body, payload,
+            self._create_chat_message_sync, author_id, author_name, author_avatar_url, body, payload, visible_to,
         )
 
-    async def list_chat_messages(self, after_id: Optional[int] = None, limit: int = 50) -> List[Dict[str, Any]]:
-        return await asyncio.to_thread(self._list_chat_messages_sync, after_id, limit)
+    async def list_chat_messages(
+        self, after_id: Optional[int] = None, limit: int = 50, viewer_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Messages du salon visibles par `viewer_id` (sans lui : seulement les messages publics)."""
+        return await asyncio.to_thread(self._list_chat_messages_sync, after_id, limit, viewer_id)
 
     def _mark_notification_read_sync(self, notification_id: str, user_id: str, read_at: datetime) -> bool:
         with sqlite3.connect(self.db_path) as conn:

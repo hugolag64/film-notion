@@ -44,7 +44,7 @@ from backend.core.guided_recommendations import apply_guided_answer, guided_ques
 from backend.auth_api import AuthContext, get_auth_store, get_current_user, get_jellyfin_client, require_admin
 from backend.core.auth import AuthStore
 from backend.core import cinema_bot
-from backend.core.party_service import PartyService
+from backend.core.party_service import PartyService, is_party_command
 from urllib.parse import quote, parse_qsl, urlencode, urlsplit, urlunsplit
 
 logger = logging.getLogger(__name__)
@@ -2680,7 +2680,7 @@ async def list_chat_messages(
     current: AuthContext = Depends(get_current_user),
     store: MediaStore = Depends(get_store),
 ):
-    return {"messages": await store.list_chat_messages(after)}
+    return {"messages": await store.list_chat_messages(after, viewer_id=current.user["id"])}
 
 
 @router.post("/chat/messages")
@@ -2695,11 +2695,14 @@ async def post_chat_message(
     if len(body) > CHAT_MESSAGE_MAX_LENGTH:
         raise HTTPException(status_code=400, detail=f"Message trop long ({CHAT_MESSAGE_MAX_LENGTH} caractères max).")
     user = current.user
+    # Les commandes de bot (@ciné, @soirée) et leurs réponses ne regardent que celui qui demande.
+    is_command = cinema_bot.parse_command(body) is not None or is_party_command(body)
     message = await store.create_chat_message(
         user["id"], user.get("display_name") or "Anonyme", user.get("avatar_url"), body,
+        visible_to=user["id"] if is_command else None,
     )
     try:
-        await cinema_bot.handle_chat_message(body, store)
+        await cinema_bot.handle_chat_message(body, store, visible_to=user["id"])
     except Exception:
         logger.exception("[cinema] Le bot n'a pas pu répondre")
     try:

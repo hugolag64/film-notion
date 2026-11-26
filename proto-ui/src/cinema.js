@@ -10,6 +10,23 @@ export const CINE_COMMANDS = [
     { command: '@ciné aide', description: 'Cette liste de commandes.' },
 ];
 
+// Le panneau « ? » du salon : chaque commande, et qui voit la réponse.
+export const HELP_SECTIONS = [
+    {
+        title: 'Horaires du Grand Sud',
+        audience: 'Réponse visible par toi seul',
+        commands: CINE_COMMANDS.filter((c) => c.command !== '@ciné aide'),
+    },
+    {
+        title: 'Soirée film',
+        audience: 'Visible par tout le salon (ou bouton 🍿)',
+        commands: [
+            { command: '@soirée coloc', description: 'Choisir ensemble un film à regarder ici, sur le serveur ou à demander.' },
+            { command: '@soirée ciné', description: 'Choisir ensemble une séance ce soir au Grand Sud.' },
+        ],
+    },
+];
+
 // Les deux bots du salon : « Ciné » et « Soirée ».
 const BOT_IDS = new Set([BOT_ID, 'bot:soiree']);
 

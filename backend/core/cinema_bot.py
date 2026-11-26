@@ -108,13 +108,15 @@ async def build_reply(command: str, cinema: CinemaStore, now: datetime) -> tuple
     )
 
 
-async def handle_chat_message(body: str, store: MediaStore, now: Optional[datetime] = None) -> Optional[dict]:
+async def handle_chat_message(
+    body: str, store: MediaStore, now: Optional[datetime] = None, visible_to: Optional[str] = None,
+) -> Optional[dict]:
     command = parse_command(body)
     if command is None:
         return None
     cinema = CinemaStore(store.db_path)
     reply, payload = await build_reply(command, cinema, now or reunion_now())
-    return await store.create_chat_message(BOT_ID, BOT_NAME, None, reply, payload=payload)
+    return await store.create_chat_message(BOT_ID, BOT_NAME, None, reply, payload=payload, visible_to=visible_to)
 
 
 async def film_showtimes(cinema: CinemaStore, site_id: int, now: datetime) -> Optional[dict]:

@@ -3,7 +3,7 @@ import Icon from './Icon';
 import { fetchChatMessages, fetchFilmShowtimes, postChatMessage, startParty } from '../api';
 import { PARTY_BOT_ID, isPartyCommand, partyIdOf } from '../party';
 import PartyCard from './PartyCard';
-import { CINE_COMMANDS, filmButtons, helpCommands, isBotMessage, isCineCommand, showtimeLine } from '../cinema';
+import { HELP_SECTIONS, filmButtons, helpCommands, isBotMessage, isCineCommand, showtimeLine } from '../cinema';
 import { useAuth } from '../auth-context';
 
 // A shared room for everyone on the server. Polling keeps it simple: fast
@@ -304,6 +304,7 @@ export default function ChatDock({ isDarkMode, onOpenFilm }) {
                                 ? 'rounded-br-md bg-[#635bff] text-white'
                                 : isDarkMode ? 'rounded-bl-md bg-white/10' : 'rounded-bl-md bg-[#f1f4f8]'}`}
                         >{message.body}</p>
+                        {message.private && <span className="mt-0.5 px-1 text-[10px] opacity-60">🔒 Visible par toi seul</span>}
                         {films.length > 0 && <div className="mt-1 flex flex-wrap gap-1">
                             {films.map((film) => {
                                 const active = openFilm?.messageId === message.id && openFilm?.siteId === film.site_id;
@@ -344,16 +345,21 @@ export default function ChatDock({ isDarkMode, onOpenFilm }) {
                     aria-label={`Ajouter ${emoji}`}
                 >{emoji}</button>)}
             </div>}
-            {showCineHelp && <div className={`absolute bottom-full left-2 right-2 mb-2 rounded-xl border p-2 shadow-xl ${surface}`} role="group" aria-label="Commandes du bot Ciné">
-                <p className="px-1 pb-1 text-xs font-semibold">Commandes du bot Ciné</p>
-                <ul className="space-y-1">
-                    {CINE_COMMANDS.map((item) => <li key={item.command}>
-                        <button type="button" onClick={() => putCommand(item.command)} className="w-full rounded-lg px-2 py-1 text-left text-xs hover:bg-current/10">
-                            <span className="font-semibold text-[#635bff]">{item.command}</span>
-                            <span className="block opacity-75">{item.description}</span>
-                        </button>
-                    </li>)}
-                </ul>
+            {showCineHelp && <div className={`absolute bottom-full left-2 right-2 mb-2 max-h-80 overflow-y-auto rounded-xl border p-2 shadow-xl ${surface}`} role="group" aria-label="Aide du salon">
+                <p className="px-1 pb-1 text-xs font-semibold">Aide du salon</p>
+                <p className="px-1 pb-2 text-[11px] opacity-75">Clique sur une commande pour l’écrire, puis envoie-la.</p>
+                {HELP_SECTIONS.map((section) => <div key={section.title} className="mb-2 last:mb-0">
+                    <p className="px-1 text-xs font-semibold">{section.title}</p>
+                    <p className="px-1 pb-1 text-[11px] opacity-60">{section.audience}</p>
+                    <ul className="space-y-1">
+                        {section.commands.map((item) => <li key={item.command}>
+                            <button type="button" onClick={() => putCommand(item.command)} className="w-full rounded-lg px-2 py-1 text-left text-xs hover:bg-current/10">
+                                <span className="font-semibold text-[#635bff]">{item.command}</span>
+                                <span className="block opacity-75">{item.description}</span>
+                            </button>
+                        </li>)}
+                    </ul>
+                </div>)}
             </div>}
             {showPartyPicker && <div className={`absolute bottom-full left-2 right-2 mb-2 rounded-xl border p-2 shadow-xl ${surface}`} role="group" aria-label="Lancer une soirée film">
                 <p className="px-1 pb-1 text-xs font-semibold">Lancer une soirée film</p>
@@ -383,11 +389,11 @@ export default function ChatDock({ isDarkMode, onOpenFilm }) {
                 <button
                     type="button"
                     onClick={() => { setShowEmojis(false); setShowPartyPicker(false); setShowCineHelp((value) => !value); }}
-                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-lg hover:bg-current/10 ${showCineHelp ? 'bg-[#635bff]/10' : ''}`}
-                    aria-label="Commandes du bot Ciné"
+                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-base font-bold hover:bg-current/10 ${showCineHelp ? 'bg-[#635bff]/10 text-[#635bff]' : ''}`}
+                    aria-label="Aide : les commandes du salon"
                     aria-expanded={showCineHelp}
-                    title="Bot Ciné"
-                >🎬</button>
+                    title="Aide"
+                >?</button>
                 <button
                     type="button"
                     onClick={() => { setShowEmojis(false); setShowCineHelp(false); setShowPartyPicker((value) => !value); }}

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { CINE_COMMANDS, filmButtons, helpCommands, isBotMessage, isCineCommand, showtimeLine } from './cinema.js';
+import { CINE_COMMANDS, HELP_SECTIONS, filmButtons, helpCommands, isBotMessage, isCineCommand, showtimeLine } from './cinema.js';
 
 test('reconnaît les messages du bot', () => {
     assert.equal(isBotMessage({ author: { id: 'bot:cine' } }), true);
@@ -39,4 +39,13 @@ test('repère un message adressé au bot', () => {
     assert.equal(isCineCommand('  @CINE demain'), true);
     assert.equal(isCineCommand('@cinéma'), false);
     assert.equal(isCineCommand('salut @ciné'), false);
+});
+
+test('help sections list every command and say who sees the answer', () => {
+    assert.deepEqual(HELP_SECTIONS.map((s) => s.title), ['Horaires du Grand Sud', 'Soirée film']);
+    assert.deepEqual(HELP_SECTIONS[0].commands.map((c) => c.command), ['@ciné films', '@ciné ce soir', '@ciné demain']);
+    assert.deepEqual(HELP_SECTIONS[1].commands.map((c) => c.command), ['@soirée coloc', '@soirée ciné']);
+    assert.match(HELP_SECTIONS[0].audience, /toi seul/);
+    assert.match(HELP_SECTIONS[1].audience, /tout le salon/);
+    assert.ok(HELP_SECTIONS.every((s) => s.commands.every((c) => c.description)));
 });

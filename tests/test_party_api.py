@@ -3,7 +3,7 @@ import asyncio
 import pytest
 from fastapi import HTTPException
 
-from backend.api import PostChatMessageRequest, post_chat_message
+from backend.api import PostChatMessageRequest, list_chat_messages, post_chat_message
 from backend.auth_api import AuthContext
 from backend.core.party_store import PartyStore
 from backend.core.store import MediaStore
@@ -65,3 +65,49 @@ def test_chat_command_starts_a_party(tmp_path):
     party = asyncio.run(PartyStore(store.db_path).active_party())
     assert party["mode"] == "coloc"
     assert asyncio.run(store.list_chat_messages(None))[-1]["payload"]["type"] == "party"
+
+
+def _seen_by(store, user_id):
+    return asyncio.run(list_chat_messages(None, _user(user_id, user_id), store))["messages"]
+
+
+def test_cinema_command_and_reply_stay_private(tmp_path):
+    store = _store(tmp_path)
+
+    sent = asyncio.run(post_chat_message(PostChatMessageRequest(body="@ciné aide"), _user(), store))
+
+    assert sent["private"] is True
+    assert _seen_by(store, "lea") == []
+    mine = _seen_by(store, "hugo")
+    assert [m["author"]["id"] for m in mine] == ["hugo", "bot:cine"]
+    assert all(m["private"] for m in mine)
+
+
+def test_party_announcement_is_public_but_the_command_is_not(tmp_path):
+    store = _store(tmp_path)
+
+    asyncio.run(post_chat_message(PostChatMessageRequest(body="@soirée coloc"), _user(), store))
+
+    seen = _seen_by(store, "lea")
+    assert [m["payload"]["type"] for m in seen] == ["party"]
+    assert seen[0]["private"] is False
+    assert len(_seen_by(store, "hugo")) == 2
+
+
+def test_party_help_and_refusals_stay_private(tmp_path):
+    store = _store(tmp_path)
+    asyncio.run(post_chat_message(PostChatMessageRequest(body="@soirée"), _user(), store))
+    asyncio.run(create_party(StartPartyRequest(mode="coloc"), _user("tom", "Tom"), store))
+    asyncio.run(post_chat_message(PostChatMessageRequest(body="@soirée ciné"), _user(), store))
+
+    assert [m["payload"]["type"] for m in _seen_by(store, "lea")] == ["party"]
+    assert [m["body"] for m in _seen_by(store, "hugo")][-1] == "Une soirée est déjà en cours."
+
+
+def test_plain_messages_stay_public(tmp_path):
+    store = _store(tmp_path)
+
+    sent = asyncio.run(post_chat_message(PostChatMessageRequest(body="bonjour"), _user(), store))
+
+    assert sent["private"] is False
+    assert [m["body"] for m in _seen_by(store, "lea")] == ["bonjour"]

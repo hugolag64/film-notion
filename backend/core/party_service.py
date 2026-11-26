@@ -66,6 +66,10 @@ def _fold(text: str) -> str:
     return "".join(c for c in decomposed if not unicodedata.combining(c)).lower()
 
 
+def is_party_command(body: str) -> bool:
+    return _COMMAND_RE.match(_fold((body or "").strip())) is not None
+
+
 def _name(user: dict) -> str:
     return user.get("display_name") or "Anonyme"
 
@@ -145,8 +149,10 @@ class PartyService:
 
     # --- Actions ------------------------------------------------------------
 
-    async def _bot_say(self, body: str, payload: Optional[dict] = None) -> dict:
-        return await self.store.create_chat_message(BOT_ID, BOT_NAME, None, body, payload=payload)
+    async def _bot_say(self, body: str, payload: Optional[dict] = None, visible_to: Optional[str] = None) -> dict:
+        return await self.store.create_chat_message(
+            BOT_ID, BOT_NAME, None, body, payload=payload, visible_to=visible_to,
+        )
 
     async def start(self, user: dict, mode: str) -> dict:
         if mode not in MODES:
@@ -309,15 +315,17 @@ class PartyService:
     # --- Salon --------------------------------------------------------------
 
     async def handle_chat_message(self, body: str, user: dict) -> Optional[dict]:
-        match = _COMMAND_RE.match(_fold((body or "").strip()))
-        if not match:
+        """Répond à @soirée : l'annonce est publique, l'aide et les refus ne vont qu'à l'auteur."""
+        if not is_party_command(body):
             return None
-        argument = " ".join(match.group(1).split())
+        argument = " ".join(_COMMAND_RE.match(_fold(body.strip())).group(1).split())
         mode = {"coloc": "coloc", "cine": "cinema", "cinema": "cinema"}.get(argument)
         if mode is None:
-            return await self._bot_say("Lance une soirée :", {"type": "cine_help", "commands": HELP_COMMANDS})
+            return await self._bot_say(
+                "Lance une soirée :", {"type": "cine_help", "commands": HELP_COMMANDS}, visible_to=user["id"],
+            )
         try:
             await self.start(user, mode)
         except PartyError as error:
-            return await self._bot_say(error.message)
+            return await self._bot_say(error.message, visible_to=user["id"])
         return None
