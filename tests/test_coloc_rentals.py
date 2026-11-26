@@ -1,5 +1,6 @@
 """Multi-user rental rules: expiry, shared kept films and no bypass of the rental flow."""
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -30,6 +31,10 @@ def _login_as_new_user(client, name="Paul"):
     client.post("/api/auth/users", json={"display_name": name, "email": email, "password": "12345678"})
     client.post("/api/auth/logout")
     client.post("/api/auth/login", json={"email": email, "password": "12345678", "remember_device": False})
+    # Accounts created by the admin must pick their own password before using the API.
+    client.post("/api/auth/change-initial-password", json={
+        "new_password": "87654321", "password_confirmation": "87654321",
+    })
     return client.get("/api/auth/me").json()["user"]["id"]
 
 
@@ -353,7 +358,30 @@ def test_library_available_lists_only_media_ready_on_jellyfin(tmp_path, monkeypa
     )))
     asyncio.run(store.upsert_availability(Availability(media_id="pending", provider="radarr", state="downloading")))
 
-    assert client.get("/api/library/available").json() == {"media_ids": ["ready"]}
+    assert client.get("/api/library/available").json()["media_ids"] == ["ready"]
+
+
+def test_library_available_shares_download_states_with_flatmates(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    _login_as_new_user(client)
+    store = MediaStore(Config.DB_PATH)
+    for media_id in ("ready", "pending"):
+        asyncio.run(store.create({"id": media_id, "title": media_id, "type": "Film"}))
+    asyncio.run(store.upsert_availability(Availability(
+        media_id="ready", provider="radarr", state="available", jellyfin_id="jf-1",
+    )))
+    asyncio.run(store.upsert_availability(Availability(
+        media_id="pending", provider="radarr", state="downloading", progress_percent=42, last_error="boom",
+    )))
+
+    body = client.get("/api/library/available").json()
+    assert body["media_ids"] == ["ready"]
+    assert body["states"] == {
+        "ready": {"state": "available", "progress_percent": None, "ready": True},
+        "pending": {"state": "downloading", "progress_percent": 42, "ready": False},
+    }
+    assert "boom" not in json.dumps(body)
 
 
 class ExpiredRadarr:

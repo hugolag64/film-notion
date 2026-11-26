@@ -595,8 +595,21 @@ async def list_available_media(
     _: AuthContext = Depends(get_current_user),
     store: MediaStore = Depends(get_store),
 ):
-    """Media whose file is ready on Jellyfin: playable now, or rentable instantly."""
-    return {"media_ids": [item.media_id for item in await store.list_availabilities() if item.jellyfin_id]}
+    """Media ready on Jellyfin (playable now, or rentable instantly), plus every
+    tracked media's download state so flatmates can see what is on its way.
+    Only the state and progress are shared: paths and errors stay admin-only."""
+    availabilities = await store.list_availabilities()
+    return {
+        "media_ids": [item.media_id for item in availabilities if item.jellyfin_id],
+        "states": {
+            item.media_id: {
+                "state": item.state,
+                "progress_percent": item.progress_percent,
+                "ready": bool(item.jellyfin_id),
+            }
+            for item in availabilities
+        },
+    }
 
 
 @router.get("/dashboard")
