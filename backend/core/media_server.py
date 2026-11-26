@@ -547,6 +547,12 @@ class MediaServerService:
                         created += 1
                     media = await self._enrich_media(media, media_type, tmdb)
                     await ensure_series_episodes(self.store, tmdb, media)
+                    current = await self.store.get_availability(media.id)
+                    if (remote.get("hasFile") and current and current.jellyfin_id
+                            and current.arr_id == remote.get("id")):
+                        # Déjà prêt dans Jellyfin : ne pas repasser par « imported » à chaque cycle.
+                        linked += 1
+                        continue
                     await self.store.upsert_availability(Availability(
                         media_id=media.id, provider=provider, arr_id=remote.get("id"),
                         state="imported" if remote.get("hasFile") else "requested",

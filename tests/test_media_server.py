@@ -1014,3 +1014,24 @@ def test_one_duplicated_film_does_not_block_the_whole_sync(tmp_path):
     interstellar = asyncio.run(store.get_availability("inter"))
     assert interstellar.state == "available"
     assert interstellar.jellyfin_id == "jelly-inter"
+
+
+def test_radarr_pass_keeps_a_film_already_ready_in_jellyfin(tmp_path):
+    # Chaque passage remettait « imported » sans lien Jellyfin avant que l'étape Jellyfin
+    # ne le rétablisse : quelques secondes de « Bientôt prêt » et de lecture impossible.
+    store = MediaStore(str(tmp_path / "test.db"))
+    store.init_schema()
+    asyncio.run(store.create({"id": "inter", "title": "Interstellar", "type": "Film", "tmdb_id": 157336}))
+    asyncio.run(store.upsert_availability(Availability(
+        media_id="inter", provider="radarr", arr_id=1, jellyfin_id="jelly-inter", state="available",
+        last_synced_at=datetime.now(timezone.utc),
+    )))
+    radarr = FakeRadarr()
+    radarr.list_library = lambda: _async_result([{"id": 1, "tmdbId": 157336, "title": "Interstellar", "hasFile": True}])
+    service = MediaServerService(store, radarr=radarr)
+
+    asyncio.run(service.import_existing_libraries())
+
+    availability = asyncio.run(store.get_availability("inter"))
+    assert availability.state == "available"
+    assert availability.jellyfin_id == "jelly-inter"
