@@ -15,7 +15,7 @@ test('open rentals: everything but expired or cancelled', () => {
 
 test('card badge: days left on an available rental', () => {
     assert.deepEqual(rentalCardBadge({ status: 'available', expires_at: '2026-12-01T12:00:00Z' }, NOW), { label: 'Ta location · J-5', tone: 'rental' });
-    assert.deepEqual(rentalCardBadge({ status: 'available', expires_at: '2026-11-20T12:00:00Z' }, NOW), { label: 'Ta location · J-0', tone: 'rental' });
+    assert.deepEqual(rentalCardBadge({ status: 'available', expires_at: '2026-11-26T18:00:00Z' }, NOW), { label: 'Ta location · J-1', tone: 'rental' });
     assert.deepEqual(rentalCardBadge({ status: 'available' }, NOW), { label: 'Ta location', tone: 'rental' });
 });
 
@@ -32,4 +32,11 @@ test('card badge: an unreadable deadline falls back to the plain label', () => {
 
 test('expiry label still counts the days left', () => {
     assert.equal(rentalExpiryLabel({ status: 'available', expires_at: '2026-11-29T12:00:00Z' }, NOW), 'expire dans 3 j');
+});
+
+test('a rental past its deadline is closed, even before the server marks it expired', () => {
+    const lapsed = { status: 'available', expires_at: '2026-11-20T12:00:00Z' };
+    assert.equal(isOpenRental(lapsed, NOW), false);
+    assert.equal(rentalCardBadge(lapsed, NOW), null);
+    assert.equal(isOpenRental({ status: 'available', expires_at: '2026-12-01T12:00:00Z' }, NOW), true);
 });

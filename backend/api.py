@@ -608,6 +608,8 @@ async def list_available_media(
                 "ready": bool(item.jellyfin_id),
             }
             for item in availabilities
+            # Deleted after a rental, revoked or dropped from Radarr: no longer on its way.
+            if not (item.state == "error" and item.arr_id is None and not item.jellyfin_id)
         },
     }
 

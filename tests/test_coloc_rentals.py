@@ -384,6 +384,23 @@ def test_library_available_shares_download_states_with_flatmates(tmp_path, monke
     assert "boom" not in json.dumps(body)
 
 
+def test_library_available_hides_films_the_server_no_longer_tracks(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _setup(client)
+    _login_as_new_user(client)
+    store = MediaStore(Config.DB_PATH)
+    for media_id in ("deleted", "failing"):
+        asyncio.run(store.create({"id": media_id, "title": media_id, "type": "Film"}))
+    # Deleted after its rental, or revoked: no Radarr entry any more.
+    asyncio.run(store.upsert_availability(Availability(media_id="deleted", provider="radarr", state="error")))
+    # A real download problem: Radarr still tracks the film.
+    asyncio.run(store.upsert_availability(Availability(media_id="failing", provider="radarr", state="error", arr_id=7)))
+
+    states = client.get("/api/library/available").json()["states"]
+    assert "deleted" not in states
+    assert states["failing"] == {"state": "error", "progress_percent": None, "ready": False}
+
+
 class ExpiredRadarr:
     def __init__(self, library):
         self.library = library

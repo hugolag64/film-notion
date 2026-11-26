@@ -62,14 +62,22 @@ export const rentalTitle = (rental, title) => (
 );
 
 /** A rental the flatmate still holds, in any stage: everything but expired or cancelled. */
-export const isOpenRental = (rental) => Boolean(rental?.status) && !['expired', 'cancelled'].includes(rental.status);
+/** The server marks a rental expired only when it is read again: mirror its rule (deadline reached). */
+const isLapsed = (rental, now) => {
+    const deadline = new Date(rental?.expires_at).getTime();
+    return rental?.status === 'available' && Boolean(rental.expires_at) && !Number.isNaN(deadline) && deadline <= now.getTime();
+};
+
+export const isOpenRental = (rental, now = new Date()) => Boolean(rental?.status)
+    && !['expired', 'cancelled'].includes(rental.status)
+    && !isLapsed(rental, now);
 
 /** Badge on a library card: « Ta location · J-5 », « Gardé », or null. */
 export const rentalCardBadge = (rental, now = new Date()) => {
     if (['kept', 'keep_requested'].includes(rental?.status)) return { label: 'Gardé', tone: 'kept' };
-    if (rental?.status !== 'available') return null;
+    if (rental?.status !== 'available' || isLapsed(rental, now)) return null;
     const deadline = new Date(rental.expires_at).getTime();
     if (!rental.expires_at || Number.isNaN(deadline)) return { label: 'Ta location', tone: 'rental' };
-    const days = Math.max(0, Math.ceil((deadline - now.getTime()) / 86_400_000));
+    const days = Math.ceil((deadline - now.getTime()) / 86_400_000);
     return { label: `Ta location · J-${days}`, tone: 'rental' };
 };
