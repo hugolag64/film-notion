@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-    addFilmListItem, createFilmList, createJournalEntry, deleteFilmList, fetchFilmList, fetchFilmLists,
-    removeFilmListItem, renameFilmList, searchTMDB,
+    addFilmListItem, createFilmList, createJournalEntry, deleteFilmList, fetchCalendarUrl, fetchFilmList, fetchFilmLists,
+    regenerateCalendarUrl, removeFilmListItem, renameFilmList, searchTMDB,
 } from '../api';
 import { BADGE_TONE_CLASSES, listItemBadge, shouldOfferSeerrRequest } from '../journal';
 import useLayer from '../useLayer';
@@ -33,6 +33,60 @@ function SeerrOfferDialog({ film, isDarkMode, onAnswer }) {
     </div>, document.body);
 }
 
+/** Private calendar feed with the release dates of every film in the shared lists. */
+function CalendarPanel({ isDarkMode, showToast }) {
+    const [url, setUrl] = useState(null);
+    const [error, setError] = useState(null);
+    const fieldRef = useRef(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        fetchCalendarUrl()
+            .then((value) => { if (!cancelled) setUrl(value); })
+            .catch((loadError) => { if (!cancelled) setError(loadError.message); });
+        return () => { cancelled = true; };
+    }, []);
+
+    const copy = async () => {
+        try {
+            await navigator.clipboard.writeText(url);
+            showToast('Adresse copiée.');
+        } catch {
+            fieldRef.current?.focus();
+            fieldRef.current?.select();
+            showToast('Copie impossible : l’adresse est sélectionnée, copie-la à la main.', 'info');
+        }
+    };
+
+    const regenerate = async () => {
+        if (!window.confirm('L’ancienne adresse cessera de fonctionner.')) return;
+        try {
+            setUrl(await regenerateCalendarUrl());
+            showToast('Nouvelle adresse créée.');
+        } catch (regenError) {
+            showToast(regenError.message, 'error');
+        }
+    };
+
+    const muted = isDarkMode ? 'text-white/60' : 'text-[#425466]';
+    return <div className={`mb-6 rounded-xl border p-4 ${isDarkMode ? 'border-white/10 bg-[#0a0a0a]' : 'border-[#e3e8ee] bg-white'}`}>
+        <p className={`text-sm ${muted}`}>Abonne-toi à cette adresse dans Google Agenda ou le calendrier de ton téléphone : les dates de sortie des films de vos listes y apparaissent.</p>
+        {error && <p role="alert" className="mt-3 text-sm text-rose-500">{error}</p>}
+        {!error && <div className="mt-3 flex flex-wrap gap-2">
+            <input
+                ref={fieldRef}
+                readOnly
+                value={url ?? 'Chargement…'}
+                onFocus={(event) => event.target.select()}
+                aria-label="Adresse de l’agenda"
+                className={`min-w-0 flex-1 rounded-lg border px-3 py-2 font-mono text-xs outline-none ${isDarkMode ? 'border-white/15 bg-black text-white' : 'border-[#e3e8ee] bg-[#f6f9fc] text-[#0a2540]'}`}
+            />
+            <button type="button" disabled={!url} onClick={copy} className="rounded-lg bg-[#635bff] px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">Copier</button>
+            <button type="button" disabled={!url} onClick={regenerate} className="rounded-lg px-3 py-2 text-sm font-semibold text-rose-500 hover:bg-rose-500/10 disabled:opacity-50">Régénérer</button>
+        </div>}
+    </div>;
+}
+
 /** Shared film lists: every flatmate can create, rename, fill and empty them. */
 export default function ListsView({ isDarkMode, showToast, onRequestOnServer, onJournalChanged }) {
     const [lists, setLists] = useState(null);
@@ -42,6 +96,7 @@ export default function ListsView({ isDarkMode, showToast, onRequestOnServer, on
     const [error, setError] = useState(null);
     const [seerrOffer, setSeerrOffer] = useState(null);
     const [seenMovie, setSeenMovie] = useState(null);
+    const [showCalendar, setShowCalendar] = useState(false);
 
     const loadLists = useCallback(async () => {
         try {
@@ -195,9 +250,13 @@ export default function ListsView({ isDarkMode, showToast, onRequestOnServer, on
     return <section aria-labelledby="lists-title">
         <div className={`mb-6 border-b pb-4 ${isDarkMode ? 'border-white/10' : 'border-[#e3e8ee]'}`}>
             <span className="text-xs font-mono font-bold uppercase tracking-widest text-[#635bff]">Entre colocs</span>
-            <h1 id="lists-title" className={`mt-1 font-serif text-3xl font-bold tracking-tight ${title}`}>Listes</h1>
+            <div className="flex flex-wrap items-end justify-between gap-3">
+                <h1 id="lists-title" className={`mt-1 font-serif text-3xl font-bold tracking-tight ${title}`}>Listes</h1>
+                <button type="button" onClick={() => setShowCalendar((value) => !value)} aria-expanded={showCalendar} className="rounded-lg px-3 py-1.5 text-sm font-semibold text-[#635bff] hover:bg-[#635bff]/10">📅 Ajouter à mon agenda</button>
+            </div>
             <p className={`mt-1 text-sm ${muted}`}>Des listes de films communes, même hors de la bibliothèque. Tout le monde peut les modifier.</p>
         </div>
+        {showCalendar && <CalendarPanel isDarkMode={isDarkMode} showToast={showToast} />}
         <form onSubmit={create} className="flex gap-2">
             <input value={newName} onChange={(event) => setNewName(event.target.value)} maxLength={60} placeholder="Nouvelle liste (ex. Films à voir au ciné)" aria-label="Nom de la nouvelle liste" className={`min-w-0 flex-1 rounded-xl border px-4 py-2.5 text-sm outline-none focus:border-[#635bff] ${isDarkMode ? 'border-white/15 bg-black text-white placeholder:text-white/40' : 'border-[#e3e8ee] bg-white text-[#0a2540]'}`} />
             <button type="submit" disabled={!newName.trim()} className="shrink-0 rounded-xl bg-[#635bff] px-4 text-sm font-semibold text-white disabled:opacity-50">Créer</button>

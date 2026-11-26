@@ -508,6 +508,24 @@ export async function postChatMessage(body) {
     return response.json();
 }
 
+export async function fetchFilmShowtimes(siteId) {
+    const response = await apiFetch(`${API_BASE_URL}/cinema/films/${encodeURIComponent(siteId)}/showtimes`);
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Horaires indisponibles pour le moment'));
+    return response.json();
+}
+
+export async function fetchCalendarUrl() {
+    const response = await apiFetch(`${API_BASE_URL}/cinema/calendar`);
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Agenda indisponible'));
+    return (await response.json()).url;
+}
+
+export async function regenerateCalendarUrl() {
+    const response = await apiFetch(`${API_BASE_URL}/cinema/calendar/regenerate`, {method: 'POST'});
+    if (!response.ok) throw new Error(errorDetail(await response.json().catch(() => null), 'Agenda indisponible'));
+    return (await response.json()).url;
+}
+
 export async function fetchMediaServerStatus() {
     const response = await apiFetch(`${API_BASE_URL}/media-server/status`);
     if (!response.ok) throw new Error('État des services indisponible');

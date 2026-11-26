@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Icon from './Icon';
-import { fetchChatMessages, postChatMessage } from '../api';
+import { fetchChatMessages, fetchFilmShowtimes, postChatMessage } from '../api';
+import { CINE_COMMANDS, filmButtons, helpCommands, isBotMessage, isCineCommand, showtimeLine } from '../cinema';
 import { useAuth } from '../auth-context';
 
 // A shared room for everyone on the server. Polling keeps it simple: fast
@@ -58,10 +59,34 @@ const initials = (name) => (name || '?').trim().split(/\s+/).slice(0, 2).map((pa
 // Only the emojis: shown big, like in messaging apps.
 const isEmojiOnly = (text) => /^(\p{Extended_Pictographic}|\p{Emoji_Component}|‍|️|\s){1,12}$/u.test(text) && !/[0-9#*]/.test(text);
 
-function Avatar({ author, isDarkMode }) {
+function Avatar({ author, isDarkMode, bot }) {
+    if (bot) return <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm ${isDarkMode ? 'bg-white/10' : 'bg-[#635bff]/10'}`} aria-hidden="true">🎬</span>;
     return author.avatar_url
         ? <img src={author.avatar_url} alt="" className="h-7 w-7 shrink-0 rounded-full object-cover" />
         : <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${isDarkMode ? 'bg-white/10' : 'bg-[#635bff]/10 text-[#635bff]'}`} aria-hidden="true">{initials(author.display_name)}</span>;
+}
+
+// Showtimes of one film, opened under a bot message for the person who clicked.
+function FilmShowtimes({ state, isDarkMode }) {
+    const muted = isDarkMode ? 'text-white/60' : 'text-[#425466]';
+    if (state.status === 'loading') return <p className={`mt-1 px-1 text-xs ${muted}`}>Chargement des horaires…</p>;
+    if (state.status === 'error') return <p className="mt-1 px-1 text-xs text-rose-500">Horaires indisponibles pour le moment</p>;
+    const { data } = state;
+    if (data.stale) return <p className="mt-1 px-1 text-xs text-rose-500">Horaires indisponibles</p>;
+    return <div className={`mt-1 w-full rounded-xl border px-3 py-2 text-xs ${isDarkMode ? 'border-white/10 bg-black/40' : 'border-[#e3e8ee] bg-white'}`}>
+        <p className="mb-1 font-semibold">{data.title}</p>
+        {data.days.length === 0 && <p className={muted}>Plus de séance prévue.</p>}
+        {data.days.map((day) => <div key={day.date} className="mt-1">
+            <p className={`font-semibold capitalize ${muted}`}>{day.label}</p>
+            <ul className="mt-0.5 flex flex-wrap gap-1">
+                {day.showtimes.map((showtime) => <li key={`${showtime.time}-${showtime.version}-${showtime.booking_url}`}>
+                    {showtime.booking_url
+                        ? <a href={showtime.booking_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 rounded-md bg-[#635bff]/10 px-1.5 py-0.5 text-[#635bff] hover:bg-[#635bff]/20" title="Réserver">{showtimeLine(showtime)} 🎟</a>
+                        : <span className="inline-flex rounded-md bg-current/10 px-1.5 py-0.5">{showtimeLine(showtime)}</span>}
+                </li>)}
+            </ul>
+        </div>)}
+    </div>;
 }
 
 export default function ChatDock({ isDarkMode }) {
@@ -73,6 +98,8 @@ export default function ChatDock({ isDarkMode }) {
     const [sending, setSending] = useState(false);
     const [error, setError] = useState('');
     const [showEmojis, setShowEmojis] = useState(false);
+    const [showCineHelp, setShowCineHelp] = useState(false);
+    const [openFilm, setOpenFilm] = useState(null); // { messageId, siteId, status, data }
     const lastIdRef = useRef(null);
     const listRef = useRef(null);
     const inputRef = useRef(null);
@@ -138,6 +165,9 @@ export default function ChatDock({ isDarkMode }) {
             merge([await postChatMessage(body)]);
             setDraft('');
             setShowEmojis(false);
+            setShowCineHelp(false);
+            // The bot answers right away: fetch its reply without waiting for the next poll.
+            if (isCineCommand(body)) refresh();
         } catch (sendError) {
             setError(sendError.message || 'Message non envoyé');
         } finally {
@@ -159,11 +189,38 @@ export default function ChatDock({ isDarkMode }) {
         });
     };
 
+    const putCommand = (command) => {
+        setDraft(command);
+        setShowCineHelp(false);
+        setShowEmojis(false);
+        window.requestAnimationFrame(() => {
+            const input = inputRef.current;
+            input?.focus();
+            input?.setSelectionRange(command.length, command.length);
+        });
+    };
+
+    const toggleFilm = async (messageId, siteId) => {
+        if (openFilm?.messageId === messageId && openFilm?.siteId === siteId) {
+            setOpenFilm(null);
+            return;
+        }
+        setOpenFilm({ messageId, siteId, status: 'loading' });
+        const same = (current) => current?.messageId === messageId && current?.siteId === siteId;
+        try {
+            const data = await fetchFilmShowtimes(siteId);
+            setOpenFilm((current) => (same(current) ? { messageId, siteId, status: 'ok', data } : current));
+        } catch {
+            setOpenFilm((current) => (same(current) ? { messageId, siteId, status: 'error' } : current));
+        }
+    };
+
     const onKeyDown = (event) => {
         if (event.key === 'Enter' && !event.shiftKey) send(event);
         if (event.key === 'Escape') {
             event.stopPropagation();
             if (showEmojis) setShowEmojis(false);
+            else if (showCineHelp) setShowCineHelp(false);
             else setOpen(false);
         }
     };
@@ -211,12 +268,15 @@ export default function ChatDock({ isDarkMode }) {
             </li>}
             {messages.map((message, index) => {
                 const mine = message.author.id === user?.id;
+                const bot = isBotMessage(message);
+                const films = filmButtons(message.payload);
+                const commands = helpCommands(message.payload);
                 const previous = messages[index - 1];
                 const grouped = previous?.author.id === message.author.id
                     && new Date(message.created_at) - new Date(previous.created_at) < 5 * 60_000;
                 const big = isEmojiOnly(message.body);
                 return <li key={message.id} className={`flex items-end gap-2 ${mine ? 'flex-row-reverse' : ''} ${grouped ? '' : 'pt-2'}`}>
-                    {!mine && (grouped ? <span className="w-7 shrink-0" /> : <Avatar author={message.author} isDarkMode={isDarkMode} />)}
+                    {!mine && (grouped ? <span className="w-7 shrink-0" /> : <Avatar author={message.author} isDarkMode={isDarkMode} bot={bot} />)}
                     <div className={`flex min-w-0 max-w-[78%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
                         {!grouped && <span className="mb-0.5 px-1 text-[11px] opacity-70">
                             {mine ? 'Toi' : message.author.display_name} · {timeLabel(message.created_at)}
@@ -227,6 +287,30 @@ export default function ChatDock({ isDarkMode }) {
                                 ? 'rounded-br-md bg-[#635bff] text-white'
                                 : isDarkMode ? 'rounded-bl-md bg-white/10' : 'rounded-bl-md bg-[#f1f4f8]'}`}
                         >{message.body}</p>
+                        {films.length > 0 && <div className="mt-1 flex flex-wrap gap-1">
+                            {films.map((film) => {
+                                const active = openFilm?.messageId === message.id && openFilm?.siteId === film.site_id;
+                                return <button
+                                    key={film.site_id}
+                                    type="button"
+                                    onClick={() => toggleFilm(message.id, film.site_id)}
+                                    aria-expanded={active}
+                                    className={`rounded-full border px-2.5 py-1 text-xs font-semibold transition ${active
+                                        ? 'border-[#635bff] bg-[#635bff] text-white'
+                                        : isDarkMode ? 'border-white/15 hover:border-[#635bff]' : 'border-[#e3e8ee] bg-white hover:border-[#635bff]'}`}
+                                    title={film.tracked ? 'Dans une de vos listes' : undefined}
+                                >{film.tracked ? '★ ' : ''}{film.title}</button>;
+                            })}
+                        </div>}
+                        {openFilm?.messageId === message.id && <FilmShowtimes state={openFilm} isDarkMode={isDarkMode} />}
+                        {commands.length > 0 && <ul className="mt-1 w-full space-y-1">
+                            {commands.map((item) => <li key={item.command}>
+                                <button type="button" onClick={() => putCommand(item.command)} className={`w-full rounded-lg border px-2 py-1 text-left text-xs transition hover:border-[#635bff] ${isDarkMode ? 'border-white/15' : 'border-[#e3e8ee] bg-white'}`}>
+                                    <span className="font-semibold text-[#635bff]">{item.command}</span>
+                                    <span className="block opacity-75">{item.description}</span>
+                                </button>
+                            </li>)}
+                        </ul>}
                     </div>
                 </li>;
             })}
@@ -242,11 +326,22 @@ export default function ChatDock({ isDarkMode }) {
                     aria-label={`Ajouter ${emoji}`}
                 >{emoji}</button>)}
             </div>}
+            {showCineHelp && <div className={`absolute bottom-full left-2 right-2 mb-2 rounded-xl border p-2 shadow-xl ${surface}`} role="group" aria-label="Commandes du bot Ciné">
+                <p className="px-1 pb-1 text-xs font-semibold">Commandes du bot Ciné</p>
+                <ul className="space-y-1">
+                    {CINE_COMMANDS.map((item) => <li key={item.command}>
+                        <button type="button" onClick={() => putCommand(item.command)} className="w-full rounded-lg px-2 py-1 text-left text-xs hover:bg-current/10">
+                            <span className="font-semibold text-[#635bff]">{item.command}</span>
+                            <span className="block opacity-75">{item.description}</span>
+                        </button>
+                    </li>)}
+                </ul>
+            </div>}
             {error && <p className="px-2 pb-1 text-xs text-rose-500" role="alert">{error}</p>}
             <div className="flex items-end gap-1">
                 <button
                     type="button"
-                    onClick={() => setShowEmojis((value) => !value)}
+                    onClick={() => { setShowCineHelp(false); setShowEmojis((value) => !value); }}
                     className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full hover:bg-current/10 ${showEmojis ? 'text-[#635bff]' : ''}`}
                     aria-label="Choisir un emoji"
                     aria-expanded={showEmojis}
@@ -254,6 +349,14 @@ export default function ChatDock({ isDarkMode }) {
                 >
                     <Icon name="smile" className="h-5 w-5" />
                 </button>
+                <button
+                    type="button"
+                    onClick={() => { setShowEmojis(false); setShowCineHelp((value) => !value); }}
+                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-lg hover:bg-current/10 ${showCineHelp ? 'bg-[#635bff]/10' : ''}`}
+                    aria-label="Commandes du bot Ciné"
+                    aria-expanded={showCineHelp}
+                    title="Bot Ciné"
+                >🎬</button>
                 <textarea
                     ref={inputRef}
                     value={draft}
