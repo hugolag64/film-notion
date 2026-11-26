@@ -154,3 +154,73 @@ def test_delete_keeps_library_state(client):
 
     film = next(m for m in client.get("/api/medias").json() if m["id"] == "dune")
     assert film["status"] == "Terminé"
+
+
+def test_library_rating_writes_one_journal_entry(client):
+    asyncio.run(_store().create({"id": "dune", "title": "Dune 2", "type": "Film", "tmdb_id": 550}))
+
+    assert client.patch("/api/medias/dune/personal", json={"rating": "4"}).status_code == 200
+    assert client.patch("/api/medias/dune/personal", json={"rating": "4.5"}).status_code == 200
+
+    entries = client.get("/api/journal").json()["entries"]
+    assert len(entries) == 1
+    assert entries[0]["rating"] == 4.5
+    assert entries[0]["source"] == "library"
+    assert entries[0]["watched_on"] == date.today().isoformat()
+
+
+def test_library_rating_survives_tmdb_down(client):
+    FakeTMDB.down = True
+    asyncio.run(_store().create({"id": "dune", "title": "Dune 2", "type": "Film", "tmdb_id": 550}))
+
+    response = client.patch("/api/medias/dune/personal", json={"rating": "4"})
+
+    assert response.status_code == 200
+    assert response.json()["rating"] == "4"
+    assert client.get("/api/journal").json() == {"entries": []}
+
+
+def test_journal_film_arriving_later_shows_as_seen(client):
+    client.post("/api/journal", json={"tmdb_id": 550})
+    asyncio.run(_store().create({"id": "dune", "title": "Dune 2", "type": "Film", "tmdb_id": 550}))
+
+    film = next(m for m in client.get("/api/medias").json() if m["id"] == "dune")
+
+    assert film["status"] == "Terminé"
+    assert client.get("/api/medias/dune").json()["status"] == "Terminé"
+
+
+def test_journal_feeds_recommendation_seen_set(tmp_path, monkeypatch):
+    from backend import api
+    from backend.auth_api import AuthContext
+    from backend.core.models import DiaryEntry
+    from tests.test_recommendation_pool import FakeCompareTMDB
+    from datetime import datetime, timezone
+
+    store = MediaStore(str(tmp_path / "pool.db"))
+    store.init_schema()
+    current = AuthContext(user={"id": "hugo", "role": "admin"}, session_id="auth", token="token")
+    monkeypatch.setattr(api, "TMDBClient", FakeCompareTMDB)
+    now = datetime.now(timezone.utc)
+    asyncio.run(store.create_diary_entry(DiaryEntry(
+        id="e1", backstage_user_id="hugo", tmdb_id=2, created_at=now, updated_at=now,
+    )))
+
+    pool = asyncio.run(api._recommendation_pool(current, store, {}))
+
+    score = {candidate.tmdb_id: candidate.score for candidate in pool}
+    # Seen films stay in the pool but are pushed below zero, out of reach.
+    assert score[2] < 0
+    assert score[4] >= 0
+
+
+def test_already_seen_answer_creates_dateless_entry(client):
+    for _ in range(2):
+        response = client.post("/api/recommendations/events", json={"event_type": "already_seen", "value": "550"})
+        assert response.status_code == 200
+
+    entries = client.get("/api/journal").json()["entries"]
+    assert len(entries) == 1
+    assert entries[0]["watched_on"] is None
+    assert entries[0]["source"] == "recommendation"
+    assert entries[0]["rating"] is None

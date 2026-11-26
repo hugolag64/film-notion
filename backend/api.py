@@ -36,7 +36,7 @@ from backend.core.backup import create_backup, get_backup_health, get_backup_sta
 from backend.core.recommendation_explanations import build_guided_explanation, is_readable_title
 from backend.core.recommendations import (
     GENRE_IDS, RecommendationCandidate, TasteProfile, apply_session_genre_delta, build_local_question,
-    build_taste_profile, choose_from_top, record_compare_choice, score_candidate,
+    _rating_value, build_taste_profile, choose_from_top, record_compare_choice, score_candidate,
     score_recommendation_candidate,
 )
 from backend.core.gemini_recommendations import GeminiRecommendationGateway, SUPPORTED_QUESTION_AXES
@@ -543,9 +543,20 @@ def get_catalogue_owner_id(auth_store: AuthStore = Depends(get_auth_store)) -> s
     return None
 
 
+def _seen_in_journal(media: Media, seen_tmdb_ids: set[int] | None) -> Media:
+    # A film logged in the journal counts as seen, even if it reached the
+    # server after the user watched it elsewhere.
+    if (
+        seen_tmdb_ids and media.tmdb_id in seen_tmdb_ids
+        and media.status not in {"Terminé", "Terminée"}
+    ):
+        return media.model_copy(update={"status": "Terminé", "is_watchlist": False})
+    return media
+
+
 async def _media_for_user(
     media: Media, current: AuthContext, store: MediaStore, state: Any = _STATE_NOT_LOADED,
-    catalogue_owner_id: str | None = None,
+    catalogue_owner_id: str | None = None, seen_tmdb_ids: set[int] | None = None,
 ) -> Media:
     if state is _STATE_NOT_LOADED:
         state = await store.get_user_media_state(current.user["id"], media.id)
@@ -554,7 +565,7 @@ async def _media_for_user(
     if state is None and current.user["role"] == "admin" and current.user["id"] == catalogue_owner_id:
         if media.rating and str(media.rating).strip():
             return media.model_copy(update={"status": "Terminé", "is_watchlist": False})
-        return media
+        return _seen_in_journal(media, seen_tmdb_ids)
     tags = [tag for tag in media.tags if tag != "Favoris"]
     if state and state.is_favorite:
         tags.append("Favoris")
@@ -570,7 +581,7 @@ async def _media_for_user(
         "tags": tags,
         "is_watchlist": is_watchlist,
     }
-    return media.model_copy(update=updates)
+    return _seen_in_journal(media.model_copy(update=updates), seen_tmdb_ids)
 
 
 @router.get("/medias", response_model=List[Media])
@@ -579,13 +590,16 @@ async def list_medias(
     store: MediaStore = Depends(get_store),
     catalogue_owner_id: str | None = Depends(get_catalogue_owner_id),
 ):
-    medias, states = await asyncio.gather(
+    medias, states, seen_tmdb_ids = await asyncio.gather(
         store.fetch_all(), store.list_user_media_states(current.user["id"]),
+        store.list_diary_tmdb_ids(current.user["id"]),
     )
     # One query for every personal state instead of one per media.
     state_by_media = {state.media_id: state for state in states}
     return [
-        await _media_for_user(media, current, store, state_by_media.get(media.id), catalogue_owner_id)
+        await _media_for_user(
+            media, current, store, state_by_media.get(media.id), catalogue_owner_id, seen_tmdb_ids,
+        )
         for media in medias
     ]
 
@@ -753,7 +767,10 @@ async def get_media(
     media = await store.fetch_one(media_id)
     if not media:
         raise HTTPException(status_code=404, detail="Média non trouvé")
-    return await _media_for_user(media, current, store, catalogue_owner_id=catalogue_owner_id)
+    seen_tmdb_ids = await store.list_diary_tmdb_ids(current.user["id"])
+    return await _media_for_user(
+        media, current, store, catalogue_owner_id=catalogue_owner_id, seen_tmdb_ids=seen_tmdb_ids,
+    )
 
 
 @router.get("/medias/{media_id}/tmdb-rating")
@@ -814,7 +831,58 @@ async def update_personal_media(
     elif fields.get("status") == "À regarder":
         fields["rating"] = None
     await store.upsert_user_media_state(current.user["id"], media_id, fields)
+    if media.tmdb_id and media.type == "Film" and fields.get("status") == "Terminé":
+        await _log_library_watch(store, current.user["id"], media.tmdb_id, fields)
     return await _media_for_user(media, current, store, catalogue_owner_id=catalogue_owner_id)
+
+
+async def _log_library_watch(store: MediaStore, user_id: str, tmdb_id: int, fields: Dict[str, Any]) -> None:
+    """Mirror a library rating into the journal without inventing a rewatch.
+
+    Correcting a rating updates the most recent entry; only a film never
+    logged before gets a new entry dated today.
+    """
+    from backend.journal_api import add_diary_entry
+
+    changes: Dict[str, Any] = {}
+    if "rating" in fields:
+        changes["rating"] = _journal_rating(fields["rating"])
+    if fields.get("review") is not None:
+        changes["review"] = fields["review"]
+    latest = await store.latest_diary_entry(user_id, tmdb_id)
+    if latest is not None:
+        if changes:
+            await store.update_diary_entry(latest.id, changes)
+        return
+    try:
+        await add_diary_entry(
+            store, user_id, tmdb_id, watched_on=datetime.now().date(),
+            rating=changes.get("rating"), review=changes.get("review"), source="library",
+        )
+    except HTTPException as error:
+        logger.warning("Entrée de journal non créée pour le film TMDB %s : %s", tmdb_id, error.detail)
+
+
+def _journal_rating(raw: Any) -> float | None:
+    value = _rating_value(raw)
+    if value is None:
+        return None
+    return min(5.0, max(0.5, round(value * 2) / 2))
+
+
+async def _log_already_seen(store: MediaStore, user_id: str, value: Any) -> None:
+    """« Déjà vu » sur une recommandation : une entrée sans date ni note."""
+    if not str(value or "").isdigit():
+        return
+    tmdb_id = int(value)
+    if await store.latest_diary_entry(user_id, tmdb_id) is not None:
+        return
+    from backend.journal_api import add_diary_entry
+
+    try:
+        await add_diary_entry(store, user_id, tmdb_id, watched_on=None, source="recommendation")
+    except HTTPException as error:
+        logger.warning("Entrée de journal non créée pour le film TMDB %s : %s", tmdb_id, error.detail)
 
 
 _POOL_SORT_OPTIONS = ("popularity.desc", "vote_average.desc", "vote_count.desc")
@@ -983,6 +1051,9 @@ async def _recommendation_pool(
     }
     seen_tmdb_ids.update(already_seen_tmdb_ids)
     hard_seen_tmdb_ids.update(already_seen_tmdb_ids)
+    journal_tmdb_ids = await store.list_diary_tmdb_ids(user_id)
+    seen_tmdb_ids.update(journal_tmdb_ids)
+    hard_seen_tmdb_ids.update(journal_tmdb_ids)
     seen_tmdb_ids.update(recent_shown_tmdb_ids)
     temporary_negative_tmdb_ids: dict[int, float] = {}
     for event in events:
@@ -1256,7 +1327,10 @@ async def record_recommendation_event(
         numeric_value=payload.numeric_value,
         created_at=datetime.now(timezone.utc),
     )
-    return (await store.record_recommendation_event(event)).model_dump(mode="json")
+    recorded = await store.record_recommendation_event(event)
+    if payload.event_type == "already_seen":
+        await _log_already_seen(store, current.user["id"], payload.value)
+    return recorded.model_dump(mode="json")
 
 
 @router.post("/recommendations/sessions")
@@ -1406,6 +1480,8 @@ async def answer_recommendation(
         event_type=feedback_event_type, value=payload.value or payload.answer,
         created_at=datetime.now(timezone.utc),
     ))
+    if feedback_event_type == "already_seen":
+        await _log_already_seen(store, current.user["id"], payload.value)
     if current_axis:
         await store.record_recommendation_event(RecommendationEvent(
             id=str(uuid.uuid4()), backstage_user_id=current.user["id"],
