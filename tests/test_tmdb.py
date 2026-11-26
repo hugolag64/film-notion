@@ -2,7 +2,7 @@ import asyncio
 
 from backend.config import Config
 from backend.core import tmdb
-from backend.core.tmdb import TMDBClient
+from backend.core.tmdb import TMDBClient, french_theatrical_date
 
 
 class FakeResponse:
@@ -68,3 +68,23 @@ def test_search_ranking_puts_the_popular_exact_title_before_obscure_matches():
     assert [r["id"] for r in _rank_search_results(results, "interstellar")] == [4, 1, 3, 2]
     # While typing, prefix matches come first, most popular on top.
     assert [r["id"] for r in _rank_search_results(results, "interstel")][:2] == [4, 1]
+
+
+def test_french_theatrical_date_prefers_type_3():
+    details = {"release_dates": {"results": [
+        {"iso_3166_1": "US", "release_dates": [{"type": 3, "release_date": "2026-12-10T00:00:00.000Z"}]},
+        {"iso_3166_1": "FR", "release_dates": [
+            {"type": 2, "release_date": "2026-12-01T00:00:00.000Z"},
+            {"type": 3, "release_date": "2026-12-16T00:00:00.000Z"},
+            {"type": 4, "release_date": "2027-03-01T00:00:00.000Z"}]}]}}
+    assert french_theatrical_date(details) == "2026-12-16"
+
+
+def test_french_theatrical_date_falls_back_to_limited_then_none():
+    limited = {"release_dates": {"results": [{"iso_3166_1": "FR", "release_dates": [
+        {"type": 2, "release_date": "2026-12-01T00:00:00.000Z"}]}]}}
+    assert french_theatrical_date(limited) == "2026-12-01"
+    streaming = {"release_dates": {"results": [{"iso_3166_1": "FR", "release_dates": [
+        {"type": 4, "release_date": "2026-12-01T00:00:00.000Z"}]}]}}
+    assert french_theatrical_date(streaming) is None
+    assert french_theatrical_date({}) is None

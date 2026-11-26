@@ -30,6 +30,9 @@ class FakeTMDB:
         return {
             "id": tmdb_id, "title": "Dune 2", "release_date": "2024-02-28",
             "poster_path": "/d.jpg", "genres": [{"id": 1, "name": "SF"}],
+            "release_dates": {"results": [
+                {"iso_3166_1": "FR", "release_dates": [{"type": 3, "release_date": "2024-02-28T00:00:00.000Z"}]},
+            ]},
         }
 
     @staticmethod
@@ -271,3 +274,8 @@ def test_editing_an_entry_keeps_the_library_choice(client):
     film = client.get("/api/medias/dune").json()
     assert film["status"] == "À regarder"
     assert film["is_watchlist"] is True
+
+
+def test_cached_movie_keeps_french_release_date(client):
+    client.post("/api/journal", json={"tmdb_id": 550})
+    assert asyncio.run(_store().get_tmdb_movies([550]))[550]["fr_release_date"] == "2024-02-28"

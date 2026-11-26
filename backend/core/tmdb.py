@@ -35,6 +35,23 @@ def _rank_search_results(results: List[Dict[str, Any]], query: str) -> List[Dict
     return sorted(results, key=rank)
 
 
+def french_theatrical_date(details: Dict[str, Any]) -> Optional[str]:
+    """Date de sortie en salle en France (type 3, sinon type 2 limité), au format YYYY-MM-DD."""
+    results = ((details or {}).get("release_dates") or {}).get("results") or []
+    france = next((r for r in results if r.get("iso_3166_1") == "FR"), None)
+    if not france:
+        return None
+    for wanted in (3, 2):
+        dates = sorted(
+            (entry.get("release_date") or "")[:10]
+            for entry in france.get("release_dates") or []
+            if entry.get("type") == wanted and entry.get("release_date")
+        )
+        if dates:
+            return dates[0]
+    return None
+
+
 class TMDBClient:
     BASE_URL = "https://api.themoviedb.org/3"
 

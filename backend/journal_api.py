@@ -19,7 +19,7 @@ from backend.core.auth import AuthStore
 from backend.core.mapping import is_series
 from backend.core.models import DiaryEntry, Media
 from backend.core.store import MediaStore
-from backend.core.tmdb import TMDBClient
+from backend.core.tmdb import TMDBClient, french_theatrical_date
 
 journal_router = APIRouter(prefix="/api", tags=["journal"], dependencies=[Depends(get_current_user)])
 
@@ -87,6 +87,7 @@ def _movie_from_details(tmdb_id: int, details: Dict[str, Any], tmdb: Any) -> Dic
         "release_date": release_date,
         "poster_url": tmdb.poster_url_from_path(details.get("poster_path")),
         "genres": [genre for genre in tmdb.get_genres(details) if genre],
+        "fr_release_date": french_theatrical_date(details),
     }
 
 
