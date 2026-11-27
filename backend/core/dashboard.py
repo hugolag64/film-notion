@@ -69,7 +69,10 @@ def _friendly_error(message: Optional[str]) -> Optional[str]:
 
 
 def _request_status(request: dict[str, Any]) -> tuple[str, str]:
-    media = request.get("media") if isinstance(request.get("media"), dict) else {}
+    override = request.get("backstage_status")
+    if isinstance(override, (tuple, list)) and len(override) == 2:
+        return override[0], override[1]
+    media =request.get("media") if isinstance(request.get("media"), dict) else {}
     release_date = media.get("releaseDate") or media.get("release_date")
     if release_date:
         try:

@@ -423,9 +423,46 @@ async def _prune_available_seerr_requests(seerr: SeerrClient, requests: list[dic
         media = request.get("media") if isinstance(request.get("media"), dict) else {}
         status = media.get("status")
         available = status == 5 or str(status).lower() in {"available", "completed"}
-        if not available:
+        # Request status 5 = COMPLETED: a season request on a partially available show.
+        if not available and request.get("status") != 5:
             active.append(request)
     return active
+
+
+async def _reconcile_seerr_requests_with_radarr(radarr: Any, requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Seerr lags behind Radarr: drop movies removed from Radarr (cancelled) and
+    label the real download state (import blocked, waiting for release)."""
+    if radarr is None or not requests:
+        return requests
+    try:
+        library, queue = await asyncio.gather(radarr.list_library(), radarr.list_queue())
+    except MediaServerError as error:
+        logger.warning("Radarr indisponible pour les demandes du tableau de bord: %s", error)
+        return requests
+    movies = {movie.get("tmdbId"): movie for movie in library if isinstance(movie, dict)}
+    queued = {item.get("movieId"): item for item in queue if isinstance(item, dict)}
+    reconciled = []
+    for request in requests:
+        media = request.get("media") if isinstance(request.get("media"), dict) else {}
+        is_movie = (request.get("type") or request.get("mediaType") or media.get("mediaType")) == "movie"
+        # Only approved requests (2) are expected in Radarr; pending ones are not sent yet.
+        if not is_movie or request.get("status") != 2:
+            reconciled.append(request)
+            continue
+        movie = movies.get(media.get("tmdbId"))
+        if movie is None:
+            continue  # Removed from Radarr: the download was cancelled.
+        download = queued.get(movie.get("id"))
+        if download and download.get("trackedDownloadState") in {"importBlocked", "importPending", "failedPending"}:
+            override = ("error", "Import bloqué")
+        elif download:
+            override = ("processing", "Téléchargement")
+        elif movie.get("status") in {"announced", "inCinemas", "tba"}:
+            override = ("pending", "En attente de sortie")
+        else:
+            override = ("searching", "Recherche")
+        reconciled.append({**request, "backstage_status": override})
+    return reconciled
 
 
 @router.get("/tmdb/search")
@@ -697,6 +734,7 @@ async def dashboard_home(
         try:
             requests = await service.seerr.list_requests(take=100, sort="modified", sort_direction="desc")
             requests = await _prune_available_seerr_requests(service.seerr, requests)
+            requests = await _reconcile_seerr_requests_with_radarr(getattr(service, "radarr", None), requests)
             requests = await _hydrate_seerr_requests(requests)
         except MediaServerError as error:
             logger.warning("Demandes Seerr dashboard indisponibles: %s", error)

@@ -136,3 +136,50 @@ def test_dashboard_never_deletes_completed_seerr_requests(tmp_path, monkeypatch)
     payload = asyncio.run(api.dashboard_home(admin, store))
     assert deleted == [], "Reading the dashboard must never delete Seerr requests"
     assert payload["requests"] == []
+
+
+def test_dashboard_requests_match_what_radarr_really_does(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+
+    class Seerr:
+        async def list_requests(self, **kwargs):
+            return [
+                {"id": 1, "status": 2, "type": "movie", "media": {"tmdbId": 581, "status": 3, "title": "Danse avec les loups"}},
+                {"id": 2, "status": 5, "type": "tv", "media": {"tmdbId": 456, "status": 4, "title": "Les Simpson"}},
+                {"id": 3, "status": 2, "type": "movie", "media": {"tmdbId": 1300968, "status": 3, "title": "Hunger Games"}},
+                {"id": 4, "status": 2, "type": "movie", "media": {"tmdbId": 1653288, "status": 3, "title": "Mister Jack"}},
+                {"id": 5, "status": 1, "type": "movie", "media": {"tmdbId": 77, "status": 2, "title": "Pas encore approuvé"}},
+            ]
+
+        async def cancel_request(self, request_id):
+            raise AssertionError("Reading the dashboard must never delete Seerr requests")
+
+    class Radarr:
+        async def list_library(self):
+            return [
+                {"id": 22, "tmdbId": 581, "hasFile": False, "status": "released"},
+                {"id": 23, "tmdbId": 1300968, "hasFile": False, "status": "inCinemas"},
+            ]
+
+        async def list_queue(self):
+            return [{"movieId": 22, "status": "completed", "trackedDownloadState": "importBlocked"}]
+
+    class Service:
+        radarr = Radarr()
+        seerr = Seerr()
+
+    async def pool(*args):
+        return []
+
+    monkeypatch.setattr(api, "get_media_server_service", lambda _: Service())
+    monkeypatch.setattr(api, "_recommendation_pool", pool)
+    monkeypatch.setattr(api, "_hydrate_seerr_requests", lambda requests: asyncio.sleep(0, requests))
+    admin = AuthContext(user={"id": "hugo", "role": "admin"}, session_id="s", token="t")
+    payload = asyncio.run(api.dashboard_home(admin, store))
+
+    labels = {item["title"]: item["status_label"] for item in payload["requests"]}
+    assert labels == {
+        "Danse avec les loups": "Import bloqué",
+        "Hunger Games": "En attente de sortie",
+        "Pas encore approuvé": "En attente",
+    }
