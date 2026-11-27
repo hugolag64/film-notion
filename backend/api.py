@@ -450,8 +450,8 @@ async def _reconcile_seerr_requests_with_radarr(radarr: Any, requests: list[dict
             reconciled.append(request)
             continue
         movie = movies.get(media.get("tmdbId"))
-        if movie is None:
-            continue  # Removed from Radarr: the download was cancelled.
+        if movie is None or movie.get("hasFile"):
+            continue  # Removed from Radarr (cancelled) or already imported into the library.
         download = queued.get(movie.get("id"))
         if download and download.get("trackedDownloadState") in {"importBlocked", "importPending", "failedPending"}:
             override = ("error", "Import bloqué")

@@ -149,6 +149,7 @@ def test_dashboard_requests_match_what_radarr_really_does(tmp_path, monkeypatch)
                 {"id": 3, "status": 2, "type": "movie", "media": {"tmdbId": 1300968, "status": 3, "title": "Hunger Games"}},
                 {"id": 4, "status": 2, "type": "movie", "media": {"tmdbId": 1653288, "status": 3, "title": "Mister Jack"}},
                 {"id": 5, "status": 1, "type": "movie", "media": {"tmdbId": 77, "status": 2, "title": "Pas encore approuvé"}},
+                {"id": 6, "status": 2, "type": "movie", "media": {"tmdbId": 88, "status": 3, "title": "Déjà importé"}},
             ]
 
         async def cancel_request(self, request_id):
@@ -159,6 +160,7 @@ def test_dashboard_requests_match_what_radarr_really_does(tmp_path, monkeypatch)
             return [
                 {"id": 22, "tmdbId": 581, "hasFile": False, "status": "released"},
                 {"id": 23, "tmdbId": 1300968, "hasFile": False, "status": "inCinemas"},
+                {"id": 24, "tmdbId": 88, "hasFile": True, "status": "released"},
             ]
 
         async def list_queue(self):
